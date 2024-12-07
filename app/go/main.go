@@ -21,7 +21,7 @@ import (
 	"github.com/labstack/echo-contrib/session"
 	echolog "github.com/labstack/gommon/log"
 
-	"github.com/kaz/pprotein/integration/echov4"
+	"github.com/kaz/pprotein/integration/standalone"
 )
 
 const (
@@ -135,7 +135,9 @@ func main() {
 	cookieStore.Options.Domain = "*.u.isucon.local"
 	e.Use(session.Middleware(cookieStore))
 	// e.Use(middleware.Recover())
-	echov4.EnableDebugHandler(e)
+	go func() {
+		standalone.Integrate(":7849")
+	}()
 
 	// 初期化
 	e.POST("/api/initialize", initializeHandler)
