@@ -46,7 +46,7 @@ setconf:
 	$(call rm_copy,/etc/systemd/system/$(SERVICE_NAME))
 	$(call rm_copy,/etc/nginx)
 	$(call rm_copy,/etc/mysql)
-	cp $(THIS_SERVER_DIR)/$(ENV_FILE) $(ENV_FILE)
+	cp $(THIS_SERVER_DIR)/$(notdir $(ENV_FILE)) $(ENV_FILE)
 
 linksource:
 	ln -sv $(ROOT_DIR)/app $(SRC_DIR)
