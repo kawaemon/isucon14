@@ -20,6 +20,8 @@ import (
 	"github.com/gorilla/sessions"
 	"github.com/labstack/echo-contrib/session"
 	echolog "github.com/labstack/gommon/log"
+
+	"github.com/kaz/pprotein/integration/echov4"
 )
 
 const (
@@ -112,6 +114,12 @@ func initializeHandler(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "failed to initialize: "+err.Error())
 	}
 
+	go func() {
+		if _, err := http.Get("http://localhost:9000/api/group/collect"); err != nil {
+			log.Printf("failed to communicate with pprotein: %v", err)
+		}
+	}()
+
 	c.Request().Header.Add("Content-Type", "application/json;charset=utf-8")
 	return c.JSON(http.StatusOK, InitializeResponse{
 		Language: "golang",
@@ -127,6 +135,7 @@ func main() {
 	cookieStore.Options.Domain = "*.u.isucon.local"
 	e.Use(session.Middleware(cookieStore))
 	// e.Use(middleware.Recover())
+	echov4.EnableDebugHandler(e)
 
 	// 初期化
 	e.POST("/api/initialize", initializeHandler)

@@ -16,6 +16,14 @@ SERVICE_NAME = isupipe-go.service
 ROOT_DIR = $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 THIS_SERVER_DIR = $(ROOT_DIR)/$(SERVER_ID)
 
+apply: setconf
+	cd $(BUILD_DIR) && make build
+
+	sudo systemctl daemon-reload
+	sudo systemctl restart mysql nginx
+	sudo systemctl restart $(SERVICE_NAME)
+
+
 logpermission:
 	sudo chmod +rx /var/log/nginx
 	sudo chmod +r /var/log/nginx/access.log
@@ -50,11 +58,3 @@ setconf:
 
 linksource:
 	ln -sv $(ROOT_DIR)/app $(SRC_DIR)
-
-
-apply: setconf
-	cd $(BUILD_DIR) && go build -o $(BIN_NAME)
-
-	sudo systemctl daemon-reload
-	sudo systemctl restart mysql nginx
-	sudo systemctl restart $(SERVICE_NAME)
