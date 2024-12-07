@@ -21,7 +21,7 @@ import (
 	"github.com/labstack/echo-contrib/session"
 	echolog "github.com/labstack/gommon/log"
 
-	"github.com/kaz/pprotein/integration/standalone"
+	"github.com/kaz/pprotein/integration/echov4"
 )
 
 const (
@@ -136,7 +136,13 @@ func main() {
 	e.Use(session.Middleware(cookieStore))
 	// e.Use(middleware.Recover())
 	go func() {
-		standalone.Integrate(":7849")
+		e := echo.New()
+		e.Use(middleware.Logger())
+		echov4.Integrate(e)
+		if err := e.Start(":7849"); err != nil {
+			e.Logger.Errorf("failed to start HTTP server: %v", err)
+			os.Exit(1)
+		}
 	}()
 
 	// 初期化
