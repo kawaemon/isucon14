@@ -16,12 +16,15 @@ SERVICE_NAME = isupipe-go.service
 ROOT_DIR = $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 THIS_SERVER_DIR = $(ROOT_DIR)/$(SERVER_ID)
 
-apply: setconf
+apply: ghpull setconf
 	cd $(BUILD_DIR) && make build
 
 	sudo systemctl daemon-reload
 	sudo systemctl restart mysql nginx
 	sudo systemctl restart $(SERVICE_NAME)
+
+ghpull:
+	git pull --force
 
 
 logpermission:
