@@ -281,6 +281,7 @@ type appPostRidesResponse struct {
 type executableGet interface {
 	Get(dest interface{}, query string, args ...interface{}) error
 	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
 }
 
 func getLatestRideStatus(ctx context.Context, tx executableGet, rideID string) (string, error) {
@@ -289,6 +290,42 @@ func getLatestRideStatus(ctx context.Context, tx executableGet, rideID string) (
 		return "", err
 	}
 	return status, nil
+}
+
+func getLatestRideStatusMany(ctx context.Context, tx executableGet, rideIDs []string) (map[string]string, error) {
+	statuses := map[string]string{}
+	if len(rideIDs) == 0 {
+		return statuses, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT ride_id, status FROM (
+			SELECT
+				ride_id,
+				status,
+				ROW_NUMBER() OVER (PARTITION BY ride_id ORDER BY created_at DESC) AS rn
+			FROM ride_statuses
+			WHERE ride_id IN (?)
+		) sq WHERE rn = 1`,
+		rideIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	res := []struct {
+		RideID string `db:"ride_id"`
+		Status string `db:"status"`
+	}{}
+
+	if err := tx.SelectContext(ctx, &res, query, args...); err != nil {
+		return nil, err
+	}
+
+	for _, r := range res {
+		statuses[r.RideID] = r.Status
+	}
+
+	return statuses, nil
 }
 
 func appPostRides(w http.ResponseWriter, r *http.Request) {
