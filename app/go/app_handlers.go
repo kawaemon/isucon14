@@ -210,13 +210,16 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
+	statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+
 	items := []getAppRidesResponseItem{}
 	for _, ride := range rides {
-		status, err := getLatestRideStatus(ctx, tx, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		status := statuses[ride.ID]
 		if status != "COMPLETED" {
 			continue
 		}
@@ -291,6 +294,42 @@ func getLatestRideStatus(ctx context.Context, tx executableGet, rideID string) (
 	return status, nil
 }
 
+func getLatestRideStatusMany(ctx context.Context, tx executableGet, rideIDs []string) (map[string]string, error) {
+	statuses := map[string]string{}
+	if len(rideIDs) == 0 {
+		return statuses, nil
+	}
+	query, args, err := sqlx.In(
+		`SELECT ride_id, status FROM (
+			SELECT
+				ride_id,
+				status,
+				ROW_NUMBER() OVER (PARTITION BY ride_id ORDER BY created_at DESC) AS rn
+			FROM ride_statuses
+			WHERE ride_id IN (?)
+		) sq WHERE rn = 1`,
+		rideIDs,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	res := []struct {
+		RideID string `db:"ride_id"`
+		Status string `db:"status"`
+	}{}
+
+	if err := tx.GetContext(ctx, &res, query, args...); err != nil {
+		return nil, err
+	}
+
+	for _, r := range res {
+		statuses[r.RideID] = r.Status
+	}
+
+	return statuses, nil
+}
+
 func appPostRides(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	req := &appPostRidesRequest{}
@@ -319,13 +358,14 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
 	continuingRideCount := 0
-	for _, ride := range rides {
-		status, err := getLatestRideStatus(ctx, tx, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+	statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+	for _, status := range statuses {
 		if status != "COMPLETED" {
 			continuingRideCount++
 		}
