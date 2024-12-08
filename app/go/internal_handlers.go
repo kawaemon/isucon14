@@ -45,20 +45,28 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			SELECT chairs.*, tmp.distance
 			FROM chairs
 			INNER JOIN (
-				SELECT chair_id, distance
-				FROM (
 					SELECT
-						chair_id,
-						(ABS(latitude - ?) + ABS(longitude - ?)) AS distance,
-						ROW_NUMBER() OVER (PARTITION BY chair_id ORDER BY created_at DESC) as rn
+							chair_id,
+							MAX((ABS(latitude - ?) + ABS(longitude - ?))) AS distance
 					FROM chair_locations
-				) sub
-				WHERE rn = 1
-			) tmp ON chairs.id = tmp.chair_id
-			INNER JOIN valid_chars vc ON chairs.id = vc.id
+					GROUP BY chair_id
+			) cl ON chairs.id = cl.chair_id
+			INNER JOIN (
+					SELECT *
+					FROM rides
+					INNER JOIN (
+							SELECT
+									ride_id,
+									status,
+									MAX(chair_sent_at)
+							FROM ride_statuses
+							WHERE status = 'COMPLETED'
+							GROUP BY ride_id
+					) rs ON rides.id = rs.ride_id
+			) r ON chairs.id = r.chair_id
 			WHERE is_active = TRUE
 			ORDER BY distance
-			LIMIT 1;
+			LIMIT 1
 		`,
 			ride.PickupLatitude,
 			ride.PickupLongitude,
