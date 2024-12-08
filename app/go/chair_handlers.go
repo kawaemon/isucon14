@@ -124,12 +124,6 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 	updateOrInsertChairLocation(chair.ID, req.Latitude, req.Longitude, now)
 
-	location := &ChairLocation{}
-	if err := tx.GetContext(ctx, location, `SELECT * FROM chair_locations WHERE id = ?`, chairLocationID); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
 	ride := &Ride{}
 	if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
@@ -165,7 +159,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, &chairPostCoordinateResponse{
-		RecordedAt: location.CreatedAt.UnixMilli(),
+		RecordedAt: now.UnixMilli(),
 	})
 }
 
