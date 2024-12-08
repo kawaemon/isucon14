@@ -79,7 +79,7 @@ func doMatching(ctx context.Context) {
 		}
 
 		if best_index != -1 {
-			if _, err := db.ExecContext(ctx, "UPDATE rides SET chair_id = ? WHERE id = ?", ok_chairs[best_index], rides[best_index]); err != nil {
+			if _, err := db.ExecContext(ctx, "UPDATE rides SET chair_id = ? WHERE id = ?", ok_chairs[best_index].ID, ride.ID); err != nil {
 				slog.Error("failed to assign", err)
 				return
 			}
