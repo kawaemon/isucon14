@@ -1,4 +1,6 @@
 ALTER TABLE chairs ADD INDEX idx_access_token (access_token);
+ALTER TABLE users ADD INDEX idx_users_access_token (access_token);
+ALTER TABLE owners ADD INDEX idx_owners_access_token (access_token);
 
 alter table rides add index idx_chair_id(chair_id);
 alter table ride_statuses add index idx_ride_id(ride_id);
