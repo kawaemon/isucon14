@@ -2,7 +2,7 @@
 
 # change below
 # ----------
-SERVER_ID = s3
+SERVER_ID = s1
 
 USER = isucon
 BIN_NAME = isuride
