@@ -100,7 +100,7 @@ func doMatching(ctx context.Context) {
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 func spwanMatchingProcess() {
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(300 * time.Millisecond)
 	quit := make(chan struct{})
 	go func() {
 		for {
