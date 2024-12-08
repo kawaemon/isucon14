@@ -240,9 +240,7 @@ func writeJSONSSE(w http.ResponseWriter, f http.Flusher, v interface{}) {
 		return
 	}
 
-	w.Write([]byte("data: "))
-	w.Write(buf)
-	w.Write([]byte("\n\n"))
+	fmt.Fprintf(w, "data: %s\n\n", buf)
 	f.Flush()
 }
 

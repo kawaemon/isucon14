@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"time"
 
+	"log/slog"
+
 	"github.com/oklog/ulid/v2"
 )
 
@@ -205,21 +207,24 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 
-L:
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+
+	slog.Info("chairGetNotification")
+
 	for {
 		select {
-
 		case <-ctx.Done():
-			break L
-		default:
+			slog.Info("chairGetNotification context done")
+			return
+		case <-ticker.C:
 			ride := &Ride{}
 			yetSentRideStatus := RideStatus{}
 			status := ""
 
 			if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					time.Sleep(200 * time.Millisecond)
-					continue L
+					continue
 				}
 				writeError(w, http.StatusInternalServerError, err)
 				return
@@ -278,7 +283,6 @@ L:
 					Status: status,
 				},
 			)
-			time.Sleep(200 * time.Millisecond)
 		}
 	}
 }
