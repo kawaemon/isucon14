@@ -18,11 +18,11 @@ ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
 ISUCON_DB_NAME=${ISUCON_DB_NAME:-isuride}
 
 # MySQLを初期化
-mysql -u"$ISUCON_DB_USER" \
+echo 'drop database isuride; create database isuride' | mysql -u"$ISUCON_DB_USER" \
 	-p"$ISUCON_DB_PASSWORD" \
 	--host "$ISUCON_DB_HOST" \
 	--port "$ISUCON_DB_PORT" \
-	"$ISUCON_DB_NAME" <0-init.sql
+	"$ISUCON_DB_NAME"
 
 mysql -u"$ISUCON_DB_USER" \
 	-p"$ISUCON_DB_PASSWORD" \
