@@ -196,6 +196,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
 	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no")
 
 	f, ok := w.(http.Flusher)
 	if !ok {
