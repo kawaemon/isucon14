@@ -224,7 +224,7 @@ WHERE owner_id = ?
 	for _, chair := range chairs {
 		poscache, ok := chairPositionCache.Get(chair.ID)
 		if !ok {
-			panic("unsynced? chair cache miss")
+			// use 0 value
 		}
 		c := ownerGetChairResponseChair{
 			ID:            chair.ID,
