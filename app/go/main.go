@@ -129,7 +129,13 @@ type postInitializeResponse struct {
 	Language string `json:"language"`
 }
 
+func cacheInit() {
+
+	rideEvalCache.Init()
+}
+
 func postInitialize(w http.ResponseWriter, r *http.Request) {
+	cacheInit()
 	ctx := r.Context()
 	req := &postInitializeRequest{}
 	if err := bindJSON(r, req); err != nil {
@@ -152,6 +158,8 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 			log.Printf("failed to communicate with pprotein: %v", err)
 		}
 	}()
+
+	cacheInit()
 
 	writeJSON(w, http.StatusOK, postInitializeResponse{Language: "go"})
 }

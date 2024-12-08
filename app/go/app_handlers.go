@@ -760,6 +760,8 @@ func appGetNotification(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+var rideEvalCache = NewCache[string, int]()
+
 func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNotificationResponseChairStats, error) {
 	stats := appGetNotificationResponseChairStats{}
 
@@ -777,6 +779,12 @@ func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNoti
 	totalRideCount := 0
 	totalEvaluation := 0.0
 	for _, ride := range rides {
+		if eval, ok := rideEvalCache.Get(ride.ID); ok {
+			totalRideCount++
+			totalEvaluation += float64(eval)
+			continue
+		}
+
 		rideStatuses := []RideStatus{}
 		err = tx.SelectContext(
 			ctx,
@@ -806,6 +814,8 @@ func getChairStats(ctx context.Context, tx *sqlx.Tx, chairID string) (appGetNoti
 		if !isCompleted {
 			continue
 		}
+
+		rideEvalCache.Set(ride.ID, *ride.Evaluation)
 
 		totalRideCount++
 		totalEvaluation += float64(*ride.Evaluation)
