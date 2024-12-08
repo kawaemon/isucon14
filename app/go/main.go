@@ -18,7 +18,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-sql-driver/mysql"
 	"github.com/jmoiron/sqlx"
-	"github.com/kaz/pprotein/integration/standalone"
 )
 
 var db *sqlx.DB
@@ -71,10 +70,6 @@ func setup() http.Handler {
 	db = _db
 	db.SetMaxOpenConns(64)
 	db.SetMaxIdleConns(64)
-
-	go func() {
-		standalone.Integrate(":6458")
-	}()
 
 	mux := chi.NewRouter()
 	mux.Use(middleware.Logger)
