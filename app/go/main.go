@@ -60,12 +60,15 @@ func setup() http.Handler {
 	dbConfig.Net = "tcp"
 	dbConfig.DBName = dbname
 	dbConfig.ParseTime = true
+	dbConfig.InterpolateParams = true
 
 	_db, err := sqlx.Connect("mysql", dbConfig.FormatDSN())
 	if err != nil {
 		panic(err)
 	}
 	db = _db
+	db.SetMaxOpenConns(64)
+	db.SetMaxIdleConns(64)
 
 	go func() {
 		standalone.Integrate(":6458")
