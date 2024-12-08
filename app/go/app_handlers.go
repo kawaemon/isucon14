@@ -210,13 +210,25 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
+	statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	items := []getAppRidesResponseItem{}
 	for _, ride := range rides {
-		status, err := getLatestRideStatus(ctx, tx, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		// status, err := getLatestRideStatus(ctx, tx, ride.ID)
+		// if err != nil {
+		// 	writeError(w, http.StatusInternalServerError, err)
+		// 	return
+		// }
+		status := statuses[ride.ID]
 		if status != "COMPLETED" {
 			continue
 		}
@@ -356,13 +368,21 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rideIDs := make([]string, len(rides))
+	for i, ride := range rides {
+		rideIDs[i] = ride.ID
+	}
+
+	statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+
 	continuingRideCount := 0
 	for _, ride := range rides {
-		status, err := getLatestRideStatus(ctx, tx, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		// status, err := getLatestRideStatus(ctx, tx, ride.ID)
+		// if err != nil {
+		// 	writeError(w, http.StatusInternalServerError, err)
+		// 	return
+		// }
+		status := statuses[ride.ID]
 		if status != "COMPLETED" {
 			continuingRideCount++
 		}
@@ -941,14 +961,26 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		rideIDs := make([]string, len(rides))
+		for i, ride := range rides {
+			rideIDs[i] = ride.ID
+		}
+
+		statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+
 		skip := false
 		for _, ride := range rides {
 			// 過去にライドが存在し、かつ、それが完了していない場合はスキップ
-			status, err := getLatestRideStatus(ctx, tx, ride.ID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
+			// status, err := getLatestRideStatus(ctx, tx, ride.ID)
+			// if err != nil {
+			// 	writeError(w, http.StatusInternalServerError, err)
+			// 	return
+			// }
+			status := statuses[ride.ID]
 			if status != "COMPLETED" {
 				skip = true
 				break
