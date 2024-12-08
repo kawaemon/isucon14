@@ -117,8 +117,12 @@ func setup() http.Handler {
 
 	// internal handlers
 	{
-		mux.HandleFunc("GET /api/internal/matching", internalGetMatching)
+		mux.HandleFunc("GET /api/internal/matching", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		})
 	}
+
+	spwanMatchingProcess()
 
 	return mux
 }
