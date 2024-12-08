@@ -22,25 +22,54 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 
 	for _, ride := range rides {
 		matched := &Chair{}
-		empty := false
-		for i := 0; i < 10; i++ {
-			if err := db.GetContext(ctx, matched, "SELECT * FROM chairs INNER JOIN (SELECT id FROM chairs WHERE is_active = TRUE ORDER BY RAND() LIMIT 1) AS tmp ON chairs.id = tmp.id LIMIT 1"); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					w.WriteHeader(http.StatusNoContent)
-					return
-				}
-				writeError(w, http.StatusInternalServerError, err)
-			}
-
-			if err := db.GetContext(ctx, &empty, "SELECT COUNT(*) = 0 FROM (SELECT COUNT(chair_sent_at) = 6 AS completed FROM ride_statuses WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = ?) GROUP BY ride_id) is_completed WHERE completed = FALSE", matched.ID); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
+		if err := db.GetContext(
+			ctx,
+			matched,
+			`
+			WITH valid_chars AS (
+				SELECT chairs.id
+				FROM chairs
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM (
+						SELECT COUNT(chair_sent_at) = 6 AS completed
+						FROM ride_statuses
+						WHERE ride_id IN (
+							SELECT id FROM rides WHERE chair_id = chairs.id
+						)
+						GROUP BY ride_id
+					) is_completed
+					WHERE completed = FALSE
+				)
+			)
+			SELECT chairs.*, tmp.distance
+			FROM chairs
+			INNER JOIN (
+				SELECT chair_id, distance
+				FROM (
+					SELECT
+						chair_id,
+						(ABS(latitude - ?) + ABS(longitude - ?)) AS distance,
+						ROW_NUMBER() OVER (PARTITION BY chair_id ORDER BY created_at DESC) as rn
+					FROM chair_locations
+				) sub
+				WHERE rn = 1
+			) tmp ON chairs.id = tmp.chair_id
+			INNER JOIN valid_chars vc ON chairs.id = vc.id
+			WHERE is_active = TRUE
+			ORDER BY distance
+			LIMIT 1;
+		`,
+			ride.PickupLatitude,
+			ride.PickupLongitude,
+		); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				w.WriteHeader(http.StatusNoContent)
 				return
 			}
-			if empty {
-				break
-			}
+			writeError(w, http.StatusInternalServerError, err)
 		}
-		if !empty {
+		if matched.ID == "" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
