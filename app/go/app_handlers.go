@@ -216,6 +216,10 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	}
 
 	statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	items := []getAppRidesResponseItem{}
 	for _, ride := range rides {
@@ -284,6 +288,7 @@ type appPostRidesResponse struct {
 type executableGet interface {
 	Get(dest interface{}, query string, args ...interface{}) error
 	GetContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
+	SelectContext(ctx context.Context, dest interface{}, query string, args ...interface{}) error
 }
 
 func getLatestRideStatus(ctx context.Context, tx executableGet, rideID string) (string, error) {
@@ -319,7 +324,7 @@ func getLatestRideStatusMany(ctx context.Context, tx executableGet, rideIDs []st
 		Status string `db:"status"`
 	}{}
 
-	if err := tx.GetContext(ctx, &res, query, args...); err != nil {
+	if err := tx.SelectContext(ctx, &res, query, args...); err != nil {
 		return nil, err
 	}
 
