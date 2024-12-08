@@ -50,12 +50,7 @@ func doMatching(ctx context.Context) {
 	}
 	ok_chairs_count := len(ok_chairs)
 
-	type pair struct {
-		rideID  string
-		chairID string
-		dist    int
-	}
-	pairs := []pair{}
+	pair_count := 0
 
 	for _, ride := range rides {
 		best_index := -1
@@ -84,19 +79,20 @@ func doMatching(ctx context.Context) {
 				return
 			}
 			ok_chairs = removeIndex(ok_chairs, best_index)
+			pair_count += 1
 		}
 	}
 
 	slog.Info(
 		fmt.Sprintf(
-			"### MATCHING ###; want=%d, act=%d, ok=%d, matched=%d", rides_count, active_chairs_count, ok_chairs_count, len(pairs),
+			"### MATCHING ###; want=%d, act=%d, ok=%d, matched=%d", rides_count, active_chairs_count, ok_chairs_count, pair_count,
 		),
 	)
 }
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 func spwanMatchingProcess() {
-	ticker := time.NewTicker(300 * time.Millisecond)
+	ticker := time.NewTicker(250 * time.Millisecond)
 	quit := make(chan struct{})
 	go func() {
 		for {
