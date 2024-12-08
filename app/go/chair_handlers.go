@@ -203,6 +203,8 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+
 L:
 	for {
 		select {
@@ -216,10 +218,7 @@ L:
 
 			if err := tx.GetContext(ctx, ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					// writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
-					// 	RetryAfterMs: 200,
-					// })
-					// return
+					time.Sleep(200 * time.Millisecond)
 					continue L
 				}
 				writeError(w, http.StatusInternalServerError, err)
@@ -261,25 +260,6 @@ L:
 				return
 			}
 
-			// writeJSON(w, http.StatusOK, &chairGetNotificationResponse{
-			// Data: &chairGetNotificationResponseData{
-			// 	RideID: ride.ID,
-			// 	User: simpleUser{
-			// 		ID:   user.ID,
-			// 		Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
-			// 	},
-			// 	PickupCoordinate: Coordinate{
-			// 		Latitude:  ride.PickupLatitude,
-			// 		Longitude: ride.PickupLongitude,
-			// 	},
-			// 	DestinationCoordinate: Coordinate{
-			// 		Latitude:  ride.DestinationLatitude,
-			// 		Longitude: ride.DestinationLongitude,
-			// 	},
-			// 	Status: status,
-			// },
-			// 	RetryAfterMs: 200,
-			// })
 			writeJSONSSE(w, f,
 				&chairGetNotificationResponseData{
 					RideID: ride.ID,
