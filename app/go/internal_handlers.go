@@ -26,23 +26,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			ctx,
 			matched,
 			`
-			WITH valid_chars AS (
-				SELECT chairs.id
-				FROM chairs
-				WHERE NOT EXISTS (
-					SELECT 1
-					FROM (
-						SELECT COUNT(chair_sent_at) = 6 AS completed
-						FROM ride_statuses
-						WHERE ride_id IN (
-							SELECT id FROM rides WHERE chair_id = chairs.id
-						)
-						GROUP BY ride_id
-					) is_completed
-					WHERE completed = FALSE
-				)
-			)
-			SELECT chairs.*, tmp.distance
+			SELECT chairs.*, cl.distance
 			FROM chairs
 			INNER JOIN (
 					SELECT
@@ -52,7 +36,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 					GROUP BY chair_id
 			) cl ON chairs.id = cl.chair_id
 			INNER JOIN (
-					SELECT *
+					SELECT chair_id
 					FROM rides
 					INNER JOIN (
 							SELECT
@@ -67,7 +51,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			WHERE is_active = TRUE
 			ORDER BY distance
 			LIMIT 1
-		`,
+			`,
 			ride.PickupLatitude,
 			ride.PickupLongitude,
 		); err != nil {
