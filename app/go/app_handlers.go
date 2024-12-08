@@ -363,14 +363,25 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rideIDs := make([]string, len(rides))
-	for i, ride := range rides {
-		rideIDs[i] = ride.ID
-	}
+	// rideIDs := make([]string, len(rides))
+	// for i, ride := range rides {
+	// 	rideIDs[i] = ride.ID
+	// }
 
 	continuingRideCount := 0
-	statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
-	for _, status := range statuses {
+	// statuses, err := getLatestRideStatusMany(ctx, tx, rideIDs)
+	// for _, status := range statuses {
+	// 	if status != "COMPLETED" {
+	// 		continuingRideCount++
+	// 	}
+	// }
+
+	for _, ride := range rides {
+		status, err := getLatestRideStatus(ctx, tx, ride.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
 		if status != "COMPLETED" {
 			continuingRideCount++
 		}
