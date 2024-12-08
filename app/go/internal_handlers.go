@@ -67,8 +67,8 @@ func doMatching(ctx context.Context) {
 				continue
 			}
 
-			dist := absDiffInt(ride.DestinationLatitude, cache.LastLat) + absDiffInt(
-				ride.DestinationLongitude, cache.LastLong,
+			dist := absDiffInt(ride.PickupLatitude, cache.LastLat) + absDiffInt(
+				ride.PickupLongitude, cache.LastLong,
 			)
 
 			if best_dist == -1 || best_dist < dist {
@@ -77,6 +77,7 @@ func doMatching(ctx context.Context) {
 				continue
 			}
 		}
+
 		if best_index != -1 {
 			pairs = append(pairs, pair{chairID: ok_chairs[best_index].ID, rideID: ride.ID, dist: best_dist})
 			ok_chairs = removeIndex(ok_chairs, best_index)
@@ -91,7 +92,6 @@ func doMatching(ctx context.Context) {
 	}
 
 	slog.Info(
-
 		fmt.Sprintf(
 			"### MATCHING ###; want=%d, act=%d, ok=%d, matched=%d", rides_count, active_chairs_count, ok_chairs_count, len(pairs),
 		),
