@@ -79,15 +79,11 @@ func doMatching(ctx context.Context) {
 		}
 
 		if best_index != -1 {
-			pairs = append(pairs, pair{chairID: ok_chairs[best_index].ID, rideID: ride.ID, dist: best_dist})
+			if _, err := db.ExecContext(ctx, "UPDATE rides SET chair_id = ? WHERE id = ?", ok_chairs[best_index], rides[best_index]); err != nil {
+				slog.Error("failed to assign", err)
+				return
+			}
 			ok_chairs = removeIndex(ok_chairs, best_index)
-		}
-	}
-
-	for _, v := range pairs {
-		if _, err := db.ExecContext(ctx, "UPDATE rides SET chair_id = ? WHERE id = ?", v.chairID, v.rideID); err != nil {
-			slog.Error("failed to assign", err)
-			return
 		}
 	}
 
