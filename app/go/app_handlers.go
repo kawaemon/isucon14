@@ -418,59 +418,95 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var coupon Coupon
-	if rideCount == 1 {
-		// 初回利用で、初回利用クーポンがあれば必ず使う
-		if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL FOR UPDATE", user.ID); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-
-			// 無ければ他のクーポンを付与された順番に使う
-			if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE", user.ID); err != nil {
-				if !errors.Is(err, sql.ErrNoRows) {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
-			} else {
-				if _, err := tx.ExecContext(
-					ctx,
-					"UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?",
-					rideID, user.ID, coupon.Code,
-				); err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
-			}
-		} else {
-			if _, err := tx.ExecContext(
-				ctx,
-				"UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = 'CP_NEW2024'",
-				rideID, user.ID,
-			); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
+	var coupon []Coupon
+	// クーポンを全て取得
+	if err := tx.SelectContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at FOR UPDATE", user.ID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusInternalServerError, err)
+			return
 		}
 	} else {
-		// 他のクーポンを付与された順番に使う
-		if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE", user.ID); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusInternalServerError, err)
-				return
+		var couponCode string
+		// 初回利用で、初回利用クーポンがあれば必ず使う
+		if rideCount == 1 && len(coupon) > 0 {
+			for _, c := range coupon {
+				if c.Code == "CP_NEW2024" {
+					couponCode = c.Code
+					break
+				}
 			}
-		} else {
+		}
+		// 無ければ他のクーポンを付与された順番に使う
+		if couponCode == "" {
+			for _, c := range coupon {
+				couponCode = c.Code
+				break
+			}
+		}
+
+		if couponCode != "" {
 			if _, err := tx.ExecContext(
 				ctx,
 				"UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?",
-				rideID, user.ID, coupon.Code,
+				rideID, user.ID, couponCode,
 			); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
 			}
 		}
 	}
+	// if rideCount == 1 {
+	// 	// 初回利用で、初回利用クーポンがあれば必ず使う
+	// 	if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL FOR UPDATE", user.ID); err != nil {
+	// 		if !errors.Is(err, sql.ErrNoRows) {
+	// 			writeError(w, http.StatusInternalServerError, err)
+	// 			return
+	// 		}
+
+	// 		// 無ければ他のクーポンを付与された順番に使う
+	// 		if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE", user.ID); err != nil {
+	// 			if !errors.Is(err, sql.ErrNoRows) {
+	// 				writeError(w, http.StatusInternalServerError, err)
+	// 				return
+	// 			}
+	// 		} else {
+	// 			if _, err := tx.ExecContext(
+	// 				ctx,
+	// 				"UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?",
+	// 				rideID, user.ID, coupon.Code,
+	// 			); err != nil {
+	// 				writeError(w, http.StatusInternalServerError, err)
+	// 				return
+	// 			}
+	// 		}
+	// 	} else {
+	// 		if _, err := tx.ExecContext(
+	// 			ctx,
+	// 			"UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = 'CP_NEW2024'",
+	// 			rideID, user.ID,
+	// 		); err != nil {
+	// 			writeError(w, http.StatusInternalServerError, err)
+	// 			return
+	// 		}
+	// 	}
+	// } else {
+	// 	// 他のクーポンを付与された順番に使う
+	// 	if err := tx.GetContext(ctx, &coupon, "SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE", user.ID); err != nil {
+	// 		if !errors.Is(err, sql.ErrNoRows) {
+	// 			writeError(w, http.StatusInternalServerError, err)
+	// 			return
+	// 		}
+	// 	} else {
+	// 		if _, err := tx.ExecContext(
+	// 			ctx,
+	// 			"UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?",
+	// 			rideID, user.ID, coupon.Code,
+	// 		); err != nil {
+	// 			writeError(w, http.StatusInternalServerError, err)
+	// 			return
+	// 		}
+	// 	}
+	// }
 
 	ride := Ride{}
 	if err := tx.GetContext(ctx, &ride, "SELECT * FROM rides WHERE id = ?", rideID); err != nil {
