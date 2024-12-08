@@ -30,7 +30,7 @@ func doMatching(ctx context.Context) {
 	rides_count := len(rides)
 
 	active_chairs := []Chair{}
-	if err := db.SelectContext(ctx, &active_chairs, `select * from chairs where active = true`); err != nil {
+	if err := db.SelectContext(ctx, &active_chairs, `select * from chairs where is_active = true`); err != nil {
 		slog.Error("error finding active chairs", err)
 		return
 	}
