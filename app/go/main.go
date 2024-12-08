@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	crand "crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -129,9 +131,51 @@ type postInitializeResponse struct {
 	Language string `json:"language"`
 }
 
-func cacheInit() {
+func absDiffInt(x, y int) int {
+	if x < y {
+		return y - x
+	}
+	return x - y
+}
 
+func cacheInit() {
 	rideEvalCache.Init()
+	chairPositionCache.Init()
+
+	locations := []ChairLocation{}
+	if err := db.SelectContext(context.Background(), &locations, `select * from chair_locations order by created_at`); err != nil {
+		panic("cache init fail")
+	}
+
+	for _, pos := range locations {
+		updateOrInsertChairLocation(pos.ChairID, pos.Latitude, pos.Longitude, pos.CreatedAt)
+	}
+}
+
+func updateOrInsertChairLocation(chairID string, lat, long int, t time.Time) {
+	cache, ok := chairPositionCache.Get(chairID)
+	if !ok {
+		chairPositionCache.Set(chairID, chairPositionCacheEntry{
+			LastLat:                lat,
+			LastLong:               long,
+			TotalDistance:          0,
+			TotalDistanceUpdatedAt: nil,
+		})
+		return
+	}
+
+	latDiff := absDiffInt(cache.LastLat, lat)
+	longDiff := absDiffInt(cache.LastLong, long)
+	chairPositionCache.Set(chairID, chairPositionCacheEntry{
+		LastLat:                lat,
+		LastLong:               long,
+		TotalDistance:          cache.TotalDistance + latDiff + longDiff,
+		TotalDistanceUpdatedAt: addrof(t),
+	})
+}
+
+func addrof[T any](v T) *T {
+	return &v
 }
 
 func postInitialize(w http.ResponseWriter, r *http.Request) {
