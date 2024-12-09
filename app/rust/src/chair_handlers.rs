@@ -315,6 +315,11 @@ async fn chair_post_ride_status(
         .as_ref()
         .is_none_or(|chair_id| chair_id != &chair.id)
     {
+        tracing::error!(
+            "not assigned to this ride (expected: {:?}, actual: {:?})",
+            chair.id,
+            ride.chair_id
+        );
         return Err(Error::BadRequest("not assigned to this ride"));
     }
 

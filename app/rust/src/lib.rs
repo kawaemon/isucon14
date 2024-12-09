@@ -220,7 +220,7 @@ pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
     #[error("SQLx error: {0}")]
-    Sqlx(#[from] sqlx::Error),
+    Sqlx(sqlx::Error),
     #[error("failed to initialize: stdout={stdout} stderr={stderr}")]
     Initialize { stdout: String, stderr: String },
     #[error("{0}")]
@@ -233,6 +233,12 @@ pub enum Error {
     NotFound(&'static str),
     #[error("{0}")]
     Conflict(&'static str),
+}
+impl From<sqlx::Error> for Error {
+    fn from(value: sqlx::Error) -> Self {
+        tracing::trace!("{}", std::backtrace::Backtrace::force_capture());
+        Self::Sqlx(value)
+    }
 }
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> Response {

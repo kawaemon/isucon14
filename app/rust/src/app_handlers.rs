@@ -71,13 +71,13 @@ async fn app_post_users(
             Ok(t) => return Ok(t),
             Err(Error::Sqlx(sqlx::Error::Database(ref c))) => {
                 if let Some(code) = c.code() {
-                    if code == "1213" {
-                        if i >= 3 {
-                            tracing::error!("deadlock; failing");
-                            return r;
-                        }
-                        tracing::warn!("deadlock; retrying [{i}/3]");
-                        continue;
+                    if code != "40001" {
+                        return r;
+                    }
+                    tracing::warn!("deadlock on app_post_users, retrying [{i}/3]");
+                    if i >= 3 {
+                        tracing::error!("deadlock on users; failing");
+                        return r;
                     }
                 }
             }
