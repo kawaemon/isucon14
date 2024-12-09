@@ -255,7 +255,7 @@ async fn owner_get_chairs(
        model,
        is_active,
        created_at,
-       updated_at,
+       updated_at
 FROM chairs
 WHERE owner_id = ?"#,
     )
