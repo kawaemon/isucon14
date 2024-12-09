@@ -1,8 +1,5 @@
 use axum::extract::State;
-use isuride::{
-    internal_handlers::spawn_matcher, models::ChairLocation, AppCache, AppState,
-    ChairLocationCache, Error,
-};
+use isuride::{internal_handlers::spawn_matcher, AppCache, AppState, Error};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 
