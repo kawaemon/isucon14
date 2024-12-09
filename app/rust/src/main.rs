@@ -1,6 +1,7 @@
 use axum::extract::State;
-use isuride::{AppCache, AppState, Error};
-use std::{net::SocketAddr, sync::Arc};
+use isuride::{AppCache, AppDeferred, AppState, Error};
+use serde::de;
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -36,8 +37,20 @@ async fn main() -> anyhow::Result<()> {
 
     let app_state = AppState {
         cache: Arc::new(AppCache::new(&pool).await),
+        deferred: Arc::new(AppDeferred::new()),
         pool,
     };
+
+    {
+        let pool = app_state.pool.clone();
+        let def = app_state.deferred.clone();
+        tokio::spawn(async move {
+            loop {
+                def.sync(&pool).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
+    }
 
     let app = axum::Router::new()
         .route("/api/initialize", axum::routing::post(post_initialize))
@@ -70,7 +83,7 @@ struct PostInitializeResponse {
 }
 
 async fn post_initialize(
-    State(AppState { pool, cache }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let output = tokio::process::Command::new("../sql/init.sh")

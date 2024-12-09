@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
+use serde::de;
 use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
@@ -116,7 +117,11 @@ struct ChairPostCoordinateResponse {
 }
 
 async fn chair_post_coordinate(
-    State(AppState { pool, cache }): State<AppState>,
+    State(AppState {
+        pool,
+        cache,
+        deferred,
+    }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
@@ -124,16 +129,17 @@ async fn chair_post_coordinate(
 
     let now = Utc::now();
     let chair_location_id = Ulid::new().to_string();
-    sqlx::query(
-        "INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&chair_location_id)
-    .bind(&chair.id)
-    .bind(req.latitude)
-    .bind(req.longitude)
-    .bind(now)
-    .execute(&mut *tx)
-    .await?;
+
+    let loc = ChairLocation {
+        id: chair_location_id.clone(),
+        chair_id: chair.id.clone(),
+        latitude: req.latitude,
+        longitude: req.longitude,
+        created_at: now,
+    };
+    tokio::spawn(async move {
+        deferred.location_queue.lock().await.push(loc);
+    });
 
     {
         let coord = Coordinate {
@@ -147,11 +153,6 @@ async fn chair_post_coordinate(
             cache.insert(chair.id.clone(), ChairLocationCache::new(coord, &now));
         }
     }
-
-    let location: ChairLocation = sqlx::query_as("SELECT * FROM chair_locations WHERE id = ?")
-        .bind(chair_location_id)
-        .fetch_one(&mut *tx)
-        .await?;
 
     let ride: Option<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
@@ -190,7 +191,7 @@ async fn chair_post_coordinate(
     tx.commit().await?;
 
     Ok(axum::Json(ChairPostCoordinateResponse {
-        recorded_at: location.created_at.timestamp_millis(),
+        recorded_at: now.timestamp_millis(),
     }))
 }
 

@@ -4,12 +4,50 @@ use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
 use models::ChairLocation;
 use sqlx::{MySql, Pool};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub cache: Arc<AppCache>,
+    pub deferred: Arc<AppDeferred>,
+}
+
+#[derive(Debug)]
+pub struct AppDeferred {
+    pub location_queue: Mutex<Vec<ChairLocation>>,
+}
+impl AppDeferred {
+    pub fn new() -> Self {
+        Self {
+            location_queue: Mutex::new(vec![]),
+        }
+    }
+    pub async fn sync(&self, pool: &Pool<MySql>) {
+        let mut loc_queue = self.location_queue.lock().await;
+
+        if loc_queue.is_empty() {
+            return;
+        }
+
+        let mut builder = sqlx::QueryBuilder::new(
+            "INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) ",
+        );
+
+        builder.push_values(loc_queue.iter(), |mut b, q| {
+            b.push_bind(&q.id)
+                .push_bind(&q.chair_id)
+                .push_bind(q.latitude)
+                .push_bind(q.longitude)
+                .push_bind(q.created_at);
+        });
+
+        builder.build().execute(pool).await.unwrap();
+
+        tracing::info!("pushed {} locations", loc_queue.len());
+
+        loc_queue.clear();
+    }
 }
 
 #[derive(Debug)]
@@ -18,6 +56,14 @@ pub struct AppCache {
 }
 impl AppCache {
     pub async fn new(pool: &Pool<MySql>) -> Self {
+        Self {
+            chair_location: Self::new_chair_location(pool).await,
+        }
+    }
+
+    pub async fn new_chair_location(
+        pool: &Pool<MySql>,
+    ) -> RwLock<HashMap<String, ChairLocationCache>> {
         let locations: Vec<ChairLocation> =
             sqlx::query_as("select * from chair_locations order by chair_id, created_at asc")
                 .fetch_all(pool)
@@ -31,9 +77,7 @@ impl AppCache {
 
         let mut res = HashMap::new();
         if locations.is_empty() {
-            return Self {
-                chair_location: RwLock::new(res),
-            };
+            return RwLock::new(res);
         }
 
         let mut prev_id = &locations[0].chair_id;
@@ -55,9 +99,7 @@ impl AppCache {
             prev_id = &s.chair_id;
         }
 
-        Self {
-            chair_location: RwLock::new(res),
-        }
+        RwLock::new(res)
     }
 }
 

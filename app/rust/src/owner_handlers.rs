@@ -244,7 +244,7 @@ struct OwnerGetChairResponseChair {
 }
 
 async fn owner_get_chairs(
-    State(AppState { pool, cache }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
 ) -> Result<axum::Json<OwnerGetChairResponse>, Error> {
     let chairs: Vec<Chair> = sqlx::query_as(

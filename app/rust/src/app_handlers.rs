@@ -4,7 +4,7 @@ use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use ulid::Ulid;
 
-use crate::models::{Chair, ChairLocation, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
+use crate::models::{Chair, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
 use crate::{AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -771,7 +771,7 @@ struct AppGetNearbyChairsResponseChair {
 }
 
 async fn app_get_nearby_chairs(
-    State(AppState { pool, cache }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
 ) -> Result<axum::Json<AppGetNearbyChairsResponse>, Error> {
     let distance = query.distance.unwrap_or(50);
