@@ -8,7 +8,7 @@ pub fn spawn_matcher(state: AppState) {
     tokio::spawn(async move {
         loop {
             if let Err(e) = matching(state.clone()).await {
-                tracing::error!("failed to matching: {e:?}");
+                tracing::warn!("failed to matching: {e:?}; continuing anyway");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }

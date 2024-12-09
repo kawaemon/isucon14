@@ -1,5 +1,8 @@
 use axum::extract::State;
-use isuride::{internal_handlers::spawn_matcher, AppCache, AppState, Error};
+use isuride::{
+    internal_handlers::spawn_matcher, models::ChairLocation, AppCache, AppState,
+    ChairLocationCache, Error,
+};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 
@@ -71,7 +74,7 @@ struct PostInitializeResponse {
 }
 
 async fn post_initialize(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let output = tokio::process::Command::new("../sql/init.sh")
@@ -88,6 +91,8 @@ async fn post_initialize(
         .bind(req.payment_server)
         .execute(&pool)
         .await?;
+
+    *cache.chair_location.write().await = AppCache::new(&pool).await.chair_location.into_inner();
 
     tokio::spawn(async move {
         tracing::info!("try to request collection to pprotein");
