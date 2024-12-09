@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
-use models::ChairLocation;
+use models::{ChairLocation, RideStatus};
 use sqlx::{MySql, Pool};
 use tokio::sync::{Mutex, RwLock};
 
@@ -60,12 +60,14 @@ pub struct RideCache {
 #[derive(Debug)]
 pub struct AppCache {
     pub chair_location: RwLock<HashMap<String, ChairLocationCache>>,
+    pub ride_status_cache: RwLock<HashMap<String /* ride_id */, String>>,
     pub chair_ride_cache: RwLock<HashMap<String /* chair_id */, RideCache>>,
 }
 impl AppCache {
     pub async fn new(pool: &Pool<MySql>) -> Self {
         Self {
             chair_location: Self::new_chair_location(pool).await,
+            ride_status_cache: Self::new_ride_status_cache(pool).await,
             chair_ride_cache: Self::new_chair_ride_cache(pool).await,
         }
     }
@@ -78,6 +80,8 @@ impl AppCache {
                 .fetch_all(pool)
                 .await
                 .unwrap();
+
+        tracing::info!("processing {} chair_locations record", locations.len());
 
         let coord = |s: &ChairLocation| Coordinate {
             latitude: s.latitude,
@@ -160,6 +164,28 @@ impl AppCache {
 
         tracing::info!(
             "processed {rides_len} records, {} chairs are on duty",
+            res.len()
+        );
+
+        RwLock::new(res)
+    }
+
+    pub async fn new_ride_status_cache(pool: &Pool<MySql>) -> RwLock<HashMap<String, String>> {
+        let mut res = HashMap::new();
+
+        let statuses: Vec<RideStatus> =
+            sqlx::query_as("select * from ride_statuses order by created_at")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        let records_len = statuses.len();
+
+        for status in statuses {
+            res.insert(status.ride_id, status.status);
+        }
+
+        tracing::info!(
+            "processes {records_len} records and {} rides confirmed",
             res.len()
         );
 
@@ -248,18 +274,6 @@ pub fn secure_random_str(b: usize) -> String {
     let mut rng = rand::thread_rng();
     rng.fill_bytes(&mut buf);
     hex::encode(&buf)
-}
-
-pub async fn get_latest_ride_status<'e, E>(executor: E, ride_id: &str) -> sqlx::Result<String>
-where
-    E: 'e + sqlx::Executor<'e, Database = sqlx::MySql>,
-{
-    sqlx::query_scalar(
-        "SELECT status FROM ride_statuses WHERE ride_id = ? ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(ride_id)
-    .fetch_one(executor)
-    .await
 }
 
 // マンハッタン距離を求める

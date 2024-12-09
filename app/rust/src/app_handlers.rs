@@ -226,19 +226,15 @@ async fn app_get_rides(
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
     let mut tx = pool.begin().await?;
 
-    let rides: Vec<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC")
-            .bind(&user.id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let rides: Vec<Ride> = sqlx::query_as(
+        "SELECT * FROM rides WHERE user_id = ? and evaluation is not null ORDER BY created_at DESC",
+    )
+    .bind(&user.id)
+    .fetch_all(&mut *tx)
+    .await?;
 
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-        if status != "COMPLETED" {
-            continue;
-        }
-
         let fare = calculate_discounted_fare(
             &mut tx,
             &user.id,
@@ -309,20 +305,15 @@ async fn app_post_rides(
 
     let mut tx = pool.begin().await?;
 
-    let rides: Vec<Ride> = sqlx::query_as("SELECT * FROM rides WHERE user_id = ?")
-        .bind(&user.id)
-        .fetch_all(&mut *tx)
-        .await?;
+    let ok: bool = sqlx::query_scalar(
+        "select count(*) = 0 from rides where user_id = ? and evaluation is null",
+    )
+    .bind(&user.id)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
 
-    let mut continuing_ride_count = 0;
-    for ride in rides {
-        let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-        if status != "COMPLETED" {
-            continuing_ride_count += 1;
-        }
-    }
-
-    if continuing_ride_count > 0 {
+    if !ok {
         return Err(Error::Conflict("ride already exists"));
     }
 
@@ -342,6 +333,12 @@ async fn app_post_rides(
         .bind("MATCHING")
         .execute(&mut *tx)
         .await?;
+
+    cache
+        .ride_status_cache
+        .write()
+        .await
+        .insert(ride_id.clone(), "MATCHING".to_owned());
 
     let ride_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rides WHERE user_id = ?")
         .bind(&user.id)
@@ -470,7 +467,7 @@ struct AppPostRideEvaluationResponse {
 }
 
 async fn app_post_ride_evaluation(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     Path((ride_id,)): Path<(String,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
 ) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
@@ -487,9 +484,8 @@ async fn app_post_ride_evaluation(
     else {
         return Err(Error::NotFound("ride not found"));
     };
-    let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
 
-    if status != "ARRIVED" {
+    if cache.ride_status_cache.read().await.get(&ride.id).unwrap() != "ARRIVED" {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
@@ -509,6 +505,12 @@ async fn app_post_ride_evaluation(
         .bind("COMPLETED")
         .execute(&mut *tx)
         .await?;
+
+    cache
+        .ride_status_cache
+        .write()
+        .await
+        .insert(ride_id.clone(), "COMPLETED".to_owned());
 
     let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
         .bind(&ride_id)
@@ -606,7 +608,7 @@ struct AppGetNotificationResponseChairStats {
 }
 
 async fn app_get_notification(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<AppGetNotificationResponse>, Error> {
     let mut tx = pool.begin().await?;
@@ -632,7 +634,13 @@ async fn app_get_notification(
     } else {
         (
             None,
-            crate::get_latest_ride_status(&mut *tx, &ride.id).await?,
+            cache
+                .ride_status_cache
+                .read()
+                .await
+                .get(&ride.id)
+                .unwrap()
+                .clone(),
         )
     };
 
@@ -782,32 +790,19 @@ async fn app_get_nearby_chairs(
 
     let mut tx = pool.begin().await?;
 
-    let chairs: Vec<Chair> = sqlx::query_as("SELECT * FROM chairs")
+    let chairs: Vec<Chair> = sqlx::query_as("SELECT * FROM chairs where is_active = true")
         .fetch_all(&mut *tx)
         .await?;
 
     let mut nearby_chairs = Vec::new();
     for chair in chairs {
-        if !chair.is_active {
-            continue;
-        }
-
-        let rides: Vec<Ride> =
-            sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC")
-                .bind(&chair.id)
-                .fetch_all(&mut *tx)
-                .await?;
-
-        let mut skip = false;
-        for ride in rides {
-            // 過去にライドが存在し、かつ、それが完了していない場合はスキップ
-            let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-            if status != "COMPLETED" {
-                skip = true;
-                break;
-            }
-        }
-        if skip {
+        let ok: bool = sqlx::query_scalar(
+            "SELECT count(*) = 0 FROM rides WHERE chair_id = ? and evaluation is null",
+        )
+        .bind(&chair.id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !ok {
             continue;
         }
 

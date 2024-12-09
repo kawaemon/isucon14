@@ -159,17 +159,25 @@ async fn chair_post_coordinate(
         let mut should_remove = false;
         if let Some(ride) = cache.chair_ride_cache.read().await.get(&chair.id) {
             if req.latitude == ride.going_to.latitude && req.longitude == ride.going_to.longitude {
+                let new_status = match ride.status.as_str() {
+                    "ENROUTE" => "PICKUP",
+                    "CARRYING" => "ARRIVED",
+                    _ => unreachable!(),
+                };
+
                 sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
                     .bind(Ulid::new().to_string())
                     .bind(&ride.ride_id)
-                    .bind(match ride.status.as_str() {
-                        "ENROUTE" => "PICKUP",
-                        "CARRYING" => "ARRIVED",
-                        _ => unreachable!(),
-                    })
+                    .bind(new_status)
                     .execute(&mut *tx)
                     .await
                     .unwrap();
+
+                cache
+                    .ride_status_cache
+                    .write()
+                    .await
+                    .insert(ride.ride_id.clone(), new_status.to_owned());
                 should_remove = true;
             }
         }
@@ -208,7 +216,7 @@ struct ChairGetNotificationResponseData {
 }
 
 async fn chair_get_notification(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
 ) -> Result<axum::Json<ChairGetNotificationResponse>, Error> {
     let mut tx = pool.begin().await?;
@@ -236,7 +244,13 @@ async fn chair_get_notification(
     } else {
         (
             None,
-            crate::get_latest_ride_status(&mut *tx, &ride.id).await?,
+            cache
+                .ride_status_cache
+                .read()
+                .await
+                .get(&ride.id)
+                .unwrap()
+                .clone(),
         )
     };
 
@@ -313,19 +327,30 @@ async fn chair_post_ride_status(
                 .bind("ENROUTE")
                 .execute(&mut *tx)
                 .await?;
+
+            cache
+                .ride_status_cache
+                .write()
+                .await
+                .insert(ride.id.clone(), "ENROUTE".to_owned());
         }
         // After Picking up user
         "CARRYING" => {
-            let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-            if status != "PICKUP" {
+            if cache.ride_status_cache.read().await.get(&ride.id).unwrap() != "PICKUP" {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
+
             sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
                 .bind(Ulid::new().to_string())
-                .bind(ride.id)
+                .bind(&ride.id)
                 .bind("CARRYING")
                 .execute(&mut *tx)
                 .await?;
+            cache
+                .ride_status_cache
+                .write()
+                .await
+                .insert(ride.id.clone(), "CARRYING".to_owned());
         }
         _ => {
             return Err(Error::BadRequest("invalid status"));
