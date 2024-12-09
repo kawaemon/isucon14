@@ -4,7 +4,7 @@ use axum_extra::extract::CookieJar;
 use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
-use crate::{AppState, Coordinate, Error};
+use crate::{AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
@@ -587,7 +587,7 @@ async fn app_get_notification(
     else {
         return Ok(axum::Json(AppGetNotificationResponse {
             data: None,
-            retry_after_ms: Some(30),
+            retry_after_ms: Some(NOTIFICATION_RETRY_MS_APP),
         }));
     };
 
@@ -659,7 +659,7 @@ async fn app_get_notification(
 
     Ok(axum::Json(AppGetNotificationResponse {
         data: Some(data),
-        retry_after_ms: Some(30),
+        retry_after_ms: Some(NOTIFICATION_RETRY_MS_APP),
     }))
 }
 

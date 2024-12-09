@@ -82,6 +82,9 @@ pub fn calculate_distance(
     (a_latitude - b_latitude).abs() + (a_longitude - b_longitude).abs()
 }
 
+const NOTIFICATION_RETRY_MS_APP: i32 = 200;
+const NOTIFICATION_RETRY_MS_CHAIR: i32 = 200;
+
 const INITIAL_FARE: i32 = 500;
 const FARE_PER_DISTANCE: i32 = 100;
 

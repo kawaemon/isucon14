@@ -5,7 +5,7 @@ use axum_extra::extract::CookieJar;
 use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
-use crate::{AppState, Coordinate, Error};
+use crate::{AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_CHAIR};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes =
@@ -213,7 +213,7 @@ async fn chair_get_notification(
     else {
         return Ok(axum::Json(ChairGetNotificationResponse {
             data: None,
-            retry_after_ms: Some(30),
+            retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
         }));
     };
 
@@ -263,7 +263,7 @@ async fn chair_get_notification(
             },
             status,
         }),
-        retry_after_ms: Some(30),
+        retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
     }))
 }
 
