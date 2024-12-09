@@ -1,6 +1,6 @@
 use axum::extract::State;
-use isuride::{internal_handlers::spawn_matcher, AppState, Error};
-use std::net::SocketAddr;
+use isuride::{internal_handlers::spawn_matcher, AppCache, AppState, Error};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -34,7 +34,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    let app_state = AppState { pool };
+    let app_state = AppState {
+        cache: Arc::new(AppCache::new(&pool).await),
+        pool,
+    };
 
     spawn_matcher(app_state.clone());
 

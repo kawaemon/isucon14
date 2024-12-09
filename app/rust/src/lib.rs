@@ -1,8 +1,82 @@
+use std::{collections::HashMap, sync::Arc};
+
 use axum::{http::StatusCode, response::Response};
+use chrono::{DateTime, Utc};
+use models::ChairLocation;
+use sqlx::{MySql, Pool};
+use tokio::sync::RwLock;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
+    pub cache: Arc<AppCache>,
+}
+
+#[derive(Debug)]
+pub struct AppCache {
+    pub chair_location: RwLock<HashMap<String, ChairLocationCache>>,
+}
+impl AppCache {
+    pub async fn new(pool: &Pool<MySql>) -> Self {
+        let locations: Vec<ChairLocation> =
+            sqlx::query_as("select * from chair_locations order by chair_id, created_at asc")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+
+        let coord = |s: &ChairLocation| Coordinate {
+            latitude: s.latitude,
+            longitude: s.longitude,
+        };
+
+        let mut res = HashMap::new();
+        if locations.is_empty() {
+            return Self {
+                chair_location: RwLock::new(res),
+            };
+        }
+
+        let mut prev_id = &locations[0].chair_id;
+        for s in locations.iter().skip(1) {
+            if prev_id != &s.chair_id {
+                res.insert(
+                    s.chair_id.clone(),
+                    ChairLocationCache::new(coord(s), &s.created_at),
+                );
+            } else {
+                res.get_mut(&s.chair_id)
+                    .unwrap()
+                    .update(coord(s), &s.created_at);
+            }
+            prev_id = &s.chair_id;
+        }
+
+        Self {
+            chair_location: RwLock::new(res),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ChairLocationCache {
+    pub last_coord: Coordinate,
+    pub total_distance: usize,
+    pub updated_at: DateTime<Utc>,
+}
+impl ChairLocationCache {
+    fn new(coord: Coordinate, at: &DateTime<Utc>) -> Self {
+        Self {
+            last_coord: coord,
+            total_distance: 0,
+            updated_at: at.clone(),
+        }
+    }
+
+    fn update(&mut self, coord: Coordinate, at: &DateTime<Utc>) {
+        self.total_distance += self.last_coord.distance(&coord);
+        self.last_coord = coord;
+        self.updated_at = at.clone();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -46,10 +120,16 @@ impl axum::response::IntoResponse for Error {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Coordinate {
     pub latitude: i32,
     pub longitude: i32,
+}
+impl Coordinate {
+    fn distance(&self, rhs: &Self) -> usize {
+        (self.latitude - rhs.latitude).abs() as usize
+            + (self.longitude - rhs.longitude).abs() as usize
+    }
 }
 
 pub fn secure_random_str(b: usize) -> String {
