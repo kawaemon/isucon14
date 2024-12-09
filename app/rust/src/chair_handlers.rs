@@ -221,45 +221,41 @@ async fn chair_get_notification(
 ) -> Result<axum::Json<ChairGetNotificationResponse>, Error> {
     let mut tx = pool.begin().await?;
 
-    // もし椅子に一つも ride が存在しなかったら None
-    // 存在し、かつ未通知のものが存在すれば未通知のものを通知済みとしてマークして返す、
-    // そうでなかれば通知済みの最新のものを返す
-
-    /*
-     */
-
-    let Some(ride_status): Option<RideStatus> = sqlx::query_as(
-        "select *
-        from ride_statuses
-        inner join (
-            select id from rides where rides.chair_id = ?
-        ) as rides_of_chair on rides_of_chair.id = ride_statuses.ride_id
-        order by chair_sent_at is null desc, created_at asc
-        limit 1",
-    )
-    .bind(&chair.id)
-    .fetch_optional(&mut *tx)
-    .await?
+    let Some(ride): Option<Ride> =
+        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
+            .bind(&chair.id)
+            .fetch_optional(&mut *tx)
+            .await?
     else {
         return Ok(axum::Json(ChairGetNotificationResponse {
             data: None,
-            retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
+            retry_after_ms: Some(30),
         }));
     };
 
-    let ride: Ride = sqlx::query_as("select * from rides where id=?")
-        .bind(&ride_status.ride_id)
+    let yet_sent_ride_status: Option<RideStatus> =
+        sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
+        .bind(&ride.id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let (yet_sent_ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status
+    {
+        (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
+    } else {
+        (
+            None,
+            crate::get_latest_ride_status(&mut *tx, &ride.id).await?,
+        )
+    };
+
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? FOR SHARE")
+        .bind(ride.user_id)
         .fetch_one(&mut *tx)
         .await?;
 
-    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? for share")
-        .bind(&ride.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    if ride_status.chair_sent_at.is_none() {
+    if let Some(yet_sent_ride_status_id) = yet_sent_ride_status_id {
         sqlx::query("UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
-            .bind(ride_status.id)
+            .bind(yet_sent_ride_status_id)
             .execute(&mut *tx)
             .await?;
     }
@@ -281,9 +277,9 @@ async fn chair_get_notification(
                 latitude: ride.destination_latitude,
                 longitude: ride.destination_longitude,
             },
-            status: ride_status.status,
+            status,
         }),
-        retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
+        retry_after_ms: Some(30),
     }))
 }
 
