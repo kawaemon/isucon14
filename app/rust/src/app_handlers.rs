@@ -4,7 +4,7 @@ use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use ulid::Ulid;
 
-use crate::models::{Chair, ChairLocation, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
+use crate::models::{Chair, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
 use crate::{AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -133,7 +133,7 @@ async fn app_post_users_inner(
             // ユーザーチェック
             let Some(inviter): Option<User> =
                 sqlx::query_as("SELECT * FROM users WHERE invitation_code = ?")
-                    .bind(&req_invitation_code)
+                    .bind(req_invitation_code)
                     .fetch_optional(&mut *tx)
                     .await?
             else {
