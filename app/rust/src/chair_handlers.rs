@@ -148,14 +148,6 @@ async fn chair_post_coordinate(
         }
     }
 
-    sqlx::query("update chairs set total_distance = total_distance + ?")
-        .bind(&chair_location_id)
-        .bind(&chair.id)
-        .bind(req.latitude)
-        .bind(req.longitude)
-        .execute(&mut *tx)
-        .await?;
-
     let location: ChairLocation = sqlx::query_as("SELECT * FROM chair_locations WHERE id = ?")
         .bind(chair_location_id)
         .fetch_one(&mut *tx)
