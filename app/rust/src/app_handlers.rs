@@ -59,9 +59,38 @@ struct AppPostUsersResponse {
 }
 
 async fn app_post_users(
-    State(AppState { pool, .. }): State<AppState>,
+    state: State<AppState>,
     jar: CookieJar,
-    axum::Json(req): axum::Json<AppPostUsersRequest>,
+    json: axum::Json<AppPostUsersRequest>,
+) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
+    let mut jar = Some(jar);
+
+    for i in 0.. {
+        let r = app_post_users_inner(&state, &mut jar, &json).await;
+        match r {
+            Ok(t) => return Ok(t),
+            Err(Error::Sqlx(sqlx::Error::Database(ref c))) => {
+                if let Some(code) = c.code() {
+                    if code == "1213" {
+                        if i >= 3 {
+                            tracing::error!("deadlock; failing");
+                            return r;
+                        }
+                        tracing::warn!("deadlock; retrying [{i}/3]");
+                        continue;
+                    }
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
+async fn app_post_users_inner(
+    State(AppState { pool, .. }): &State<AppState>,
+    jar: &mut Option<CookieJar>,
+    axum::Json(req): &axum::Json<AppPostUsersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
     let user_id = Ulid::new().to_string();
     let access_token = crate::secure_random_str(32);
@@ -71,10 +100,10 @@ async fn app_post_users(
 
     sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .bind(&user_id)
-        .bind(req.username)
-        .bind(req.firstname)
-        .bind(req.lastname)
-        .bind(req.date_of_birth)
+        .bind(&req.username)
+        .bind(&req.firstname)
+        .bind(&req.lastname)
+        .bind(&req.date_of_birth)
         .bind(&access_token)
         .bind(&invitation_code)
         .execute(&mut *tx)
@@ -89,7 +118,7 @@ async fn app_post_users(
         .await?;
 
     // 招待コードを使った登録
-    if let Some(req_invitation_code) = req.invitation_code {
+    if let Some(req_invitation_code) = &req.invitation_code {
         if !req_invitation_code.is_empty() {
             // 招待する側の招待数をチェック
             let coupons: Vec<Coupon> =
@@ -131,6 +160,8 @@ async fn app_post_users(
     tx.commit().await?;
 
     let jar = jar
+        .take()
+        .unwrap()
         .add(axum_extra::extract::cookie::Cookie::build(("app_session", access_token)).path("/"));
 
     Ok((
