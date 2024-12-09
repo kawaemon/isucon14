@@ -31,7 +31,7 @@ async fn matching(AppState { pool, .. }: AppState) -> Result<StatusCode, Error> 
         let mut res = vec![];
         for c in active_chairs {
             let free: bool = sqlx::query_scalar(
-                "select count(*) = 0 from rides where chair_id = ? and evaluation is null",
+                "SELECT COUNT(*) = 0 FROM (SELECT COUNT(chair_sent_at) = 6 AS completed FROM ride_statuses WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = ?) GROUP BY ride_id) is_completed WHERE completed = FALSE",
             )
             .bind(&c.id)
             .fetch_one(&pool)
