@@ -3,21 +3,19 @@
 # change below
 # ----------
 SERVER_ID = s1
-
 USER = isucon
 BIN_NAME = isuride
 SRC_DIR = /home/$(USER)/webapp
-BUILD_DIR = /home/$(USER)/webapp/go
+BUILD_DIR = /home/$(USER)/webapp/rust
 ENV_FILE = /home/$(USER)/env.sh
-SERVICE_NAME = isuride-go.service
+SERVICE_NAME = isuride-rust.service
 # ------------
-
 
 ROOT_DIR = $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 THIS_SERVER_DIR = $(ROOT_DIR)/$(SERVER_ID)
 
 apply: ghpull setconf
-	cd $(BUILD_DIR) && go build -o $(BIN_NAME) .
+	cd $(BUILD_DIR) && cargo build --release
 
 	sudo systemctl daemon-reload
 	sudo systemctl restart mysql nginx

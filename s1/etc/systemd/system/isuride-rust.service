@@ -1,16 +1,16 @@
 [Unit]
-Description=isuride-go
+Description=isuride-rust
 After=syslog.target
 After=mysql.service
 Requires=mysql.service
 
 [Service]
-WorkingDirectory=/home/isucon/webapp/go
+WorkingDirectory=/home/isucon/webapp/rust
 EnvironmentFile=/home/isucon/env.sh
 
 User=isucon
 Group=isucon
-ExecStart=/home/isucon/webapp/go/isuride
+ExecStart=/home/isucon/webapp/rust/target/release/isuride
 ExecStop=/bin/kill -s QUIT $MAINPID
 
 Restart=on-failure
