@@ -236,7 +236,7 @@ async fn chair_get_notification(
         .fetch_one(&mut *tx)
         .await?;
 
-    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ?")
+    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? for share")
         .bind(&ride.user_id)
         .fetch_one(&mut *tx)
         .await?;

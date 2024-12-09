@@ -1,20 +1,21 @@
-use axum::extract::State;
 use axum::http::StatusCode;
+use std::time::Duration;
 
 use crate::models::{Chair, Ride};
 use crate::{AppState, Error};
 
-pub fn internal_routes() -> axum::Router<AppState> {
-    axum::Router::new().route(
-        "/api/internal/matching",
-        axum::routing::get(internal_get_matching),
-    )
+pub fn spawn_matcher(state: AppState) {
+    tokio::spawn(async move {
+        loop {
+            if let Err(e) = matching(state.clone()).await {
+                tracing::error!("failed to matching: {e:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    });
 }
 
-// このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
-async fn internal_get_matching(
-    State(AppState { pool, .. }): State<AppState>,
-) -> Result<StatusCode, Error> {
+async fn matching(AppState { pool, .. }: AppState) -> Result<StatusCode, Error> {
     let waiting_rides: Vec<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at")
             .fetch_all(&pool)

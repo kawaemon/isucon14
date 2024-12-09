@@ -1,5 +1,5 @@
 use axum::extract::State;
-use isuride::{AppState, Error};
+use isuride::{internal_handlers::spawn_matcher, AppState, Error};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
@@ -36,12 +36,13 @@ async fn main() -> anyhow::Result<()> {
 
     let app_state = AppState { pool };
 
+    spawn_matcher(app_state.clone());
+
     let app = axum::Router::new()
         .route("/api/initialize", axum::routing::post(post_initialize))
         .merge(isuride::app_handlers::app_routes(app_state.clone()))
         .merge(isuride::owner_handlers::owner_routes(app_state.clone()))
         .merge(isuride::chair_handlers::chair_routes(app_state.clone()))
-        .merge(isuride::internal_handlers::internal_routes())
         .with_state(app_state)
         .layer(tower_http::trace::TraceLayer::new_for_http());
 
