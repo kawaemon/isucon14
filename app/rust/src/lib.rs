@@ -51,13 +51,22 @@ impl AppDeferred {
 }
 
 #[derive(Debug)]
+pub struct RideCache {
+    ride_id: String,
+    status: String,
+    going_to: Coordinate,
+}
+
+#[derive(Debug)]
 pub struct AppCache {
     pub chair_location: RwLock<HashMap<String, ChairLocationCache>>,
+    pub chair_ride_cache: RwLock<HashMap<String /* chair_id */, RideCache>>,
 }
 impl AppCache {
     pub async fn new(pool: &Pool<MySql>) -> Self {
         Self {
             chair_location: Self::new_chair_location(pool).await,
+            chair_ride_cache: Self::new_chair_ride_cache(pool).await,
         }
     }
 
@@ -98,6 +107,61 @@ impl AppCache {
             }
             prev_id = &s.chair_id;
         }
+
+        RwLock::new(res)
+    }
+
+    pub async fn new_chair_ride_cache(pool: &Pool<MySql>) -> RwLock<HashMap<String, RideCache>> {
+        let mut res = HashMap::new();
+
+        #[derive(Debug, sqlx::FromRow)]
+        pub struct RideWithStatus {
+            pub id: String,
+            pub chair_id: Option<String>,
+            pub pickup_latitude: i32,
+            pub pickup_longitude: i32,
+            pub destination_latitude: i32,
+            pub destination_longitude: i32,
+            pub status: String,
+        }
+
+        let rides: Vec<RideWithStatus> = sqlx::query_as("select rides.*, status from rides inner join ride_statuses on ride_statuses.ride_id=rides.id order by ride_statuses.created_at")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let rides_len = rides.len();
+
+        for ride in rides {
+            if ["ENROUTE", "CARRYING"].contains(&ride.status.as_str()) {
+                res.insert(
+                    ride.chair_id.unwrap(),
+                    RideCache {
+                        ride_id: ride.id,
+                        going_to: match ride.status.as_str() {
+                            "ENROUTE" => Coordinate {
+                                latitude: ride.pickup_latitude,
+                                longitude: ride.pickup_longitude,
+                            },
+                            "CARRYING" => Coordinate {
+                                latitude: ride.destination_latitude,
+                                longitude: ride.destination_longitude,
+                            },
+                            _ => unreachable!(),
+                        },
+                        status: ride.status,
+                    },
+                );
+                continue;
+            }
+            if ["PICKUP", "ARRIVED"].contains(&ride.status.as_str()) {
+                res.remove(&ride.chair_id.unwrap());
+            }
+        }
+
+        tracing::info!(
+            "processed {rides_len} records, {} chairs are on duty",
+            res.len()
+        );
 
         RwLock::new(res)
     }

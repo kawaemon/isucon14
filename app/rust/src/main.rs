@@ -1,6 +1,5 @@
 use axum::extract::State;
 use isuride::{AppCache, AppDeferred, AppState, Error};
-use serde::de;
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
@@ -24,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let dbname = std::env::var("ISUCON_DB_NAME").unwrap_or_else(|_| "isuride".to_owned());
 
     let pool = sqlx::mysql::MySqlPoolOptions::new()
-        .max_connections(50)
+        .max_connections(72)
         .connect_with(
             sqlx::mysql::MySqlConnectOptions::default()
                 .host(&host)
@@ -47,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 def.sync(&pool).await;
-                tokio::time::sleep(Duration::from_secs(1)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         });
     }
@@ -101,7 +100,9 @@ async fn post_initialize(
         .execute(&pool)
         .await?;
 
-    *cache.chair_location.write().await = AppCache::new(&pool).await.chair_location.into_inner();
+    let new_cache = AppCache::new(&pool).await;
+    *cache.chair_location.write().await = new_cache.chair_location.into_inner();
+    *cache.chair_ride_cache.write().await = new_cache.chair_ride_cache.into_inner();
 
     tokio::spawn(async move {
         tracing::info!("try to request collection to pprotein");

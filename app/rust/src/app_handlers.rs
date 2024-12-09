@@ -301,7 +301,7 @@ struct AppPostRidesResponse {
 }
 
 async fn app_post_rides(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesRequest>,
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
