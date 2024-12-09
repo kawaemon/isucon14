@@ -132,8 +132,8 @@ pub struct Coordinate {
 }
 impl Coordinate {
     fn distance(&self, rhs: &Self) -> usize {
-        (self.latitude - rhs.latitude).abs() as usize
-            + (self.longitude - rhs.longitude).abs() as usize
+        (self.latitude - rhs.latitude).unsigned_abs() as usize
+            + (self.longitude - rhs.longitude).unsigned_abs() as usize
     }
 }
 
