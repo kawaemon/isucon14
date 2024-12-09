@@ -1,6 +1,7 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum_extra::extract::CookieJar;
+use chrono::Utc;
 use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
@@ -739,7 +740,7 @@ struct AppGetNearbyChairsResponseChair {
 }
 
 async fn app_get_nearby_chairs(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache }): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
 ) -> Result<axum::Json<AppGetNearbyChairsResponse>, Error> {
     let distance = query.distance.unwrap_or(50);
@@ -780,12 +781,12 @@ async fn app_get_nearby_chairs(
         }
 
         // 最新の位置情報を取得
-        let Some(chair_location): Option<ChairLocation> = sqlx::query_as(
-            "SELECT * FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(&chair.id)
-        .fetch_optional(&mut *tx)
-        .await?
+        let Some(chair_location) = cache
+            .chair_location
+            .read()
+            .await
+            .get(&chair.id)
+            .map(|x| x.last_coord.clone())
         else {
             continue;
         };
@@ -808,14 +809,9 @@ async fn app_get_nearby_chairs(
         }
     }
 
-    let retrieved_at: chrono::DateTime<chrono::Utc> =
-        sqlx::query_scalar("SELECT CURRENT_TIMESTAMP(6)")
-            .fetch_one(&mut *tx)
-            .await?;
-
     Ok(axum::Json(AppGetNearbyChairsResponse {
         chairs: nearby_chairs,
-        retrieved_at: retrieved_at.timestamp(),
+        retrieved_at: Utc::now().timestamp(),
     }))
 }
 

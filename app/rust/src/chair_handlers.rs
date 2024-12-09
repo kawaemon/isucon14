@@ -2,10 +2,11 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
+use chrono::Utc;
 use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
-use crate::{AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_CHAIR};
+use crate::{AppState, ChairLocationCache, Coordinate, Error, NOTIFICATION_RETRY_MS_CHAIR};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes =
@@ -115,22 +116,37 @@ struct ChairPostCoordinateResponse {
 }
 
 async fn chair_post_coordinate(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
     let mut tx = pool.begin().await?;
 
+    let now = Utc::now();
     let chair_location_id = Ulid::new().to_string();
     sqlx::query(
-        "INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)",
+        "INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&chair_location_id)
     .bind(&chair.id)
     .bind(req.latitude)
     .bind(req.longitude)
+    .bind(now)
     .execute(&mut *tx)
     .await?;
+
+    {
+        let coord = Coordinate {
+            latitude: req.latitude,
+            longitude: req.longitude,
+        };
+        let mut cache = cache.chair_location.write().await;
+        if let Some(cache) = cache.get_mut(&chair.id) {
+            cache.update(coord, &now);
+        } else {
+            cache.insert(chair.id.clone(), ChairLocationCache::new(coord, &now));
+        }
+    }
 
     let location: ChairLocation = sqlx::query_as("SELECT * FROM chair_locations WHERE id = ?")
         .bind(chair_location_id)
