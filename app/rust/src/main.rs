@@ -86,9 +86,11 @@ async fn post_initialize(
         .await?;
 
     tokio::spawn(async move {
+        tracing::info!("try to request collection to pprotein");
         if let Err(e) = reqwest::get("http://192.168.0.13:9000/api/group/collect").await {
             tracing::warn!("failed to communicate with pprotein: {e:#?}");
         }
+        tracing::info!("try to request collection to pprotein: done");
     });
 
     Ok(axum::Json(PostInitializeResponse { language: "rust" }))
