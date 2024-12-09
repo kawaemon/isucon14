@@ -37,6 +37,10 @@ impl AppCache {
         }
 
         let mut prev_id = &locations[0].chair_id;
+        res.insert(
+            locations[0].chair_id.clone(),
+            ChairLocationCache::new(coord(&locations[0]), &locations[0].created_at),
+        );
         for s in locations.iter().skip(1) {
             if prev_id != &s.chair_id {
                 res.insert(
@@ -51,6 +55,7 @@ impl AppCache {
             prev_id = &s.chair_id;
         }
 
+        tracing::info!("loaded {} coords", res.len());
         Self {
             chair_location: RwLock::new(res),
         }
