@@ -1,6 +1,6 @@
 use axum::extract::State;
 use isuride::{internal_handlers::spawn_matcher, AppCache, AppState, Error};
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, process::Stdio, sync::Arc};
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -22,8 +22,10 @@ async fn main() -> anyhow::Result<()> {
     let password = std::env::var("ISUCON_DB_PASSWORD").unwrap_or_else(|_| "isucon".to_owned());
     let dbname = std::env::var("ISUCON_DB_NAME").unwrap_or_else(|_| "isuride".to_owned());
 
+    tracing::info!("connecting to mysql://{host}:{port}");
+
     let pool = sqlx::mysql::MySqlPoolOptions::new()
-        .max_connections(50)
+        .max_connections(128)
         .connect_with(
             sqlx::mysql::MySqlConnectOptions::default()
                 .host(&host)
@@ -75,13 +77,14 @@ async fn post_initialize(
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let output = tokio::process::Command::new("../sql/init.sh")
-        .output()
-        .await?;
-    if !output.status.success() {
-        return Err(Error::Initialize {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        });
+        .stdout(Stdio::inherit())
+        .spawn()
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    if !output.success() {
+        return Err(Error::BadRequest("nah"));
     }
 
     sqlx::query("UPDATE settings SET value = ? WHERE name = 'payment_gateway_url'")

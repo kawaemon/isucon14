@@ -17,6 +17,8 @@ ISUCON_DB_USER=${ISUCON_DB_USER:-isucon}
 ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
 ISUCON_DB_NAME=${ISUCON_DB_NAME:-isuride}
 
+echo "migrating $ISUCON_DB_HOST:$ISUCON_DB_PORT"
+
 # MySQLを初期化
 echo 'drop database isuride; create database isuride' | mysql -u"$ISUCON_DB_USER" \
 	-p"$ISUCON_DB_PASSWORD" \
