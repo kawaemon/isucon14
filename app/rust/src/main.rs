@@ -1,5 +1,5 @@
 use axum::extract::State;
-use isuride::{AppCache, AppDeferred, AppState, Error};
+use isuride::{internal_handlers::do_matching, AppCache, AppDeferred, AppState, Error};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
@@ -47,6 +47,18 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 def.sync(&pool).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        });
+    }
+
+    {
+        let state = app_state.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = do_matching(state.clone()).await {
+                    tracing::error!("matching failed: {e:?}; continuing anyway");
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
             }
         });
     }

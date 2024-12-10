@@ -1,7 +1,7 @@
 use axum::extract::State;
 use axum::http::StatusCode;
 
-use crate::models::{Chair, Ride, RideStatus};
+use crate::models::{Chair, Ride};
 use crate::{AppState, Error};
 
 pub fn internal_routes() -> axum::Router<AppState> {
@@ -13,9 +13,11 @@ pub fn internal_routes() -> axum::Router<AppState> {
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 // COMPLETED 通知送信後であることが必須
-async fn internal_get_matching(
-    State(AppState { pool, cache, .. }): State<AppState>,
-) -> Result<StatusCode, Error> {
+async fn internal_get_matching() -> Result<StatusCode, Error> {
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn do_matching(AppState { pool, cache, .. }: AppState) -> Result<(), Error> {
     let waiting_rides: Vec<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at")
             .fetch_all(&pool)
@@ -29,6 +31,7 @@ async fn internal_get_matching(
         .filter(|(_k, v)| v.is_active)
         .map(|(_k, v)| v.clone())
         .collect::<Vec<_>>();
+    let active_count = active_chairs.len();
 
     let mut free_chairs: Vec<Chair> = vec![];
     for active_chair in active_chairs {
@@ -69,8 +72,7 @@ async fn internal_get_matching(
     }
 
     if rides_count > 0 {
-        tracing::info!("matching: waiting={rides_count}, free={free_count}, matches={matches}",);
+        tracing::info!("matching: waiting={rides_count}, active={active_count}, free={free_count}, matches={matches}",);
     }
-
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
