@@ -770,6 +770,7 @@ struct AppGetNearbyChairsResponseChair {
     current_coordinate: Coordinate,
 }
 
+// status=completed であればよい
 async fn app_get_nearby_chairs(
     State(AppState { pool, cache, .. }): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
