@@ -312,6 +312,27 @@ async fn chair_get_notification(
 
     tx.commit().await?;
 
+    if status == "COMPLETED" {
+        tokio::spawn(async move {
+            let Some(waiting_ride): Option<Ride> = sqlx::query_as(
+                "select * from rides where chair_id is null order by created_at limit 1",
+            )
+            .fetch_optional(&pool)
+            .await
+            .unwrap() else {
+                return;
+            };
+
+            sqlx::query("update rides set chair_id = ? where id = ?")
+                .bind(chair.id)
+                .bind(waiting_ride.id)
+                .execute(&pool)
+                .await
+                .unwrap();
+            tracing::info!("found new match right after notification");
+        });
+    }
+
     Ok(axum::Json(ChairGetNotificationResponse {
         data: Some(ChairGetNotificationResponseData {
             ride_id: ride.id,
