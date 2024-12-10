@@ -1,6 +1,6 @@
 use axum::extract::State;
-use isuride::{AppCache, AppDeferred, AppState, Error};
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use isuride::{AppState, Error};
+use std::net::SocketAddr;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let dbname = std::env::var("ISUCON_DB_NAME").unwrap_or_else(|_| "isuride".to_owned());
 
     let pool = sqlx::mysql::MySqlPoolOptions::new()
-        .max_connections(72)
+        .max_connections(50)
         .connect_with(
             sqlx::mysql::MySqlConnectOptions::default()
                 .host(&host)
@@ -34,22 +34,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    let app_state = AppState {
-        cache: Arc::new(AppCache::new(&pool).await),
-        deferred: Arc::new(AppDeferred::new()),
-        pool,
-    };
-
-    {
-        let pool = app_state.pool.clone();
-        let def = app_state.deferred.clone();
-        tokio::spawn(async move {
-            loop {
-                def.sync(&pool).await;
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
-        });
-    }
+    let app_state = AppState { pool };
 
     let app = axum::Router::new()
         .route("/api/initialize", axum::routing::post(post_initialize))
@@ -82,7 +67,7 @@ struct PostInitializeResponse {
 }
 
 async fn post_initialize(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(AppState { pool, .. }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let output = tokio::process::Command::new("../sql/init.sh")
@@ -99,27 +84,6 @@ async fn post_initialize(
         .bind(req.payment_server)
         .execute(&pool)
         .await?;
-
-    let AppCache {
-        chair_location,
-        ride_status_cache,
-        chair_ride_cache,
-        chair_auth_cache: chair_cache,
-        user_auth_cache: user_cache,
-    } = AppCache::new(&pool).await;
-    *cache.chair_location.write().await = chair_location.into_inner();
-    *cache.chair_ride_cache.write().await = chair_ride_cache.into_inner();
-    *cache.ride_status_cache.write().await = ride_status_cache.into_inner();
-    *cache.chair_auth_cache.write().await = chair_cache.into_inner();
-    *cache.user_auth_cache.write().await = user_cache.into_inner();
-
-    tokio::spawn(async move {
-        tracing::info!("try to request collection to pprotein");
-        if let Err(e) = reqwest::get("http://192.168.0.13:9000/api/group/collect").await {
-            tracing::warn!("failed to communicate with pprotein: {e:#?}");
-        }
-        tracing::info!("try to request collection to pprotein: done");
-    });
 
     Ok(axum::Json(PostInitializeResponse { language: "rust" }))
 }
