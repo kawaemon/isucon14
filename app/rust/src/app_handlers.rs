@@ -4,6 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
+use sqlx::QueryBuilder;
 use ulid::Ulid;
 
 use crate::models::{Chair, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
@@ -780,51 +781,39 @@ async fn app_get_nearby_chairs(
         longitude: query.longitude,
     };
 
-    let mut tx = pool.begin().await?;
+    let mut candidates = vec![];
 
-    let chairs: Vec<Chair> = sqlx::query_as("SELECT * FROM chairs where is_active = true")
-        .fetch_all(&mut *tx)
-        .await?;
+    for (id, location) in cache.chair_location.read().await.iter() {
+        if coordinate.distance(&location.last_coord) as i32 <= distance {
+            let cache = cache.chair_auth_cache.read().await;
+            let cache = cache.iter().find(|(_k, v)| &v.id == id).unwrap().1;
+            if cache.is_active {
+                candidates.push((cache.clone(), location.last_coord.clone()));
+            }
+        }
+    }
 
-    let mut nearby_chairs = Vec::new();
-    for chair in chairs {
+    let mut nearby_chairs = vec![];
+
+    for (cand, loc) in candidates {
         let ok: bool = sqlx::query_scalar(
             "SELECT count(*) = 0 FROM rides WHERE chair_id = ? and evaluation is null",
         )
-        .bind(&chair.id)
-        .fetch_one(&mut *tx)
+        .bind(&cand.id)
+        .fetch_one(&pool)
         .await?;
         if !ok {
             continue;
         }
-
-        // 最新の位置情報を取得
-        let Some(chair_location) = cache
-            .chair_location
-            .read()
-            .await
-            .get(&chair.id)
-            .map(|x| x.last_coord.clone())
-        else {
-            continue;
-        };
-        if crate::calculate_distance(
-            coordinate.latitude,
-            coordinate.longitude,
-            chair_location.latitude,
-            chair_location.longitude,
-        ) <= distance
-        {
-            nearby_chairs.push(AppGetNearbyChairsResponseChair {
-                id: chair.id,
-                name: chair.name,
-                model: chair.model,
-                current_coordinate: Coordinate {
-                    latitude: chair_location.latitude,
-                    longitude: chair_location.longitude,
-                },
-            });
-        }
+        nearby_chairs.push(AppGetNearbyChairsResponseChair {
+            id: cand.id,
+            name: cand.name,
+            model: cand.model,
+            current_coordinate: Coordinate {
+                latitude: loc.latitude,
+                longitude: loc.longitude,
+            },
+        });
     }
 
     Ok(axum::Json(AppGetNearbyChairsResponse {
