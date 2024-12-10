@@ -17,7 +17,13 @@ pub async fn app_auth_middleware(
     };
     let access_token = c.value();
 
-    let Some(user): Option<User> = cache.user_cache.read().await.get(access_token).cloned() else {
+    let Some(user): Option<User> = cache
+        .user_auth_cache
+        .read()
+        .await
+        .get(access_token)
+        .cloned()
+    else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -60,7 +66,12 @@ pub async fn chair_auth_middleware(
     };
     let access_token = c.value();
 
-    let Some(chair): Option<Chair> = cache.chair_cache.read().await.get(access_token).cloned()
+    let Some(chair): Option<Chair> = cache
+        .chair_auth_cache
+        .read()
+        .await
+        .get(access_token)
+        .cloned()
     else {
         return Err(Error::Unauthorized("invalid access token"));
     };

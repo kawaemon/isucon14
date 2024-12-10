@@ -113,7 +113,7 @@ async fn app_post_users_inner(
         .execute(&mut *tx)
         .await?;
 
-    cache.user_cache.write().await.insert(
+    cache.user_auth_cache.write().await.insert(
         access_token.clone(),
         User {
             id: user_id.clone(),
@@ -151,7 +151,7 @@ async fn app_post_users_inner(
             // ユーザーチェック
             let Some(inviter): Option<User> =
                 sqlx::query_as("SELECT * FROM users WHERE invitation_code = ?")
-                    .bind(&req_invitation_code)
+                    .bind(req_invitation_code)
                     .fetch_optional(&mut *tx)
                     .await?
             else {

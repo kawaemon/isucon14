@@ -51,6 +51,16 @@ impl AppDeferred {
 }
 
 #[derive(Debug)]
+pub struct ChairCache {
+    ride: Option<RideCache>,
+}
+impl ChairCache {
+    pub fn new() -> Self {
+        Self { ride: None }
+    }
+}
+
+#[derive(Debug)]
 pub struct RideCache {
     ride_id: String,
     status: String,
@@ -61,9 +71,9 @@ pub struct RideCache {
 pub struct AppCache {
     pub chair_location: RwLock<HashMap<String, ChairLocationCache>>,
     pub ride_status_cache: RwLock<HashMap<String /* ride_id */, String>>,
-    pub chair_ride_cache: RwLock<HashMap<String /* chair_id */, RideCache>>,
-    pub chair_cache: RwLock<HashMap<String /* access_token */, Chair>>,
-    pub user_cache: RwLock<HashMap<String /* access_token */, User>>,
+    pub chair_ride_cache: RwLock<HashMap<String /* chair_id */, ChairCache>>,
+    pub chair_auth_cache: RwLock<HashMap<String /* access_token */, Chair>>,
+    pub user_auth_cache: RwLock<HashMap<String /* access_token */, User>>,
 }
 impl AppCache {
     pub async fn new(pool: &Pool<MySql>) -> Self {
@@ -71,8 +81,8 @@ impl AppCache {
             chair_location: Self::new_chair_location(pool).await,
             ride_status_cache: Self::new_ride_status_cache(pool).await,
             chair_ride_cache: Self::new_chair_ride_cache(pool).await,
-            chair_cache: Self::new_chair_cache(pool).await,
-            user_cache: Self::new_user_cache(pool).await,
+            chair_auth_cache: Self::new_chair_cache(pool).await,
+            user_auth_cache: Self::new_user_cache(pool).await,
         }
     }
 
@@ -119,8 +129,16 @@ impl AppCache {
         RwLock::new(res)
     }
 
-    pub async fn new_chair_ride_cache(pool: &Pool<MySql>) -> RwLock<HashMap<String, RideCache>> {
+    pub async fn new_chair_ride_cache(pool: &Pool<MySql>) -> RwLock<HashMap<String, ChairCache>> {
         let mut res = HashMap::new();
+
+        let chairs: Vec<Chair> = sqlx::query_as("select * from chairs")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        for chair in chairs {
+            res.insert(chair.id, ChairCache::new());
+        }
 
         #[derive(Debug, sqlx::FromRow)]
         pub struct RideWithStatus {
@@ -141,35 +159,33 @@ impl AppCache {
 
         for ride in rides {
             if ["ENROUTE", "CARRYING"].contains(&ride.status.as_str()) {
-                res.insert(
-                    ride.chair_id.unwrap(),
-                    RideCache {
-                        ride_id: ride.id,
-                        going_to: match ride.status.as_str() {
-                            "ENROUTE" => Coordinate {
-                                latitude: ride.pickup_latitude,
-                                longitude: ride.pickup_longitude,
-                            },
-                            "CARRYING" => Coordinate {
-                                latitude: ride.destination_latitude,
-                                longitude: ride.destination_longitude,
-                            },
-                            _ => unreachable!(),
+                let chair_id = ride.chair_id.unwrap();
+                res.get_mut(&chair_id).unwrap().ride = Some(RideCache {
+                    ride_id: ride.id,
+                    going_to: match ride.status.as_str() {
+                        "ENROUTE" => Coordinate {
+                            latitude: ride.pickup_latitude,
+                            longitude: ride.pickup_longitude,
                         },
-                        status: ride.status,
+                        "CARRYING" => Coordinate {
+                            latitude: ride.destination_latitude,
+                            longitude: ride.destination_longitude,
+                        },
+                        _ => unreachable!(),
                     },
-                );
+                    status: ride.status,
+                });
                 continue;
             }
             if ["PICKUP", "ARRIVED"].contains(&ride.status.as_str()) {
-                res.remove(&ride.chair_id.unwrap());
+                let chair_id = ride.chair_id.unwrap();
+                res.get_mut(&chair_id).unwrap().ride = None;
+                continue;
             }
         }
 
-        tracing::info!(
-            "processed {rides_len} records, {} chairs are on duty",
-            res.len()
-        );
+        let duty_count = res.iter().filter(|x| x.1.ride.is_some()).count();
+        tracing::info!("processed {rides_len} records, {duty_count} chairs are on duty",);
 
         RwLock::new(res)
     }

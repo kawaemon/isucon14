@@ -7,7 +7,8 @@ use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
 use crate::{
-    AppState, ChairLocationCache, Coordinate, Error, RideCache, NOTIFICATION_RETRY_MS_CHAIR,
+    AppState, ChairCache, ChairLocationCache, Coordinate, Error, RideCache,
+    NOTIFICATION_RETRY_MS_CHAIR,
 };
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -82,7 +83,12 @@ async fn chair_post_chairs(
         .bind(now)
         .execute(&pool)
         .await?;
-    cache.chair_cache.write().await.insert(
+    cache
+        .chair_ride_cache
+        .write()
+        .await
+        .insert(chair_id.clone(), ChairCache::new());
+    cache.chair_auth_cache.write().await.insert(
         access_token.clone(),
         Chair {
             id: chair_id.clone(),
@@ -128,7 +134,7 @@ async fn chair_post_activity(
         .execute(&pool)
         .await?;
     {
-        let mut cache = cache.chair_cache.write().await;
+        let mut cache = cache.chair_auth_cache.write().await;
         let chair = cache.get_mut(&chair.access_token).unwrap();
         chair.is_active = req.is_active;
         chair.updated_at = now;
@@ -182,7 +188,15 @@ async fn chair_post_coordinate(
         let mut tx = pool.begin().await.unwrap();
 
         let mut should_remove = false;
-        if let Some(ride) = cache.chair_ride_cache.read().await.get(&chair.id) {
+        if let Some(ride) = cache
+            .chair_ride_cache
+            .read()
+            .await
+            .get(&chair.id)
+            .unwrap()
+            .ride
+            .as_ref()
+        {
             if req.latitude == ride.going_to.latitude && req.longitude == ride.going_to.longitude {
                 let new_status = match ride.status.as_str() {
                     "ENROUTE" => "PICKUP",
@@ -208,7 +222,13 @@ async fn chair_post_coordinate(
         }
 
         if should_remove {
-            cache.chair_ride_cache.write().await.remove(&chair.id);
+            cache
+                .chair_ride_cache
+                .write()
+                .await
+                .get_mut(&chair.id)
+                .unwrap()
+                .ride = None;
         }
 
         tx.commit().await.unwrap();
@@ -348,6 +368,8 @@ async fn chair_post_ride_status(
         return Err(Error::BadRequest("not assigned to this ride"));
     }
 
+    let chair_id = ride.chair_id.unwrap();
+
     match req.status.as_str() {
         // Acknowledge the ride
         "ENROUTE" => {
@@ -387,24 +409,27 @@ async fn chair_post_ride_status(
         }
     };
 
-    cache.chair_ride_cache.write().await.insert(
-        ride.chair_id.unwrap(),
-        RideCache {
-            ride_id,
-            going_to: match req.status.as_str() {
-                "ENROUTE" => Coordinate {
-                    latitude: ride.pickup_latitude,
-                    longitude: ride.pickup_longitude,
-                },
-                "CARRYING" => Coordinate {
-                    latitude: ride.destination_latitude,
-                    longitude: ride.destination_longitude,
-                },
-                _ => unreachable!(),
+    cache
+        .chair_ride_cache
+        .write()
+        .await
+        .get_mut(&chair_id)
+        .unwrap()
+        .ride = Some(RideCache {
+        ride_id,
+        going_to: match req.status.as_str() {
+            "ENROUTE" => Coordinate {
+                latitude: ride.pickup_latitude,
+                longitude: ride.pickup_longitude,
             },
-            status: req.status,
+            "CARRYING" => Coordinate {
+                latitude: ride.destination_latitude,
+                longitude: ride.destination_longitude,
+            },
+            _ => unreachable!(),
         },
-    );
+        status: req.status,
+    });
 
     tx.commit().await?;
 
