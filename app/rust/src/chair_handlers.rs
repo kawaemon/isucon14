@@ -184,55 +184,54 @@ async fn chair_post_coordinate(
         }
     }
 
-    tokio::spawn(async move {
-        let mut tx = pool.begin().await.unwrap();
+    let mut should_remove = false;
+    if let Some(ride) = cache
+        .chair_ride_cache
+        .read()
+        .await
+        .get(&chair.id)
+        .unwrap()
+        .ride
+        .as_ref()
+    {
+        if req.latitude == ride.going_to.latitude && req.longitude == ride.going_to.longitude {
+            let new_status = match ride.status.as_str() {
+                "ENROUTE" => "PICKUP",
+                "CARRYING" => "ARRIVED",
+                _ => unreachable!(),
+            };
 
-        let mut should_remove = false;
-        if let Some(ride) = cache
-            .chair_ride_cache
-            .read()
-            .await
-            .get(&chair.id)
-            .unwrap()
-            .ride
-            .as_ref()
-        {
-            if req.latitude == ride.going_to.latitude && req.longitude == ride.going_to.longitude {
-                let new_status = match ride.status.as_str() {
-                    "ENROUTE" => "PICKUP",
-                    "CARRYING" => "ARRIVED",
-                    _ => unreachable!(),
-                };
-
-                sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                    .bind(Ulid::new().to_string())
-                    .bind(&ride.ride_id)
-                    .bind(new_status)
-                    .execute(&mut *tx)
-                    .await
-                    .unwrap();
-
-                cache
-                    .ride_status_cache
-                    .write()
-                    .await
-                    .insert(ride.ride_id.clone(), new_status.to_owned());
-                should_remove = true;
+            {
+                let ride_id = ride.ride_id.clone();
+                tokio::spawn(async move {
+                    sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
+                        .bind(Ulid::new().to_string())
+                        .bind(ride_id)
+                        .bind(new_status)
+                        .execute(&pool)
+                        .await
+                        .unwrap();
+                });
             }
-        }
 
-        if should_remove {
             cache
-                .chair_ride_cache
+                .ride_status_cache
                 .write()
                 .await
-                .get_mut(&chair.id)
-                .unwrap()
-                .ride = None;
+                .insert(ride.ride_id.clone(), new_status.to_owned());
+            should_remove = true;
         }
+    }
 
-        tx.commit().await.unwrap();
-    });
+    if should_remove {
+        cache
+            .chair_ride_cache
+            .write()
+            .await
+            .get_mut(&chair.id)
+            .unwrap()
+            .ride = None;
+    }
 
     Ok(axum::Json(ChairPostCoordinateResponse {
         recorded_at: now.timestamp_millis(),

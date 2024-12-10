@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum_extra::extract::CookieJar;
@@ -5,7 +7,7 @@ use chrono::Utc;
 use ulid::Ulid;
 
 use crate::models::{Chair, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
-use crate::{AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
+use crate::{AppCache, AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
@@ -529,6 +531,13 @@ async fn app_post_ride_evaluation(
         .write()
         .await
         .insert(ride_id.clone(), "COMPLETED".to_owned());
+    {
+        let chair_id = ride.chair_id.as_ref().unwrap();
+        let mut cache = cache.chair_ride_cache.write().await;
+        let chair = cache.get_mut(chair_id).unwrap();
+        chair.total_rides_count += 1;
+        chair.total_evaluation += req.evaluation as usize;
+    }
 
     let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
         .bind(&ride_id)
@@ -692,11 +701,11 @@ async fn app_get_notification(
 
     if let Some(chair_id) = ride.chair_id {
         let chair: Chair = sqlx::query_as("SELECT * FROM chairs WHERE id = ?")
-            .bind(chair_id)
+            .bind(&chair_id)
             .fetch_one(&mut *tx)
             .await?;
 
-        let stats = get_chair_stats(&mut tx, &chair.id).await?;
+        let stats = get_chair_stats(&cache, &chair_id).await?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
@@ -722,55 +731,20 @@ async fn app_get_notification(
 }
 
 async fn get_chair_stats(
-    tx: &mut sqlx::MySqlConnection,
+    cache: &Arc<AppCache>,
     chair_id: &str,
 ) -> Result<AppGetNotificationResponseChairStats, Error> {
-    let rides: Vec<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC")
-            .bind(chair_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let cache = cache.chair_ride_cache.read().await;
+    let cache = cache.get(chair_id).unwrap();
 
-    let mut total_ride_count = 0;
-    let mut total_evaluation = 0.0;
-    for ride in rides {
-        let ride_statuses: Vec<RideStatus> =
-            sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? ORDER BY created_at")
-                .bind(&ride.id)
-                .fetch_all(&mut *tx)
-                .await?;
-
-        if !ride_statuses
-            .iter()
-            .any(|status| status.status == "ARRIVED")
-        {
-            continue;
-        }
-        if !ride_statuses
-            .iter()
-            .any(|status| (status.status == "CARRYING"))
-        {
-            continue;
-        }
-        let is_completed = ride_statuses
-            .iter()
-            .any(|status| status.status == "COMPLETED");
-        if !is_completed {
-            continue;
-        }
-
-        total_ride_count += 1;
-        total_evaluation += ride.evaluation.unwrap() as f64;
-    }
-
-    let total_evaluation_avg = if total_ride_count > 0 {
-        total_evaluation / total_ride_count as f64
+    let total_evaluation_avg = if cache.total_rides_count > 0 {
+        cache.total_evaluation as f64 / cache.total_rides_count as f64
     } else {
         0.0
     };
 
     Ok(AppGetNotificationResponseChairStats {
-        total_rides_count: total_ride_count,
+        total_rides_count: cache.total_rides_count as _,
         total_evaluation_avg,
     })
 }

@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
-use models::{Chair, ChairLocation, RideStatus, User};
+use models::{Chair, ChairLocation, Ride, RideStatus, User};
 use sqlx::{MySql, Pool};
 use tokio::sync::{Mutex, RwLock};
 
@@ -53,10 +53,16 @@ impl AppDeferred {
 #[derive(Debug)]
 pub struct ChairCache {
     ride: Option<RideCache>,
+    total_rides_count: usize,
+    total_evaluation: usize,
 }
 impl ChairCache {
     pub fn new() -> Self {
-        Self { ride: None }
+        Self {
+            ride: None,
+            total_evaluation: 0,
+            total_rides_count: 0,
+        }
     }
 }
 
@@ -138,6 +144,18 @@ impl AppCache {
             .unwrap();
         for chair in chairs {
             res.insert(chair.id, ChairCache::new());
+        }
+
+        let rides: Vec<Ride> = sqlx::query_as("select * from rides")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        for ride in rides {
+            if let Some(eval) = ride.evaluation {
+                let chair = res.get_mut(&ride.chair_id.unwrap()).unwrap();
+                chair.total_evaluation += eval as usize;
+                chair.total_rides_count += 1;
+            }
         }
 
         #[derive(Debug, sqlx::FromRow)]
