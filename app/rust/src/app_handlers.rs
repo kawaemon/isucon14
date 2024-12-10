@@ -7,7 +7,9 @@ use chrono::Utc;
 use ulid::Ulid;
 
 use crate::models::{Chair, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
-use crate::{AppCache, AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
+use crate::{
+    AppCache, AppState, ChairNotificationQData, Coordinate, Error, NOTIFICATION_RETRY_MS_APP,
+};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
@@ -497,6 +499,10 @@ async fn app_post_ride_evaluation(
 
     let mut tx = pool.begin().await?;
 
+    if cache.ride_status_cache.read().await.get(&ride_id).unwrap() != "ARRIVED" {
+        return Err(Error::BadRequest("not arrived yet"));
+    }
+
     let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
         .bind(&ride_id)
         .fetch_optional(&mut *tx)
@@ -505,22 +511,18 @@ async fn app_post_ride_evaluation(
         return Err(Error::NotFound("ride not found"));
     };
 
-    if cache.ride_status_cache.read().await.get(&ride.id).unwrap() != "ARRIVED" {
-        return Err(Error::BadRequest("not arrived yet"));
-    }
+    let chair_id = ride.chair_id.clone().unwrap();
 
-    let result = sqlx::query("UPDATE rides SET evaluation = ? WHERE id = ?")
+    sqlx::query("UPDATE rides SET evaluation = ? WHERE id = ?")
         .bind(req.evaluation)
         .bind(&ride_id)
         .execute(&mut *tx)
         .await?;
-    let count = result.rows_affected();
-    if count == 0 {
-        return Err(Error::NotFound("ride not found"));
-    }
+
+    let ride_status_id = Ulid::new().to_string();
 
     sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-        .bind(Ulid::new().to_string())
+        .bind(&ride_status_id)
         .bind(&ride_id)
         .bind("COMPLETED")
         .execute(&mut *tx)
@@ -532,20 +534,19 @@ async fn app_post_ride_evaluation(
         .await
         .insert(ride_id.clone(), "COMPLETED".to_owned());
     {
-        let chair_id = ride.chair_id.as_ref().unwrap();
         let mut cache = cache.chair_ride_cache.write().await;
-        let chair = cache.get_mut(chair_id).unwrap();
+        let chair = cache.get_mut(&chair_id).unwrap();
         chair.total_rides_count += 1;
         chair.total_evaluation += req.evaluation as usize;
     }
 
-    let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
-        .bind(&ride_id)
-        .fetch_optional(&mut *tx)
-        .await?
-    else {
-        return Err(Error::NotFound("ride not found"));
-    };
+    cache
+        .chair_notification_queue
+        .lock()
+        .await
+        .get_mut(&chair_id)
+        .unwrap()
+        .push(ChairNotificationQData::from_ride(&ride, "COMPLETED", &ride_status_id, &pool).await);
 
     let Some(payment_token): Option<PaymentToken> =
         sqlx::query_as("SELECT * FROM payment_tokens WHERE user_id = ?")

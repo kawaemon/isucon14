@@ -1,9 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    hash::Hash,
+    sync::Arc,
+};
 
 use axum::{http::StatusCode, response::Response};
+use chair_handlers::{ChairGetNotificationResponseData, SimpleUser};
 use chrono::{DateTime, Utc};
 use models::{Chair, ChairLocation, Ride, RideStatus, User};
-use sqlx::{MySql, Pool};
+use sqlx::{MySql, Pool, Transaction};
 use tokio::sync::{Mutex, RwLock};
 
 #[derive(Debug, Clone)]
@@ -73,6 +78,85 @@ pub struct RideCache {
     going_to: Coordinate,
 }
 
+#[derive(Debug, Clone)]
+pub struct ChairNotificationQData {
+    data: ChairGetNotificationResponseData,
+    ride_status_id: String,
+}
+
+impl ChairNotificationQData {
+    pub async fn from_ride(
+        ride: &Ride,
+        ride_status: &str,
+        ride_status_id: &str,
+        pool: &Pool<MySql>,
+    ) -> Self {
+        let user: User = sqlx::query_as("select * from users where id=?")
+            .bind(&ride.user_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+
+        ChairNotificationQData {
+            data: ChairGetNotificationResponseData {
+                ride_id: ride.id.clone(),
+                user: SimpleUser {
+                    id: user.id,
+                    name: format!("{} {}", user.firstname, user.lastname),
+                },
+                pickup_coordinate: ride.pickup_coordinate(),
+                destination_coordinate: ride.destination_coordinate(),
+                status: ride_status.to_owned(),
+            },
+            ride_status_id: ride_status_id.to_owned(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ChairNotificationQEntry {
+    data: ChairNotificationQData,
+    sent: bool,
+}
+
+#[derive(Debug)]
+pub struct ChairNotificationQ {
+    queue: VecDeque<ChairNotificationQEntry>,
+}
+impl ChairNotificationQ {
+    pub fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+        }
+    }
+
+    pub fn push(&mut self, data: ChairNotificationQData) {
+        self.queue
+            .push_back(ChairNotificationQEntry { data, sent: false });
+    }
+
+    /// returns should update db
+    pub fn take_next(&mut self) -> Option<(ChairNotificationQData, bool)> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        if self.queue.len() == 1 {
+            let e = &mut self.queue[0];
+            if e.sent {
+                return Some((e.data.clone(), false));
+            }
+            e.sent = true;
+            return Some((e.data.clone(), true));
+        }
+        let mut top = self.queue.pop_front().unwrap();
+        if top.sent {
+            top = self.queue.pop_front().unwrap();
+        }
+        top.sent = true;
+        Some((top.data, true))
+    }
+}
+
 #[derive(Debug)]
 pub struct AppCache {
     pub chair_location: RwLock<HashMap<String, ChairLocationCache>>,
@@ -80,6 +164,8 @@ pub struct AppCache {
     pub chair_ride_cache: RwLock<HashMap<String /* chair_id */, ChairCache>>,
     pub chair_auth_cache: RwLock<HashMap<String /* access_token */, Chair>>,
     pub user_auth_cache: RwLock<HashMap<String /* access_token */, User>>,
+
+    pub chair_notification_queue: Mutex<HashMap<String /* chair_id */, ChairNotificationQ>>,
 }
 impl AppCache {
     pub async fn new(pool: &Pool<MySql>) -> Self {
@@ -89,7 +175,67 @@ impl AppCache {
             chair_ride_cache: Self::new_chair_ride_cache(pool).await,
             chair_auth_cache: Self::new_chair_cache(pool).await,
             user_auth_cache: Self::new_user_cache(pool).await,
+
+            chair_notification_queue: Self::new_chair_notification_queue(pool).await,
         }
+    }
+
+    pub async fn new_chair_notification_queue(
+        pool: &Pool<MySql>,
+    ) -> Mutex<HashMap<String, ChairNotificationQ>> {
+        let all_chairs: Vec<String> = sqlx::query_scalar("select id from chairs")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+
+        let mut res = HashMap::new();
+
+        for chair_id in all_chairs {
+            let mut target: Vec<RideStatus> = sqlx::query_as(
+                "select ride_statuses.*
+                from (select * from rides where chair_id = ?) as rides_
+                inner join ride_statuses on rides_.id = ride_statuses.ride_id
+                where ride_statuses.chair_sent_at is null
+                order by ride_statuses.created_at asc",
+            )
+            .bind(&chair_id)
+            .fetch_all(pool)
+            .await
+            .unwrap();
+
+            if target.is_empty() {
+                let d: Option<RideStatus> = sqlx::query_as(
+                    "select *
+                    from (select * from rides where chair_id = ?) as rides_
+                    inner join ride_statuses on rides_.id = ride_statuses.ride_id
+                    order by ride_statuses.created_at desc
+                    limit 1",
+                )
+                .bind(&chair_id)
+                .fetch_optional(pool)
+                .await
+                .unwrap();
+                if let Some(d) = d {
+                    target.push(d);
+                }
+            }
+
+            let mut q = ChairNotificationQ::new();
+            for t in target {
+                let ride: Ride = sqlx::query_as("select * from rides where id = ?")
+                    .bind(&t.ride_id)
+                    .fetch_one(pool)
+                    .await
+                    .unwrap();
+                q.queue.push_back(ChairNotificationQEntry {
+                    sent: t.chair_sent_at.is_some(),
+                    data: ChairNotificationQData::from_ride(&ride, &t.status, &t.id, pool).await,
+                })
+            }
+            res.insert(chair_id, q);
+        }
+
+        Mutex::new(res)
     }
 
     pub async fn new_chair_location(

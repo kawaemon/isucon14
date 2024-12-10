@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
 
+use crate::Coordinate;
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Chair {
     pub id: String,
@@ -52,6 +54,20 @@ pub struct Ride {
     pub evaluation: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+impl Ride {
+    pub fn pickup_coordinate(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.pickup_latitude,
+            longitude: self.pickup_longitude,
+        }
+    }
+    pub fn destination_coordinate(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.destination_latitude,
+            longitude: self.destination_longitude,
+        }
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]
