@@ -15,50 +15,48 @@ pub fn internal_routes() -> axum::Router<AppState> {
 async fn internal_get_matching(
     State(AppState { pool, .. }): State<AppState>,
 ) -> Result<StatusCode, Error> {
-    // MEMO: 一旦最も待たせているリクエストに適当な空いている椅子マッチさせる実装とする。おそらくもっといい方法があるはず…
     let rides: Vec<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at")
             .fetch_all(&pool)
             .await?;
 
-    let rides_count = rides.len();
-    let mut matches = 0;
-    let mut trials = 0;
+    let active_chairs: Vec<Chair> = sqlx::query_as("select * from chairs where is_active = true")
+        .fetch_all(&pool)
+        .await?;
+    let active_count = active_chairs.len();
 
-    for ride in rides {
-        for _ in 0..10 {
-            trials += 1;
-            let Some(matched): Option<Chair> =
-            sqlx::query_as("SELECT * FROM chairs INNER JOIN (SELECT id FROM chairs WHERE is_active = TRUE ORDER BY RAND() LIMIT 1) AS tmp ON chairs.id = tmp.id LIMIT 1")
-                .fetch_optional(&pool)
-                .await?
-            else {
-                return Ok(StatusCode::NO_CONTENT);
-            };
-
-            let empty: bool = sqlx::query_scalar(
+    let mut free_chairs = vec![];
+    for act in active_chairs {
+        let empty: bool = sqlx::query_scalar(
                 "SELECT COUNT(*) = 0 FROM (SELECT COUNT(chair_sent_at) = 6 AS completed FROM ride_statuses WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = ?) GROUP BY ride_id) is_completed WHERE completed = FALSE",
             )
-            .bind(&matched.id)
+            .bind(&act.id)
             .fetch_one(&pool)
             .await?;
-
-            if empty {
-                sqlx::query("UPDATE rides SET chair_id = ? WHERE id = ?")
-                    .bind(matched.id)
-                    .bind(ride.id)
-                    .execute(&pool)
-                    .await?;
-                matches += 1;
-                break;
-            }
+        if empty {
+            free_chairs.push(act);
         }
+    }
+    let free_count = free_chairs.len();
+
+    let rides_count = rides.len();
+    let mut matches = 0;
+
+    for ride in rides {
+        let Some(free_chair) = free_chairs.pop() else {
+            break;
+        };
+        sqlx::query("UPDATE rides SET chair_id = ? WHERE id = ?")
+            .bind(free_chair.id)
+            .bind(ride.id)
+            .execute(&pool)
+            .await?;
+        matches += 1;
     }
 
     if rides_count > 0 {
         tracing::info!(
-            "matching: waiting={rides_count}, matched {matches} with {trials} trials => {:.02}",
-            (trials as f64) / (matches as f64)
+            "matching: waiting={rides_count}, active={active_count}, free={free_count}, matched={matches}",
         );
     }
 
