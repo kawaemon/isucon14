@@ -308,9 +308,14 @@ async fn chair_get_notification(
             .bind(yet_sent_ride_status_id)
             .execute(&mut *tx)
             .await?;
-    }
 
-    tx.commit().await?;
+        tracing::info!(
+            "ride={}, chair={:?}, status={}",
+            ride.id,
+            ride.chair_id,
+            status
+        );
+    }
 
     Ok(axum::Json(ChairGetNotificationResponse {
         data: Some(ChairGetNotificationResponseData {
