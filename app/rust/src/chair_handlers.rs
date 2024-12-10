@@ -7,7 +7,7 @@ use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
 use crate::{
-    AppState, ChairCache, ChairLocationCache, Coordinate, Error, RideCache,
+    AppState, ChairCache, ChairLocationCache, Cnq, Coordinate, Error, QcNotification, RideCache,
     NOTIFICATION_RETRY_MS_CHAIR,
 };
 
@@ -54,7 +54,9 @@ struct ChairPostChairsResponse {
 }
 
 async fn chair_post_chairs(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(AppState {
+        pool, cache, queue, ..
+    }): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<ChairPostChairsRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
@@ -88,6 +90,11 @@ async fn chair_post_chairs(
         .write()
         .await
         .insert(chair_id.clone(), ChairCache::new());
+    queue
+        .chair_notification_queue
+        .lock()
+        .await
+        .insert(chair_id.clone(), Cnq::new());
     cache.chair_auth_cache.write().await.insert(
         access_token.clone(),
         Chair {
@@ -153,6 +160,8 @@ async fn chair_post_coordinate(
         pool,
         cache,
         deferred,
+        queue,
+        ..
     }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<Coordinate>,
@@ -201,17 +210,54 @@ async fn chair_post_coordinate(
                 _ => unreachable!(),
             };
 
+            let status_id = Ulid::new().to_string();
+
             {
                 let ride_id = ride.ride_id.clone();
+                let pool = pool.clone();
+                let status_id = status_id.clone();
                 tokio::spawn(async move {
                     sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                        .bind(Ulid::new().to_string())
+                        .bind(status_id)
                         .bind(ride_id)
                         .bind(new_status)
                         .execute(&pool)
                         .await
                         .unwrap();
                 });
+            }
+
+            {
+                let ride: Ride = sqlx::query_as("select * from rides where id = ?")
+                    .bind(&ride.ride_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+
+                queue
+                    .chair_notification_queue
+                    .lock()
+                    .await
+                    .get_mut(&chair.id)
+                    .unwrap()
+                    .push(QcNotification {
+                        status_id,
+                        data: ChairGetNotificationResponseData {
+                            pickup_coordinate: ride.pickup_coordinate(),
+                            destination_coordinate: ride.destination_coordinate(),
+                            ride_id: ride.id,
+                            user: SimpleUser {
+                                name: {
+                                    let cache = cache.user_auth_cache.read().await;
+                                    let cache =
+                                        cache.iter().find(|x| x.1.id == ride.user_id).unwrap().1;
+                                    format!("{} {}", cache.firstname, cache.lastname)
+                                },
+                                id: ride.user_id,
+                            },
+                            status: new_status.to_owned(),
+                        },
+                    });
             }
 
             cache
@@ -238,10 +284,10 @@ async fn chair_post_coordinate(
     }))
 }
 
-#[derive(Debug, serde::Serialize)]
-struct SimpleUser {
-    id: String,
-    name: String,
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SimpleUser {
+    pub id: String,
+    pub name: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -250,85 +296,37 @@ struct ChairGetNotificationResponse {
     retry_after_ms: Option<i32>,
 }
 
-#[derive(Debug, serde::Serialize)]
-struct ChairGetNotificationResponseData {
-    ride_id: String,
-    user: SimpleUser,
-    pickup_coordinate: Coordinate,
-    destination_coordinate: Coordinate,
-    status: String,
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChairGetNotificationResponseData {
+    pub ride_id: String,
+    pub user: SimpleUser,
+    pub pickup_coordinate: Coordinate,
+    pub destination_coordinate: Coordinate,
+    pub status: String,
 }
 
 async fn chair_get_notification(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(AppState { pool, queue, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
 ) -> Result<axum::Json<ChairGetNotificationResponse>, Error> {
-    let mut tx = pool.begin().await?;
-
-    let Some(ride): Option<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
-            .bind(&chair.id)
-            .fetch_optional(&mut *tx)
-            .await?
-    else {
+    let mut queue = queue.chair_notification_queue.lock().await;
+    let queue = queue.get_mut(&chair.id).unwrap();
+    let Some((data, update)) = queue.get_next() else {
         return Ok(axum::Json(ChairGetNotificationResponse {
             data: None,
             retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
         }));
     };
 
-    let yet_sent_ride_status: Option<RideStatus> =
-        sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
-        .bind(&ride.id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let (yet_sent_ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status
-    {
-        (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
-    } else {
-        (
-            None,
-            cache
-                .ride_status_cache
-                .read()
-                .await
-                .get(&ride.id)
-                .unwrap()
-                .clone(),
-        )
-    };
-
-    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? FOR SHARE")
-        .bind(ride.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    if let Some(yet_sent_ride_status_id) = yet_sent_ride_status_id {
+    if update {
         sqlx::query("UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
-            .bind(yet_sent_ride_status_id)
-            .execute(&mut *tx)
+            .bind(data.status_id)
+            .execute(&pool)
             .await?;
     }
 
-    tx.commit().await?;
-
     Ok(axum::Json(ChairGetNotificationResponse {
-        data: Some(ChairGetNotificationResponseData {
-            ride_id: ride.id,
-            user: SimpleUser {
-                id: user.id,
-                name: format!("{} {}", user.firstname, user.lastname),
-            },
-            pickup_coordinate: Coordinate {
-                latitude: ride.pickup_latitude,
-                longitude: ride.pickup_longitude,
-            },
-            destination_coordinate: Coordinate {
-                latitude: ride.destination_latitude,
-                longitude: ride.destination_longitude,
-            },
-            status,
-        }),
+        data: Some(data.data),
         retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
     }))
 }
@@ -339,7 +337,9 @@ struct PostChairRidesRideIDStatusRequest {
 }
 
 async fn chair_post_ride_status(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(AppState {
+        pool, cache, queue, ..
+    }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     Path((ride_id,)): Path<(String,)>,
     axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
@@ -367,46 +367,34 @@ async fn chair_post_ride_status(
         return Err(Error::BadRequest("not assigned to this ride"));
     }
 
-    let chair_id = ride.chair_id.unwrap();
+    let chair_id = ride.chair_id.clone().unwrap();
 
     match req.status.as_str() {
         // Acknowledge the ride
-        "ENROUTE" => {
-            sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                .bind(Ulid::new().to_string())
-                .bind(&ride.id)
-                .bind("ENROUTE")
-                .execute(&mut *tx)
-                .await?;
-
-            cache
-                .ride_status_cache
-                .write()
-                .await
-                .insert(ride.id.clone(), "ENROUTE".to_owned());
-        }
+        "ENROUTE" => {}
         // After Picking up user
         "CARRYING" => {
             if cache.ride_status_cache.read().await.get(&ride.id).unwrap() != "PICKUP" {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
-
-            sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                .bind(Ulid::new().to_string())
-                .bind(&ride.id)
-                .bind("CARRYING")
-                .execute(&mut *tx)
-                .await?;
-            cache
-                .ride_status_cache
-                .write()
-                .await
-                .insert(ride.id.clone(), "CARRYING".to_owned());
         }
         _ => {
             return Err(Error::BadRequest("invalid status"));
         }
     };
+    let status_id = Ulid::new().to_string();
+
+    sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
+        .bind(status_id.clone())
+        .bind(&ride.id)
+        .bind(&req.status)
+        .execute(&mut *tx)
+        .await?;
+    cache
+        .ride_status_cache
+        .write()
+        .await
+        .insert(ride.id.clone(), "CARRYING".to_owned());
 
     cache
         .chair_ride_cache
@@ -417,18 +405,36 @@ async fn chair_post_ride_status(
         .ride = Some(RideCache {
         ride_id,
         going_to: match req.status.as_str() {
-            "ENROUTE" => Coordinate {
-                latitude: ride.pickup_latitude,
-                longitude: ride.pickup_longitude,
-            },
-            "CARRYING" => Coordinate {
-                latitude: ride.destination_latitude,
-                longitude: ride.destination_longitude,
-            },
+            "ENROUTE" => ride.pickup_coordinate(),
+            "CARRYING" => ride.destination_coordinate(),
             _ => unreachable!(),
         },
         status: req.status,
     });
+
+    queue
+        .chair_notification_queue
+        .lock()
+        .await
+        .get_mut(&chair.id)
+        .unwrap()
+        .push(QcNotification {
+            status_id,
+            data: ChairGetNotificationResponseData {
+                ride_id: ride.id.clone(),
+                pickup_coordinate: ride.pickup_coordinate(),
+                destination_coordinate: ride.destination_coordinate(),
+                user: SimpleUser {
+                    name: {
+                        let cache = cache.user_auth_cache.read().await;
+                        let cache = cache.iter().find(|x| x.1.id == ride.user_id).unwrap().1;
+                        format!("{} {}", cache.firstname, cache.lastname)
+                    },
+                    id: ride.user_id,
+                },
+                status: "MATCHING".to_owned(),
+            },
+        });
 
     tx.commit().await?;
 

@@ -1,6 +1,11 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    hash::Hash,
+    sync::Arc,
+};
 
 use axum::{http::StatusCode, response::Response};
+use chair_handlers::{ChairGetNotificationResponseData, SimpleUser};
 use chrono::{DateTime, Utc};
 use models::{Chair, ChairLocation, Ride, RideStatus, User};
 use sqlx::{MySql, Pool};
@@ -11,6 +16,159 @@ pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub cache: Arc<AppCache>,
     pub deferred: Arc<AppDeferred>,
+    pub queue: Arc<AppQueue>,
+}
+
+#[derive(Debug, Clone)]
+pub struct QcNotification {
+    data: ChairGetNotificationResponseData,
+    status_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CnqI {
+    data: QcNotification,
+    sent: bool,
+}
+
+#[derive(Debug)]
+pub struct Cnq {
+    queue: VecDeque<CnqI>,
+}
+impl Cnq {
+    pub fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+        }
+    }
+    pub fn push(&mut self, data: QcNotification) {
+        if self.queue.front().is_some_and(|x| x.sent) {
+            self.queue.pop_front();
+        }
+        self.queue.push_back(CnqI { data, sent: false });
+    }
+    pub fn get_next(&mut self) -> Option<(QcNotification, bool)> {
+        if self.queue.is_empty() {
+            return None;
+        }
+        if self.queue.len() == 1 {
+            let f = self.queue.front_mut().unwrap();
+            let already_sent = f.sent;
+            f.sent = true;
+            return Some((f.data.clone(), !already_sent));
+        }
+        let t = self.queue.pop_front().unwrap();
+        Some((t.data, true))
+    }
+}
+
+#[derive(Debug)]
+pub struct AppQueue {
+    pub chair_notification_queue: Mutex<HashMap<String /* chair_id */, Cnq>>,
+}
+impl AppQueue {
+    pub async fn new(pool: &Pool<MySql>) -> Self {
+        let mut res = HashMap::new();
+
+        let rides_list: Vec<Ride> = sqlx::query_as("select * from rides")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let mut rides: HashMap<String, Ride> = HashMap::new();
+        for ride in rides_list {
+            rides.insert(ride.id.clone(), ride);
+        }
+
+        let users_list: Vec<User> = sqlx::query_as("select * from users")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let mut users: HashMap<String, User> = HashMap::new();
+        for user in users_list {
+            users.insert(user.id.clone(), user);
+        }
+
+        let chairs_list: Vec<Chair> = sqlx::query_as("select * from chairs")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+
+        let ride_statuses: Vec<RideStatus> =
+            sqlx::query_as("select * from ride_statuses order by created_at")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+
+        for chair in chairs_list {
+            res.insert(chair.id, Cnq::new());
+        }
+
+        for status in ride_statuses {
+            let ride = rides.get(&status.ride_id).unwrap();
+            let Some(chair_id) = ride.chair_id.as_ref() else {
+                continue;
+            };
+
+            let queue = res.get_mut(chair_id).unwrap();
+
+            if queue.queue.front().is_some_and(|x| x.sent) {
+                queue.queue.pop_front();
+            }
+
+            let user = users.get(&ride.user_id).unwrap().clone();
+            queue.queue.push_back(CnqI {
+                data: QcNotification {
+                    status_id: status.id,
+                    data: ChairGetNotificationResponseData {
+                        ride_id: ride.id.clone(),
+                        user: SimpleUser {
+                            id: user.id,
+                            name: format!("{} {}", user.firstname, user.lastname),
+                        },
+                        pickup_coordinate: ride.pickup_coordinate(),
+                        destination_coordinate: ride.destination_coordinate(),
+                        status: status.status,
+                    },
+                },
+                sent: status.chair_sent_at.is_some(),
+            });
+        }
+
+        for (k, v) in res.iter_mut() {
+            if v.queue.len() <= 1 {
+                continue;
+            }
+
+            loop {
+                let mut swap = None;
+                let mut prev = v.queue[0].data.data.status.clone();
+                for (i, stat) in v.queue.iter().enumerate().skip(1) {
+                    if prev == "MATCHING" && stat.data.data.status == "COMPLETED" {
+                        swap = Some(i);
+                        break;
+                    }
+                    prev = stat.data.data.status.clone();
+                }
+                if let Some(s) = swap {
+                    v.queue.swap(s, s - 1);
+                    tracing::warn!("MATCHING <=> COMPLETED swap occured: i={s}, chair={k}");
+                    continue;
+                }
+                break;
+            }
+        }
+
+        for (k, v) in res.iter() {
+            tracing::info!("### {k} ###");
+            for v in &v.queue {
+                tracing::info!("{v:?}");
+            }
+        }
+
+        Self {
+            chair_notification_queue: Mutex::new(res),
+        }
+    }
 }
 
 #[derive(Debug)]

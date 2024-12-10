@@ -1,5 +1,5 @@
 use axum::extract::State;
-use isuride::{internal_handlers::do_matching, AppCache, AppDeferred, AppState, Error};
+use isuride::{internal_handlers::do_matching, AppCache, AppDeferred, AppQueue, AppState, Error};
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::net::TcpListener;
 
@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let app_state = AppState {
         cache: Arc::new(AppCache::new(&pool).await),
         deferred: Arc::new(AppDeferred::new()),
+        queue: Arc::new(AppQueue::new(&pool).await),
         pool,
     };
 
@@ -94,7 +95,9 @@ struct PostInitializeResponse {
 }
 
 async fn post_initialize(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(AppState {
+        pool, cache, queue, ..
+    }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let output = tokio::process::Command::new("../sql/init.sh")
@@ -124,6 +127,10 @@ async fn post_initialize(
     *cache.ride_status_cache.write().await = ride_status_cache.into_inner();
     *cache.chair_auth_cache.write().await = chair_cache.into_inner();
     *cache.user_auth_cache.write().await = user_cache.into_inner();
+    let AppQueue {
+        chair_notification_queue,
+    } = AppQueue::new(&pool).await;
+    *queue.chair_notification_queue.lock().await = chair_notification_queue.into_inner();
 
     tokio::spawn(async move {
         tracing::info!("try to request collection to pprotein");

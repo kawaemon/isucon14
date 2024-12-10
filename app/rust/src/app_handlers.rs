@@ -6,8 +6,9 @@ use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use ulid::Ulid;
 
+use crate::chair_handlers::{ChairGetNotificationResponseData, SimpleUser};
 use crate::models::{Chair, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
-use crate::{AppCache, AppState, Coordinate, Error, NOTIFICATION_RETRY_MS_APP};
+use crate::{AppCache, AppState, Coordinate, Error, QcNotification, NOTIFICATION_RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
@@ -487,7 +488,9 @@ struct AppPostRideEvaluationResponse {
 }
 
 async fn app_post_ride_evaluation(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(AppState {
+        pool, cache, queue, ..
+    }): State<AppState>,
     Path((ride_id,)): Path<(String,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
 ) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
@@ -519,8 +522,10 @@ async fn app_post_ride_evaluation(
         return Err(Error::NotFound("ride not found"));
     }
 
+    let status_id = Ulid::new().to_string();
+
     sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-        .bind(Ulid::new().to_string())
+        .bind(&status_id)
         .bind(&ride_id)
         .bind("COMPLETED")
         .execute(&mut *tx)
@@ -531,13 +536,39 @@ async fn app_post_ride_evaluation(
         .write()
         .await
         .insert(ride_id.clone(), "COMPLETED".to_owned());
+
+    let chair_id = ride.chair_id.as_ref().unwrap();
+
     {
-        let chair_id = ride.chair_id.as_ref().unwrap();
         let mut cache = cache.chair_ride_cache.write().await;
         let chair = cache.get_mut(chair_id).unwrap();
         chair.total_rides_count += 1;
         chair.total_evaluation += req.evaluation as usize;
     }
+
+    queue
+        .chair_notification_queue
+        .lock()
+        .await
+        .get_mut(chair_id)
+        .unwrap()
+        .push(QcNotification {
+            status_id,
+            data: ChairGetNotificationResponseData {
+                ride_id: ride.id.clone(),
+                pickup_coordinate: ride.pickup_coordinate(),
+                destination_coordinate: ride.destination_coordinate(),
+                user: SimpleUser {
+                    name: {
+                        let cache = cache.user_auth_cache.read().await;
+                        let cache = cache.iter().find(|x| x.1.id == ride.user_id).unwrap().1;
+                        format!("{} {}", cache.firstname, cache.lastname)
+                    },
+                    id: ride.user_id,
+                },
+                status: "COMPLETED".to_owned(),
+            },
+        });
 
     let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
         .bind(&ride_id)
