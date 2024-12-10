@@ -100,10 +100,16 @@ async fn post_initialize(
         .execute(&pool)
         .await?;
 
-    let new_cache = AppCache::new(&pool).await;
-    *cache.chair_location.write().await = new_cache.chair_location.into_inner();
-    *cache.chair_ride_cache.write().await = new_cache.chair_ride_cache.into_inner();
-    *cache.ride_status_cache.write().await = new_cache.ride_status_cache.into_inner();
+    let AppCache {
+        chair_location,
+        ride_status_cache,
+        chair_ride_cache,
+        chair_cache,
+    } = AppCache::new(&pool).await;
+    *cache.chair_location.write().await = chair_location.into_inner();
+    *cache.chair_ride_cache.write().await = chair_ride_cache.into_inner();
+    *cache.ride_status_cache.write().await = ride_status_cache.into_inner();
+    *cache.chair_cache.write().await = chair_cache.into_inner();
 
     tokio::spawn(async move {
         tracing::info!("try to request collection to pprotein");

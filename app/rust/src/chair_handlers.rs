@@ -53,7 +53,7 @@ struct ChairPostChairsResponse {
 }
 
 async fn chair_post_chairs(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<ChairPostChairsRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
@@ -69,15 +69,32 @@ async fn chair_post_chairs(
     let chair_id = Ulid::new().to_string();
     let access_token = crate::secure_random_str(32);
 
-    sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token) VALUES (?, ?, ?, ?, ?, ?)")
+    let now = Utc::now();
+
+    sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&chair_id)
         .bind(&owner.id)
-        .bind(req.name)
-        .bind(req.model)
+        .bind(&req.name)
+        .bind(&req.model)
         .bind(false)
         .bind(&access_token)
+        .bind(now)
+        .bind(now)
         .execute(&pool)
         .await?;
+    cache.chair_cache.write().await.insert(
+        access_token.clone(),
+        Chair {
+            id: chair_id.clone(),
+            owner_id: owner.id.clone(),
+            name: req.name,
+            access_token: access_token.clone(),
+            model: req.model.clone(),
+            is_active: false,
+            created_at: now,
+            updated_at: now,
+        },
+    );
 
     let jar = jar.add(Cookie::build(("chair_session", access_token)).path("/"));
 
@@ -99,15 +116,23 @@ struct PostChairActivityRequest {
 }
 
 async fn chair_post_activity(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, cache, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<PostChairActivityRequest>,
 ) -> Result<StatusCode, Error> {
-    sqlx::query("UPDATE chairs SET is_active = ? WHERE id = ?")
+    let now = Utc::now();
+    sqlx::query("UPDATE chairs SET is_active = ?, updated_at = ? WHERE id = ?")
         .bind(req.is_active)
-        .bind(chair.id)
+        .bind(now)
+        .bind(&chair.id)
         .execute(&pool)
         .await?;
+    {
+        let mut cache = cache.chair_cache.write().await;
+        let chair = cache.get_mut(&chair.access_token).unwrap();
+        chair.is_active = req.is_active;
+        chair.updated_at = now;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

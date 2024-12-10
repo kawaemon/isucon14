@@ -53,7 +53,7 @@ pub async fn owner_auth_middleware(
 }
 
 pub async fn chair_auth_middleware(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { cache, .. }): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -62,10 +62,8 @@ pub async fn chair_auth_middleware(
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(chair): Option<Chair> = sqlx::query_as("SELECT * FROM chairs WHERE access_token = ?")
-        .bind(access_token)
-        .fetch_optional(&pool)
-        .await?
+
+    let Some(chair): Option<Chair> = cache.chair_cache.read().await.get(access_token).cloned()
     else {
         return Err(Error::Unauthorized("invalid access token"));
     };

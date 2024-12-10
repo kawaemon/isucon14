@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
-use models::{ChairLocation, RideStatus};
+use models::{Chair, ChairLocation, RideStatus};
 use sqlx::{MySql, Pool};
 use tokio::sync::{Mutex, RwLock};
 
@@ -62,6 +62,7 @@ pub struct AppCache {
     pub chair_location: RwLock<HashMap<String, ChairLocationCache>>,
     pub ride_status_cache: RwLock<HashMap<String /* ride_id */, String>>,
     pub chair_ride_cache: RwLock<HashMap<String /* chair_id */, RideCache>>,
+    pub chair_cache: RwLock<HashMap<String /* access_token */, Chair>>,
 }
 impl AppCache {
     pub async fn new(pool: &Pool<MySql>) -> Self {
@@ -69,6 +70,7 @@ impl AppCache {
             chair_location: Self::new_chair_location(pool).await,
             ride_status_cache: Self::new_ride_status_cache(pool).await,
             chair_ride_cache: Self::new_chair_ride_cache(pool).await,
+            chair_cache: Self::new_chair_cache(pool).await,
         }
     }
 
@@ -188,6 +190,24 @@ impl AppCache {
             "processes {records_len} records and {} rides confirmed",
             res.len()
         );
+
+        RwLock::new(res)
+    }
+
+    pub async fn new_chair_cache(pool: &Pool<MySql>) -> RwLock<HashMap<String, Chair>> {
+        let mut res = HashMap::new();
+
+        let chairs: Vec<Chair> = sqlx::query_as("select * from chairs")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let chairs_len = chairs.len();
+
+        for chair in chairs {
+            res.insert(chair.access_token.clone(), chair);
+        }
+
+        tracing::info!("loaded {chairs_len} chairs");
 
         RwLock::new(res)
     }

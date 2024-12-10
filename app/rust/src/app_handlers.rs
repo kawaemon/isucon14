@@ -74,7 +74,7 @@ async fn app_post_users(
                     if code != "40001" {
                         return r;
                     }
-                    tracing::warn!("deadlock on app_post_users, retrying [{i}/3]");
+                    tracing::warn!("deadlock on app_post_users, retrying [{}/3]", i + 1);
                     if i >= 3 {
                         tracing::error!("deadlock on users; failing");
                         return r;
@@ -541,7 +541,7 @@ async fn app_post_ride_evaluation(
     .await?;
 
     let payment_gateway_url: String =
-        sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'")
+        sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'") // TODO: 変数にできる
             .fetch_one(&mut *tx)
             .await?;
 
