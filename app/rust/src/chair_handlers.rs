@@ -319,6 +319,13 @@ async fn chair_get_notification(
     };
 
     if update {
+        tracing::info!(
+            "cnq pop chair={}, ride={}, status={}",
+            chair.id,
+            data.data.ride_id,
+            data.data.status
+        );
+
         sqlx::query("UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
             .bind(data.status_id)
             .execute(&pool)
@@ -409,7 +416,7 @@ async fn chair_post_ride_status(
             "CARRYING" => ride.destination_coordinate(),
             _ => unreachable!(),
         },
-        status: req.status,
+        status: req.status.clone(),
     });
 
     queue
@@ -432,7 +439,7 @@ async fn chair_post_ride_status(
                     },
                     id: ride.user_id,
                 },
-                status: "MATCHING".to_owned(),
+                status: req.status.clone(),
             },
         });
 

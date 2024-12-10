@@ -45,6 +45,7 @@ impl Cnq {
         if self.queue.front().is_some_and(|x| x.sent) {
             self.queue.pop_front();
         }
+        tracing::info!("cnq push: {data:#?}");
         self.queue.push_back(CnqI { data, sent: false });
     }
     pub fn get_next(&mut self) -> Option<(QcNotification, bool)> {
