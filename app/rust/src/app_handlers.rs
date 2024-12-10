@@ -510,6 +510,13 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("not arrived yet"));
     }
 
+    sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
+        .bind(Ulid::new().to_string())
+        .bind(&ride_id)
+        .bind("COMPLETED")
+        .execute(&mut *tx)
+        .await?;
+
     let result = sqlx::query("UPDATE rides SET evaluation = ? WHERE id = ?")
         .bind(req.evaluation)
         .bind(&ride_id)
@@ -519,13 +526,6 @@ async fn app_post_ride_evaluation(
     if count == 0 {
         return Err(Error::NotFound("ride not found"));
     }
-
-    sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-        .bind(Ulid::new().to_string())
-        .bind(&ride_id)
-        .bind("COMPLETED")
-        .execute(&mut *tx)
-        .await?;
 
     cache
         .ride_status_cache

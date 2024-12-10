@@ -1,7 +1,8 @@
 use axum::extract::State;
 use axum::http::StatusCode;
+use ulid::Ulid;
 
-use crate::models::{Chair, Ride};
+use crate::models::{Chair, Ride, RideStatus};
 use crate::{AppState, Error};
 
 pub fn internal_routes() -> axum::Router<AppState> {
@@ -26,15 +27,32 @@ async fn internal_get_matching(
     let active_count = active_chairs.len();
 
     let mut free_chairs = vec![];
-    for act in active_chairs {
-        let empty: bool = sqlx::query_scalar(
-                "SELECT COUNT(*) = 0 FROM (SELECT COUNT(chair_sent_at) = 6 AS completed FROM ride_statuses WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = ?) GROUP BY ride_id) is_completed WHERE completed = FALSE",
-            )
-            .bind(&act.id)
-            .fetch_one(&pool)
-            .await?;
-        if empty {
-            free_chairs.push(act);
+    for active_chair in active_chairs {
+        let latest: Option<RideStatus> = sqlx::query_as(
+            "select *
+            from (select * from rides where chair_id = ?) as myrides
+            inner join ride_statuses on myrides.id = ride_statuses.ride_id
+            order by ride_statuses.created_at desc
+            limit 1
+        ",
+        )
+        .bind(&active_chair.id)
+        .fetch_optional(&pool)
+        .await?;
+
+        let ok = latest.is_none()
+            || latest
+                .as_ref()
+                .is_some_and(|x| x.status == "COMPLETED" && x.chair_sent_at.is_some());
+
+        if ok {
+            let f = if let Some(l) = latest {
+                format!("{},{:?}", l.status, l.chair_sent_at)
+            } else {
+                "none".to_owned()
+            };
+            tracing::info!("marking {} as free: latest = {f}", active_chair.id);
+            free_chairs.push(active_chair);
         }
     }
     let free_count = free_chairs.len();
@@ -47,8 +65,14 @@ async fn internal_get_matching(
             break;
         };
         sqlx::query("UPDATE rides SET chair_id = ? WHERE id = ?")
-            .bind(free_chair.id)
-            .bind(ride.id)
+            .bind(&free_chair.id)
+            .bind(&ride.id)
+            .execute(&pool)
+            .await?;
+        sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
+            .bind(Ulid::new().to_string())
+            .bind(&ride.id)
+            .bind("MATCHING")
             .execute(&pool)
             .await?;
         matches += 1;

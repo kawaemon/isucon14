@@ -265,37 +265,51 @@ async fn chair_get_notification(
 ) -> Result<axum::Json<ChairGetNotificationResponse>, Error> {
     let mut tx = pool.begin().await?;
 
-    let Some(ride): Option<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
-            .bind(&chair.id)
-            .fetch_optional(&mut *tx)
-            .await?
-    else {
-        return Ok(axum::Json(ChairGetNotificationResponse {
-            data: None,
-            retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
-        }));
-    };
-
-    let yet_sent_ride_status: Option<RideStatus> =
-        sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
-        .bind(&ride.id)
+    let (ride, ride_status, status_id) = 'out: {
+        // 新しい椅子にアサインされた場合、
+        let yet_sent_ride_status: Option<RideStatus> = sqlx::query_as(
+            "select ride_statuses.*
+            from (select * from rides where chair_id = ?) as myrides
+            inner join ride_statuses on myrides.id = ride_statuses.ride_id
+            where ride_statuses.chair_sent_at is null
+            order by ride_statuses.created_at asc
+            limit 1",
+        )
+        .bind(&chair.id)
         .fetch_optional(&mut *tx)
         .await?;
-    let (yet_sent_ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status
-    {
-        (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
-    } else {
-        (
-            None,
-            cache
-                .ride_status_cache
-                .read()
+
+        if let Some(y) = yet_sent_ride_status {
+            let ride: Ride = sqlx::query_as("select * from rides where id = ?")
+                .bind(y.ride_id)
+                .fetch_one(&mut *tx)
                 .await
-                .get(&ride.id)
-                .unwrap()
-                .clone(),
+                .unwrap();
+            break 'out (ride, y.status, Some(y.id));
+        }
+
+        let Some(ride): Option<Ride> = sqlx::query_as(
+            "SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1",
         )
+        .bind(&chair.id)
+        .fetch_optional(&mut *tx)
+        .await?
+        else {
+            return Ok(axum::Json(ChairGetNotificationResponse {
+                data: None,
+                retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
+            }));
+        };
+
+        let st = cache
+            .ride_status_cache
+            .read()
+            .await
+            .get(&ride.id)
+            .unwrap()
+            .clone();
+
+        (ride, st, None)
     };
 
     let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? FOR SHARE")
@@ -303,34 +317,50 @@ async fn chair_get_notification(
         .fetch_one(&mut *tx)
         .await?;
 
-    if let Some(yet_sent_ride_status_id) = yet_sent_ride_status_id {
+    if let Some(ref status_id) = &status_id {
         sqlx::query("UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
-            .bind(yet_sent_ride_status_id)
+            .bind(status_id)
             .execute(&mut *tx)
             .await?;
     }
 
     tx.commit().await?;
 
-    if status == "COMPLETED" {
-        tokio::spawn(async move {
-            let Some(waiting_ride): Option<Ride> = sqlx::query_as(
-                "select * from rides where chair_id is null order by created_at limit 1",
-            )
-            .fetch_optional(&pool)
-            .await
-            .unwrap() else {
-                return;
-            };
+    if ride_status == "COMPLETED" {
+        // tokio::spawn(async move {
+        //     let Some(waiting_ride): Option<Ride> = sqlx::query_as(
+        //         "select * from rides where chair_id is null order by created_at limit 1",
+        //     )
+        //     .fetch_optional(&pool)
+        //     .await
+        //     .unwrap() else {
+        //         return;
+        //     };
 
-            sqlx::query("update rides set chair_id = ? where id = ?")
-                .bind(chair.id)
-                .bind(waiting_ride.id)
-                .execute(&pool)
-                .await
-                .unwrap();
-            tracing::info!("found new match right after notification");
-        });
+        //     sqlx::query("update rides set chair_id = ? where id = ?")
+        //         .bind(&chair.id)
+        //         .bind(&waiting_ride.id)
+        //         .execute(&pool)
+        //         .await
+        //         .unwrap();
+        //     sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
+        //         .bind(Ulid::new().to_string())
+        //         .bind(&waiting_ride.id)
+        //         .bind("MATCHING")
+        //         .execute(&pool)
+        //         .await
+        //         .unwrap();
+        //     tracing::info!("found new match right after notification");
+        // });
+    }
+
+    if status_id.is_some() {
+        tracing::info!(
+            "yet: ride={}, chair={:?} = {}",
+            ride.id,
+            ride.chair_id,
+            ride_status,
+        );
     }
 
     Ok(axum::Json(ChairGetNotificationResponse {
@@ -348,7 +378,7 @@ async fn chair_get_notification(
                 latitude: ride.destination_latitude,
                 longitude: ride.destination_longitude,
             },
-            status,
+            status: ride_status,
         }),
         retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
     }))
