@@ -7,7 +7,7 @@ use crate::models::{Chair, Owner, User};
 use crate::{AppState, Error};
 
 pub async fn app_auth_middleware(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { cache, .. }): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -16,11 +16,8 @@ pub async fn app_auth_middleware(
         return Err(Error::Unauthorized("app_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(user): Option<User> = sqlx::query_as("SELECT * FROM users WHERE access_token = ?")
-        .bind(access_token)
-        .fetch_optional(&pool)
-        .await?
-    else {
+
+    let Some(user): Option<User> = cache.user_cache.read().await.get(access_token).cloned() else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 

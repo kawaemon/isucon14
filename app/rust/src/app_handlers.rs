@@ -88,7 +88,7 @@ async fn app_post_users(
 }
 
 async fn app_post_users_inner(
-    State(AppState { pool, .. }): &State<AppState>,
+    State(AppState { pool, cache, .. }): &State<AppState>,
     jar: &mut Option<CookieJar>,
     axum::Json(req): &axum::Json<AppPostUsersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
@@ -98,7 +98,9 @@ async fn app_post_users_inner(
 
     let mut tx = pool.begin().await?;
 
-    sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    let now = Utc::now();
+
+    sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
         .bind(&user_id)
         .bind(&req.username)
         .bind(&req.firstname)
@@ -106,8 +108,24 @@ async fn app_post_users_inner(
         .bind(&req.date_of_birth)
         .bind(&access_token)
         .bind(&invitation_code)
+        .bind(now)
+        .bind(now)
         .execute(&mut *tx)
         .await?;
+
+    cache.user_cache.write().await.insert(
+        access_token.clone(),
+        User {
+            id: user_id.clone(),
+            username: req.username.clone(),
+            firstname: req.firstname.clone(),
+            lastname: req.lastname.clone(),
+            date_of_birth: req.date_of_birth.clone(),
+            access_token: access_token.clone(),
+            created_at: now,
+            updated_at: now,
+        },
+    );
 
     // 初回登録キャンペーンのクーポンを付与
     sqlx::query("INSERT INTO coupons (user_id, code, discount) VALUES (?, ?, ?)")
