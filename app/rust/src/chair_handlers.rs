@@ -1,8 +1,14 @@
+use std::convert::Infallible;
+use std::time::Duration;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::sse::Event;
+use axum::response::Sse;
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
+use futures::{stream, Stream, StreamExt};
 use ulid::Ulid;
 
 use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
@@ -260,9 +266,28 @@ struct ChairGetNotificationResponseData {
 }
 
 async fn chair_get_notification(
-    State(AppState { pool, cache, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
-) -> Result<axum::Json<ChairGetNotificationResponse>, Error> {
+) -> Sse<impl Stream<Item = Result<Event, Error>>> {
+    let stream = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+        Duration::from_millis(NOTIFICATION_RETRY_MS_CHAIR as _),
+    ))
+    .then(move |_| {
+        let state = state.clone();
+        let chair = chair.clone();
+        async {
+            let res = chair_get_notification_inner(state, chair).await?;
+            Ok(Event::default().json_data(res).unwrap())
+        }
+    });
+
+    Sse::new(stream)
+}
+
+async fn chair_get_notification_inner(
+    AppState { pool, cache, .. }: AppState,
+    chair: Chair,
+) -> Result<Option<ChairGetNotificationResponseData>, Error> {
     let mut tx = pool.begin().await?;
 
     let Some(ride): Option<Ride> =
@@ -271,10 +296,7 @@ async fn chair_get_notification(
             .fetch_optional(&mut *tx)
             .await?
     else {
-        return Ok(axum::Json(ChairGetNotificationResponse {
-            data: None,
-            retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
-        }));
+        return Ok(None);
     };
 
     let yet_sent_ride_status: Option<RideStatus> =
@@ -312,24 +334,21 @@ async fn chair_get_notification(
 
     tx.commit().await?;
 
-    Ok(axum::Json(ChairGetNotificationResponse {
-        data: Some(ChairGetNotificationResponseData {
-            ride_id: ride.id,
-            user: SimpleUser {
-                id: user.id,
-                name: format!("{} {}", user.firstname, user.lastname),
-            },
-            pickup_coordinate: Coordinate {
-                latitude: ride.pickup_latitude,
-                longitude: ride.pickup_longitude,
-            },
-            destination_coordinate: Coordinate {
-                latitude: ride.destination_latitude,
-                longitude: ride.destination_longitude,
-            },
-            status,
-        }),
-        retry_after_ms: Some(NOTIFICATION_RETRY_MS_CHAIR),
+    Ok(Some(ChairGetNotificationResponseData {
+        ride_id: ride.id,
+        user: SimpleUser {
+            id: user.id,
+            name: format!("{} {}", user.firstname, user.lastname),
+        },
+        pickup_coordinate: Coordinate {
+            latitude: ride.pickup_latitude,
+            longitude: ride.pickup_longitude,
+        },
+        destination_coordinate: Coordinate {
+            latitude: ride.destination_latitude,
+            longitude: ride.destination_longitude,
+        },
+        status,
     }))
 }
 
