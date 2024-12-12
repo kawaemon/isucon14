@@ -34,6 +34,7 @@ async fn do_matching(AppState { pool, .. }: &AppState) -> Result<StatusCode, Err
         sqlx::query_as("SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at")
             .fetch_all(pool)
             .await?;
+    let waiting = waiting_rides.len();
 
     let mut matches = 0;
 
@@ -67,7 +68,7 @@ async fn do_matching(AppState { pool, .. }: &AppState) -> Result<StatusCode, Err
     }
 
     if matches > 0 {
-        tracing::info!("matched {matches}");
+        tracing::info!("waiting={waiting}, matches={matches}");
     }
 
     Ok(StatusCode::NO_CONTENT)

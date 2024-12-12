@@ -238,15 +238,9 @@ async fn app_get_rides(
             .await?;
 
         items.push(GetAppRidesResponseItem {
+            pickup_coordinate: ride.pickup_coord(),
+            destination_coordinate: ride.destination_coord(),
             id: ride.id,
-            pickup_coordinate: Coordinate {
-                latitude: ride.pickup_latitude,
-                longitude: ride.pickup_longitude,
-            },
-            destination_coordinate: Coordinate {
-                latitude: ride.destination_latitude,
-                longitude: ride.destination_longitude,
-            },
             chair: GetAppRidesResponseItemChair {
                 id: chair.id,
                 owner: owner.name,

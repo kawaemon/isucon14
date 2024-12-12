@@ -132,12 +132,20 @@ async fn owner_get_sales(
     let mut model_sales_by_model = HashMap::new();
 
     for chair in chairs {
-        let reqs: Vec<Ride> = sqlx::query_as("SELECT rides.* FROM rides JOIN ride_statuses ON rides.id = ride_statuses.ride_id WHERE chair_id = ? AND status = 'COMPLETED' AND updated_at BETWEEN ? AND ? + INTERVAL 999 MICROSECOND")
-            .bind(&chair.id)
-            .bind(since)
-            .bind(until)
-            .fetch_all(&mut *tx)
-            .await?;
+        let reqs: Vec<Ride> = sqlx::query_as(
+            "SELECT rides.*
+            FROM rides
+            JOIN ride_statuses ON rides.id = ride_statuses.ride_id
+            WHERE
+                chair_id = ?
+            AND status = 'COMPLETED'
+            AND updated_at BETWEEN ? AND ? + INTERVAL 999 MICROSECOND",
+        )
+        .bind(&chair.id)
+        .bind(since)
+        .bind(until)
+        .fetch_all(&mut *tx)
+        .await?;
 
         let sales = reqs.iter().map(|x| x.calc_sale()).sum();
         res.total_sales += sales;
@@ -160,7 +168,7 @@ async fn owner_get_sales(
 
 /// MySQL で COUNT()、SUM() 等を使って DECIMAL 型の値になったものを i64 に変換するための構造体。
 #[derive(Debug)]
-struct MysqlDecimal(i64);
+pub struct MysqlDecimal(pub i64);
 impl sqlx::Decode<'_, sqlx::MySql> for MysqlDecimal {
     fn decode(
         value: sqlx::mysql::MySqlValueRef,
@@ -199,20 +207,6 @@ impl From<MysqlDecimal> for i64 {
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
-struct ChairWithDetail {
-    id: String,
-    owner_id: String,
-    name: String,
-    access_token: String,
-    model: String,
-    is_active: bool,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    total_distance: MysqlDecimal,
-    total_distance_updated_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Debug, serde::Serialize)]
 struct OwnerGetChairResponse {
     chairs: Vec<OwnerGetChairResponseChair>,
@@ -220,7 +214,7 @@ struct OwnerGetChairResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct OwnerGetChairResponseChair {
-    id: String,
+    id: Id<Chair>,
     name: String,
     model: String,
     active: bool,
@@ -231,46 +225,29 @@ struct OwnerGetChairResponseChair {
 }
 
 async fn owner_get_chairs(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
 ) -> Result<axum::Json<OwnerGetChairResponse>, Error> {
-    let chairs: Vec<ChairWithDetail> = sqlx::query_as(r#"SELECT id,
-       owner_id,
-       name,
-       access_token,
-       model,
-       is_active,
-       created_at,
-       updated_at,
-       IFNULL(total_distance, 0) AS total_distance,
-       total_distance_updated_at
-FROM chairs
-       LEFT JOIN (SELECT chair_id,
-                          SUM(IFNULL(distance, 0)) AS total_distance,
-                          MAX(created_at)          AS total_distance_updated_at
-                   FROM (SELECT chair_id,
-                                created_at,
-                                ABS(latitude - LAG(latitude) OVER (PARTITION BY chair_id ORDER BY created_at)) +
-                                ABS(longitude - LAG(longitude) OVER (PARTITION BY chair_id ORDER BY created_at)) AS distance
-                         FROM chair_locations) tmp
-                   GROUP BY chair_id) distance_table ON distance_table.chair_id = chairs.id
-WHERE owner_id = ?
-    "#).bind(owner.id).fetch_all(&pool).await?;
+    let chairs = repo.chair_get_by_owner(&owner.id).await?;
 
-    Ok(axum::Json(OwnerGetChairResponse {
-        chairs: chairs
-            .into_iter()
-            .map(|chair| OwnerGetChairResponseChair {
-                id: chair.id,
-                name: chair.name,
-                model: chair.model,
-                active: chair.is_active,
-                registered_at: chair.created_at.timestamp_millis(),
-                total_distance: chair.total_distance.0,
-                total_distance_updated_at: chair
-                    .total_distance_updated_at
-                    .map(|t| t.timestamp_millis()),
-            })
-            .collect(),
-    }))
+    let mut res = vec![];
+    for chair in chairs {
+        let (total_distance, total_distance_updated_at) = repo
+            .chair_total_distance(&chair.id)
+            .await?
+            .map(|x| (x.0, Some(x.1.timestamp_millis())))
+            .unwrap_or((0, None));
+
+        res.push(OwnerGetChairResponseChair {
+            id: chair.id,
+            name: chair.name,
+            model: chair.model,
+            active: chair.is_active,
+            registered_at: chair.created_at.timestamp_millis(),
+            total_distance,
+            total_distance_updated_at,
+        })
+    }
+
+    Ok(axum::Json(OwnerGetChairResponse { chairs: res }))
 }
