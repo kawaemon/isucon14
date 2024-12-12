@@ -62,6 +62,38 @@ impl Repository {
             .await?;
         Ok(t)
     }
+
+    // writes
+
+    pub async fn chair_add(
+        &self,
+        id: &Id<Chair>,
+        owner: &Id<Owner>,
+        name: &str,
+        model: &str,
+        is_active: bool,
+        access_token: &str,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(id)
+            .bind(owner)
+            .bind(name)
+            .bind(model)
+            .bind(is_active)
+            .bind(access_token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
+        sqlx::query("UPDATE chairs SET is_active = ? WHERE id = ?")
+            .bind(active)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 // chair_location

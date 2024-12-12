@@ -6,13 +6,11 @@ use axum::response::sse::Event;
 use axum::response::Sse;
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
-use chrono::Utc;
 use futures::Stream;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
-use ulid::Ulid;
 
-use crate::models::{Chair, ChairLocation, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
+use crate::models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
 use crate::{AppState, Coordinate, Error};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -53,12 +51,12 @@ struct ChairPostChairsRequest {
 
 #[derive(Debug, serde::Serialize)]
 struct ChairPostChairsResponse {
-    id: String,
+    id: Id<Chair>,
     owner_id: Id<Owner>,
 }
 
 async fn chair_post_chairs(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<ChairPostChairsRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
@@ -71,18 +69,18 @@ async fn chair_post_chairs(
         return Err(Error::Unauthorized("invalid chair_register_token"));
     };
 
-    let chair_id = Ulid::new().to_string();
+    let chair_id = Id::new();
     let access_token = crate::secure_random_str(32);
 
-    sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(&chair_id)
-        .bind(&owner.id)
-        .bind(req.name)
-        .bind(req.model)
-        .bind(false)
-        .bind(&access_token)
-        .execute(&pool)
-        .await?;
+    repo.chair_add(
+        &chair_id,
+        &owner.id,
+        &req.name,
+        &req.model,
+        false,
+        &access_token,
+    )
+    .await?;
 
     let jar = jar.add(Cookie::build(("chair_session", access_token)).path("/"));
 
@@ -104,16 +102,12 @@ struct PostChairActivityRequest {
 }
 
 async fn chair_post_activity(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<PostChairActivityRequest>,
 ) -> Result<StatusCode, Error> {
-    sqlx::query("UPDATE chairs SET is_active = ? WHERE id = ?")
-        .bind(req.is_active)
-        .bind(chair.id)
-        .execute(&pool)
+    repo.chair_update_is_active(&chair.id, req.is_active)
         .await?;
-
     Ok(StatusCode::NO_CONTENT)
 }
 
