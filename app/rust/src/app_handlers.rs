@@ -5,6 +5,7 @@ use axum::http::StatusCode;
 use axum::response::sse::Event;
 use axum::response::Sse;
 use axum_extra::extract::CookieJar;
+use chrono::Utc;
 use futures::Stream;
 use sqlx::Type;
 use tokio_stream::wrappers::IntervalStream;
@@ -715,66 +716,26 @@ async fn app_get_nearby_chairs(
 
     let mut tx = pool.begin().await?;
 
-    let chairs: Vec<Chair> = sqlx::query_as("SELECT * FROM chairs")
-        .fetch_all(&mut *tx)
-        .await?;
+    let chairs: Vec<Chair> = repo.chair_get_completeds(&mut tx).await?;
 
     let mut nearby_chairs = Vec::new();
     for chair in chairs {
-        if !chair.is_active {
-            continue;
-        }
-
-        let rides: Vec<Ride> =
-            sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC")
-                .bind(&chair.id)
-                .fetch_all(&mut *tx)
-                .await?;
-
-        let mut skip = false;
-        for ride in rides {
-            // 過去にライドが存在し、かつ、それが完了していない場合はスキップ
-            let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
-            if status != RideStatusEnum::Completed {
-                skip = true;
-                break;
-            }
-        }
-        if skip {
-            continue;
-        }
-
-        // 最新の位置情報を取得
-        let Some(chair_location): Option<ChairLocation> = sqlx::query_as(
-            "SELECT * FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(&chair.id)
-        .fetch_optional(&mut *tx)
-        .await?
-        else {
+        let Some(chair_coord) = repo.chair_location_get_latest(&mut tx, &chair.id).await? else {
             continue;
         };
-        if coordinate.distance(chair_location.coord()) <= distance {
+        if coordinate.distance(chair_coord) <= distance {
             nearby_chairs.push(AppGetNearbyChairsResponseChair {
                 id: chair.id,
                 name: chair.name,
                 model: chair.model,
-                current_coordinate: Coordinate {
-                    latitude: chair_location.latitude,
-                    longitude: chair_location.longitude,
-                },
+                current_coordinate: chair_coord,
             });
         }
     }
 
-    let retrieved_at: chrono::DateTime<chrono::Utc> =
-        sqlx::query_scalar("SELECT CURRENT_TIMESTAMP(6)")
-            .fetch_one(&mut *tx)
-            .await?;
-
     Ok(axum::Json(AppGetNearbyChairsResponse {
         chairs: nearby_chairs,
-        retrieved_at: retrieved_at.timestamp(),
+        retrieved_at: Utc::now().timestamp(),
     }))
 }
 

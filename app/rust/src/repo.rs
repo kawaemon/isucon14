@@ -63,6 +63,38 @@ impl Repository {
         Ok(t)
     }
 
+    /// latest が completed になっていればよい
+    pub async fn chair_get_completeds(&self, tx: impl Into<Option<&mut Tx>>) -> Result<Vec<Chair>> {
+        let mut tx = tx.into();
+
+        let q = sqlx::query_as("SELECT * FROM chairs");
+        let chairs: Vec<Chair> = maybe_tx!(self, tx, q.fetch_all)?;
+
+        let mut res = vec![];
+        'chair: for chair in chairs {
+            if !chair.is_active {
+                continue;
+            }
+
+            let q =
+                sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC")
+                    .bind(&chair.id);
+
+            let rides: Vec<Ride> = maybe_tx!(self, tx, q.fetch_all)?;
+
+            for ride in rides {
+                let status = self.ride_status_latest(tx.as_deref_mut(), &ride.id).await?;
+                if status != RideStatusEnum::Completed {
+                    continue 'chair;
+                }
+            }
+
+            res.push(chair);
+        }
+
+        Ok(res)
+    }
+
     // writes
 
     pub async fn chair_add(
@@ -98,6 +130,24 @@ impl Repository {
 
 // chair_location
 impl Repository {
+    pub async fn chair_location_get_latest(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        id: &Id<Chair>,
+    ) -> Result<Option<Coordinate>> {
+        let mut tx = tx.into();
+
+        let q = sqlx::query_as(
+            "SELECT * FROM chair_locations WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(id);
+        let Some(coord): Option<ChairLocation> = maybe_tx!(self, tx, q.fetch_optional)? else {
+            return Ok(None);
+        };
+
+        Ok(Some(coord.coord()))
+    }
+
     pub async fn chair_location_update(
         &self,
         tx: impl Into<Option<&mut Tx>>,
