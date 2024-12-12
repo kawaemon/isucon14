@@ -42,6 +42,8 @@ where
     }
 }
 
+const RETRY_COUNT: usize = 5;
+
 pub async fn request_payment_gateway_post_payment<F>(
     payment_gateway_url: &str,
     token: &str,
@@ -98,13 +100,13 @@ where
         .await;
 
         if let Err(err) = result {
-            if retry < 5 {
+            tracing::warn!("[{}/{RETRY_COUNT}] pgw request failed: retrying", retry + 1);
+            if retry < RETRY_COUNT {
                 retry += 1;
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 continue;
-            } else {
-                return Err(err);
             }
+            return Err(err);
         }
         break;
     }
