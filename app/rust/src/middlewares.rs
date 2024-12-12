@@ -7,7 +7,7 @@ use crate::models::{Chair, Owner, User};
 use crate::{AppState, Error};
 
 pub async fn app_auth_middleware(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -16,11 +16,7 @@ pub async fn app_auth_middleware(
         return Err(Error::Unauthorized("app_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(user): Option<User> = sqlx::query_as("SELECT * FROM users WHERE access_token = ?")
-        .bind(access_token)
-        .fetch_optional(&pool)
-        .await?
-    else {
+    let Some(user): Option<User> = repo.user_get_by_acess_token(access_token).await? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -30,7 +26,7 @@ pub async fn app_auth_middleware(
 }
 
 pub async fn owner_auth_middleware(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -39,11 +35,7 @@ pub async fn owner_auth_middleware(
         return Err(Error::Unauthorized("owner_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(owner): Option<Owner> = sqlx::query_as("SELECT * FROM owners WHERE access_token = ?")
-        .bind(access_token)
-        .fetch_optional(&pool)
-        .await?
-    else {
+    let Some(owner): Option<Owner> = repo.owner_get_by_acess_token(access_token).await? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -53,7 +45,7 @@ pub async fn owner_auth_middleware(
 }
 
 pub async fn chair_auth_middleware(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -62,11 +54,7 @@ pub async fn chair_auth_middleware(
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(chair): Option<Chair> = sqlx::query_as("SELECT * FROM chairs WHERE access_token = ?")
-        .bind(access_token)
-        .fetch_optional(&pool)
-        .await?
-    else {
+    let Some(chair): Option<Chair> = repo.chair_get_by_acess_token(access_token).await? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
