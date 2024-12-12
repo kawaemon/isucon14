@@ -1,18 +1,20 @@
+use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool, Transaction};
 
 use crate::{
-    models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
-    Error,
+    models::{Chair, ChairLocation, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
+    Coordinate, Error,
 };
 
 macro_rules! maybe_tx {
-    ($self:expr, $tx:expr, $query:ident.$method:ident) => {
-        if let Some(tx) = $tx.into() {
+    ($self:expr, $tx:expr, $query:ident.$method:ident) => {{
+        if let Some(tx) = $tx.as_mut() {
+            let tx: &mut Tx = *tx;
             $query.$method(&mut **tx).await
         } else {
             $query.$method(&$self.pool).await
         }
-    };
+    }};
 }
 
 pub type Tx = Transaction<'static, MySql>;
@@ -62,14 +64,79 @@ impl Repository {
     }
 }
 
+// chair_location
+impl Repository {
+    pub async fn chair_location_update(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        chair_id: &Id<Chair>,
+        coord: Coordinate,
+    ) -> Result<DateTime<Utc>> {
+        let mut tx = tx.into();
+        let created_at = Utc::now();
+
+        let q = sqlx::query(
+            "INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(Id::<ChairLocation>::new())
+        .bind(chair_id)
+        .bind(coord.latitude)
+        .bind(coord.longitude)
+        .bind(created_at);
+
+        maybe_tx!(self, tx, q.execute)?;
+
+        Ok(created_at)
+    }
+}
+
+// rides
+impl Repository {
+    pub async fn rides_get_assigned(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        chair_id: &Id<Chair>,
+    ) -> Result<Option<(Ride, RideStatusEnum)>> {
+        let mut tx = tx.into();
+        let q = sqlx::query_as(
+            "SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(chair_id);
+
+        let Some(ride): Option<Ride> = maybe_tx!(self, tx, q.fetch_optional)? else {
+            return Ok(None);
+        };
+
+        let status = self.ride_status_latest(tx, &ride.id).await?;
+        Ok(Some((ride, status)))
+    }
+}
+
 // ride_status
 impl Repository {
+    pub async fn ride_status_latest(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        ride_id: &Id<Ride>,
+    ) -> Result<RideStatusEnum> {
+        let mut tx = tx.into();
+        let q = sqlx::query_scalar(
+            "SELECT status FROM ride_statuses WHERE ride_id = ? ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(ride_id);
+
+        let s = maybe_tx!(self, tx, q.fetch_one)?;
+
+        Ok(s)
+    }
+
     pub async fn ride_status_update(
         &self,
         tx: impl Into<Option<&mut Tx>>,
         ride_id: &Id<Ride>,
         status: RideStatusEnum,
     ) -> Result<()> {
+        let mut tx = tx.into();
         let q = sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
             .bind(Id::<RideStatus>::new())
             .bind(ride_id)

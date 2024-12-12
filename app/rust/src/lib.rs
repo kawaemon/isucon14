@@ -51,7 +51,7 @@ impl axum::response::IntoResponse for Error {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Coordinate {
     pub latitude: i32,
     pub longitude: i32,

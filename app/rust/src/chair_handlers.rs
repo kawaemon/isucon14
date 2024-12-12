@@ -129,26 +129,9 @@ async fn chair_post_coordinate(
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
     let mut tx = pool.begin().await?;
 
-    let created_at = Utc::now();
-    let chair_location_id = Ulid::new().to_string();
-    sqlx::query(
-        "INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)",
-    )
-    .bind(&chair_location_id)
-    .bind(&chair.id)
-    .bind(req.latitude)
-    .bind(req.longitude)
-    .bind(created_at)
-    .execute(&mut *tx)
-    .await?;
+    let created_at = repo.chair_location_update(&mut tx, &chair.id, req).await?;
 
-    let ride: Option<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
-            .bind(chair.id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if let Some(ride) = ride {
-        let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
+    if let Some((ride, status)) = repo.rides_get_assigned(&mut tx, &chair.id).await? {
         if status != RideStatusEnum::Completed && status != RideStatusEnum::Canceled {
             if req.latitude == ride.pickup_latitude
                 && req.longitude == ride.pickup_longitude
