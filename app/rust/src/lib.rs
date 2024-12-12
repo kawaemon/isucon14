@@ -1,8 +1,12 @@
+use std::{sync::Arc, time::Duration};
+
 use axum::{http::StatusCode, response::Response};
+use repo::Repository;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
+    pub repo: Arc<Repository>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +88,8 @@ pub fn calculate_distance(
 
 const INITIAL_FARE: i32 = 500;
 const FARE_PER_DISTANCE: i32 = 100;
+const RETRY_MS_APP: Duration = Duration::from_millis(200);
+const RETRY_MS_CHAIR: Duration = Duration::from_millis(200);
 
 pub fn calculate_fare(
     pickup_latitude: i32,
@@ -108,3 +114,4 @@ pub mod middlewares;
 pub mod models;
 pub mod owner_handlers;
 pub mod payment_gateway;
+pub mod repo;
