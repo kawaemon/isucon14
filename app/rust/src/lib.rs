@@ -56,6 +56,11 @@ pub struct Coordinate {
     pub latitude: i32,
     pub longitude: i32,
 }
+impl Coordinate {
+    pub fn distance(&self, other: Coordinate) -> i32 {
+        (self.latitude.abs_diff(other.latitude) + self.longitude.abs_diff(other.longitude)) as i32
+    }
+}
 
 pub fn secure_random_str(b: usize) -> String {
     use rand::RngCore as _;
@@ -65,49 +70,13 @@ pub fn secure_random_str(b: usize) -> String {
     hex::encode(&buf)
 }
 
-pub async fn get_latest_ride_status<'e, E>(
-    executor: E,
-    ride_id: &Id<Ride>,
-) -> sqlx::Result<RideStatusEnum>
-where
-    E: 'e + sqlx::Executor<'e, Database = sqlx::MySql>,
-{
-    sqlx::query_scalar(
-        "SELECT status FROM ride_statuses WHERE ride_id = ? ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(ride_id)
-    .fetch_one(executor)
-    .await
-}
-
-// マンハッタン距離を求める
-pub fn calculate_distance(
-    a_latitude: i32,
-    a_longitude: i32,
-    b_latitude: i32,
-    b_longitude: i32,
-) -> i32 {
-    (a_latitude - b_latitude).abs() + (a_longitude - b_longitude).abs()
-}
-
 const INITIAL_FARE: i32 = 500;
 const FARE_PER_DISTANCE: i32 = 100;
 const RETRY_MS_APP: Duration = Duration::from_millis(200);
 const RETRY_MS_CHAIR: Duration = Duration::from_millis(200);
 
-pub fn calculate_fare(
-    pickup_latitude: i32,
-    pickup_longitude: i32,
-    dest_latitude: i32,
-    dest_longitude: i32,
-) -> i32 {
-    let metered_fare = FARE_PER_DISTANCE
-        * calculate_distance(
-            pickup_latitude,
-            pickup_longitude,
-            dest_latitude,
-            dest_longitude,
-        );
+pub fn calculate_fare(pickup: Coordinate, dest: Coordinate) -> i32 {
+    let metered_fare = FARE_PER_DISTANCE * pickup.distance(dest);
     INITIAL_FARE + metered_fare
 }
 

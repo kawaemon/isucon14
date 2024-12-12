@@ -178,7 +178,7 @@ async fn chair_get_notification(
 }
 
 async fn chair_get_notification_inner(
-    AppState { pool, .. }: &AppState,
+    AppState { pool, repo, .. }: &AppState,
     chair: &Chair,
 ) -> Result<Option<ChairGetNotificationResponseData>, Error> {
     let mut tx = pool.begin().await?;
@@ -201,10 +201,7 @@ async fn chair_get_notification_inner(
     {
         (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
     } else {
-        (
-            None,
-            crate::get_latest_ride_status(&mut *tx, &ride.id).await?,
-        )
+        (None, repo.ride_status_latest(&mut tx, &ride.id).await?)
     };
 
     let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? FOR SHARE")
@@ -269,7 +266,7 @@ async fn chair_post_ride_status(
         RideStatusEnum::Enroute => RideStatusEnum::Enroute,
         // After Picking up user
         RideStatusEnum::Carrying => {
-            let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
+            let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
             if status != RideStatusEnum::Pickup {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }

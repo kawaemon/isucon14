@@ -199,7 +199,7 @@ struct GetAppRidesResponseItemChair {
 }
 
 async fn app_get_rides(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
     let mut tx = pool.begin().await?;
@@ -212,7 +212,7 @@ async fn app_get_rides(
 
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
+        let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
         if status != RideStatusEnum::Completed {
             continue;
         }
@@ -221,10 +221,8 @@ async fn app_get_rides(
             &mut tx,
             &user.id,
             Some(&ride),
-            ride.pickup_latitude,
-            ride.pickup_longitude,
-            ride.destination_latitude,
-            ride.destination_longitude,
+            ride.pickup_coord(),
+            ride.destination_coord(),
         )
         .await?;
 
@@ -294,7 +292,7 @@ async fn app_post_rides(
 
     let mut continuing_ride_count = 0;
     for ride in rides {
-        let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
+        let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
         if status != RideStatusEnum::Completed {
             continuing_ride_count += 1;
         }
@@ -374,10 +372,8 @@ async fn app_post_rides(
         &mut tx,
         &user.id,
         Some(&ride),
-        req.pickup_coordinate.latitude,
-        req.pickup_coordinate.longitude,
-        req.destination_coordinate.latitude,
-        req.destination_coordinate.longitude,
+        ride.pickup_coord(),
+        ride.destination_coord(),
     )
     .await?;
 
@@ -412,10 +408,8 @@ async fn app_post_rides_estimated_fare(
         &mut tx,
         &user.id,
         None,
-        req.pickup_coordinate.latitude,
-        req.pickup_coordinate.longitude,
-        req.destination_coordinate.latitude,
-        req.destination_coordinate.longitude,
+        req.pickup_coordinate,
+        req.destination_coordinate,
     )
     .await?;
 
@@ -423,12 +417,8 @@ async fn app_post_rides_estimated_fare(
 
     Ok(axum::Json(AppPostRidesEstimatedFareResponse {
         fare: discounted,
-        discount: crate::calculate_fare(
-            req.pickup_coordinate.latitude,
-            req.pickup_coordinate.longitude,
-            req.destination_coordinate.latitude,
-            req.destination_coordinate.longitude,
-        ) - discounted,
+        discount: crate::calculate_fare(req.pickup_coordinate, req.destination_coordinate)
+            - discounted,
     }))
 }
 
@@ -461,8 +451,8 @@ async fn app_post_ride_evaluation(
     else {
         return Err(Error::NotFound("ride not found"));
     };
-    let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
 
+    let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
     if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
@@ -501,10 +491,8 @@ async fn app_post_ride_evaluation(
         &mut tx,
         &ride.user_id,
         Some(&ride),
-        ride.pickup_latitude,
-        ride.pickup_longitude,
-        ride.destination_latitude,
-        ride.destination_longitude,
+        ride.pickup_coord(),
+        ride.destination_coord(),
     )
     .await?;
 
@@ -588,7 +576,7 @@ async fn app_get_notification(
 }
 
 async fn app_get_notification_inner(
-    AppState { pool, .. }: &AppState,
+    AppState { pool, repo, .. }: &AppState,
     user: &User,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let mut tx = pool.begin().await?;
@@ -609,20 +597,15 @@ async fn app_get_notification_inner(
     let (ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status {
         (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
     } else {
-        (
-            None,
-            crate::get_latest_ride_status(&mut *tx, &ride.id).await?,
-        )
+        (None, repo.ride_status_latest(&mut tx, &ride.id).await?)
     };
 
     let fare = calculate_discounted_fare(
         &mut tx,
         &user.id,
         Some(&ride),
-        ride.pickup_latitude,
-        ride.pickup_longitude,
-        ride.destination_latitude,
-        ride.destination_longitude,
+        ride.pickup_coord(),
+        ride.destination_coord(),
     )
     .await?;
 
@@ -747,7 +730,7 @@ struct AppGetNearbyChairsResponseChair {
 }
 
 async fn app_get_nearby_chairs(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
 ) -> Result<axum::Json<AppGetNearbyChairsResponse>, Error> {
     let distance = query.distance.unwrap_or(50);
@@ -777,7 +760,7 @@ async fn app_get_nearby_chairs(
         let mut skip = false;
         for ride in rides {
             // 過去にライドが存在し、かつ、それが完了していない場合はスキップ
-            let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
+            let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
             if status != RideStatusEnum::Completed {
                 skip = true;
                 break;
@@ -797,13 +780,7 @@ async fn app_get_nearby_chairs(
         else {
             continue;
         };
-        if crate::calculate_distance(
-            coordinate.latitude,
-            coordinate.longitude,
-            chair_location.latitude,
-            chair_location.longitude,
-        ) <= distance
-        {
+        if coordinate.distance(chair_location.coord()) <= distance {
             nearby_chairs.push(AppGetNearbyChairsResponseChair {
                 id: chair.id,
                 name: chair.name,
@@ -831,16 +808,12 @@ async fn calculate_discounted_fare(
     tx: &mut sqlx::MySqlConnection,
     user_id: &Id<User>,
     ride: Option<&Ride>,
-    mut pickup_latitude: i32,
-    mut pickup_longitude: i32,
-    mut dest_latitude: i32,
-    mut dest_longitude: i32,
+    mut pickup: Coordinate,
+    mut dest: Coordinate,
 ) -> sqlx::Result<i32> {
     let discount = if let Some(ride) = ride {
-        dest_latitude = ride.destination_latitude;
-        dest_longitude = ride.destination_longitude;
-        pickup_latitude = ride.pickup_latitude;
-        pickup_longitude = ride.pickup_longitude;
+        pickup = ride.pickup_coord();
+        dest = ride.destination_coord();
 
         // すでにクーポンが紐づいているならそれの割引額を参照
         let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE used_by = ?")
@@ -868,13 +841,7 @@ async fn calculate_discounted_fare(
         }
     };
 
-    let metered_fare = crate::FARE_PER_DISTANCE
-        * crate::calculate_distance(
-            pickup_latitude,
-            pickup_longitude,
-            dest_latitude,
-            dest_longitude,
-        );
+    let metered_fare = crate::FARE_PER_DISTANCE * pickup.distance(dest);
     let discounted_metered_fare = std::cmp::max(metered_fare - discount, 0);
 
     Ok(crate::INITIAL_FARE + discounted_metered_fare)

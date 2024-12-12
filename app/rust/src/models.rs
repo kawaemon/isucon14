@@ -151,6 +151,14 @@ pub struct ChairLocation {
     pub longitude: i32,
     pub created_at: DateTime<Utc>,
 }
+impl ChairLocation {
+    pub fn coord(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.latitude,
+            longitude: self.longitude,
+        }
+    }
+}
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
@@ -183,6 +191,11 @@ pub struct Ride {
     pub evaluation: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+impl Ride {
+    pub fn calc_sale(&self) -> i32 {
+        crate::calculate_fare(self.pickup_coord(), self.destination_coord())
+    }
 }
 
 impl Ride {
