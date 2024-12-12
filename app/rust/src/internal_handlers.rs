@@ -43,9 +43,9 @@ async fn do_matching(AppState { pool, .. }: &AppState) -> Result<StatusCode, Err
             sqlx::query_as("SELECT * FROM chairs INNER JOIN (SELECT id FROM chairs WHERE is_active = TRUE ORDER BY RAND() LIMIT 1) AS tmp ON chairs.id = tmp.id LIMIT 1")
                 .fetch_optional(pool)
                 .await?
-        else {
-            return Ok(StatusCode::NO_CONTENT);
-        };
+            else {
+                return Ok(StatusCode::NO_CONTENT);
+            };
 
             let empty: bool = sqlx::query_scalar(
                 "SELECT COUNT(*) = 0 FROM (SELECT COUNT(chair_sent_at) = 6 AS completed FROM ride_statuses WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = ?) GROUP BY ride_id) is_completed WHERE completed = FALSE",

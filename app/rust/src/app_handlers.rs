@@ -267,16 +267,16 @@ struct AppPostRidesRequest {
 
 #[derive(Debug, serde::Serialize)]
 struct AppPostRidesResponse {
-    ride_id: String,
+    ride_id: Id<Ride>,
     fare: i32,
 }
 
 async fn app_post_rides(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesRequest>,
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
-    let ride_id = Ulid::new().to_string();
+    let ride_id = Id::new();
 
     let mut tx = pool.begin().await?;
 
@@ -307,11 +307,7 @@ async fn app_post_rides(
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-        .bind(Ulid::new().to_string())
-        .bind(&ride_id)
-        .bind("MATCHING")
-        .execute(&mut *tx)
+    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Matching)
         .await?;
 
     let ride_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rides WHERE user_id = ?")
@@ -441,8 +437,8 @@ struct AppPostRideEvaluationResponse {
 }
 
 async fn app_post_ride_evaluation(
-    State(AppState { pool, .. }): State<AppState>,
-    Path((ride_id,)): Path<(String,)>,
+    State(AppState { pool, repo, .. }): State<AppState>,
+    Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
 ) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
     if req.evaluation < 1 || req.evaluation > 5 {
@@ -474,11 +470,7 @@ async fn app_post_ride_evaluation(
         return Err(Error::NotFound("ride not found"));
     }
 
-    sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-        .bind(Ulid::new().to_string())
-        .bind(&ride_id)
-        .bind(RideStatusEnum::Completed)
-        .execute(&mut *tx)
+    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
         .await?;
 
     let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")

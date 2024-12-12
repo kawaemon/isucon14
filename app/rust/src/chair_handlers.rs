@@ -115,7 +115,7 @@ struct ChairPostCoordinateResponse {
 }
 
 async fn chair_post_coordinate(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
@@ -149,11 +149,7 @@ async fn chair_post_coordinate(
                 && req.longitude == ride.pickup_longitude
                 && status == RideStatusEnum::Enroute
             {
-                sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                    .bind(Ulid::new().to_string())
-                    .bind(&ride.id)
-                    .bind("PICKUP")
-                    .execute(&mut *tx)
+                repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Pickup)
                     .await?;
             }
 
@@ -161,11 +157,7 @@ async fn chair_post_coordinate(
                 && req.longitude == ride.destination_longitude
                 && status == RideStatusEnum::Carrying
             {
-                sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                    .bind(Ulid::new().to_string())
-                    .bind(&ride.id)
-                    .bind("ARRIVED")
-                    .execute(&mut *tx)
+                repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Arrived)
                     .await?;
             }
         }
@@ -273,15 +265,15 @@ struct PostChairRidesRideIDStatusRequest {
 }
 
 async fn chair_post_ride_status(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
-    Path((ride_id,)): Path<(String,)>,
+    Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
 ) -> Result<StatusCode, Error> {
     let mut tx = pool.begin().await?;
 
     let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ? FOR UPDATE")
-        .bind(ride_id)
+        .bind(&ride_id)
         .fetch_optional(&mut *tx)
         .await?
     else {
@@ -292,33 +284,23 @@ async fn chair_post_ride_status(
         return Err(Error::BadRequest("not assigned to this ride"));
     }
 
-    match req.status {
+    let next = match req.status {
         // Acknowledge the ride
-        RideStatusEnum::Enroute => {
-            sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                .bind(Ulid::new().to_string())
-                .bind(ride.id)
-                .bind(RideStatusEnum::Enroute)
-                .execute(&mut *tx)
-                .await?;
-        }
+        RideStatusEnum::Enroute => RideStatusEnum::Enroute,
         // After Picking up user
         RideStatusEnum::Carrying => {
             let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
             if status != RideStatusEnum::Pickup {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
-            sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-                .bind(Ulid::new().to_string())
-                .bind(ride.id)
-                .bind(RideStatusEnum::Carrying)
-                .execute(&mut *tx)
-                .await?;
+            RideStatusEnum::Carrying
         }
         _ => {
             return Err(Error::BadRequest("invalid status"));
         }
     };
+
+    repo.ride_status_update(&mut tx, &ride_id, next).await?;
 
     tx.commit().await?;
 

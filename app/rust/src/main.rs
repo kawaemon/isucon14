@@ -1,7 +1,9 @@
 use axum::extract::State;
+use isuride::repo::Repository;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
 use std::net::SocketAddr;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -43,7 +45,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    let app_state = AppState { pool };
+    let repo = Arc::new(Repository::new(&pool));
+    let app_state = AppState { pool, repo };
 
     spawn_matching_thread(app_state.clone());
 
