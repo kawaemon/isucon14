@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{http::StatusCode, response::Response};
 
 #[derive(Debug, Clone)]
@@ -84,6 +86,8 @@ pub fn calculate_distance(
 
 const INITIAL_FARE: i32 = 500;
 const FARE_PER_DISTANCE: i32 = 100;
+const RETRY_MS_APP: Duration = Duration::from_millis(200);
+const RETRY_MS_CHAIR: Duration = Duration::from_millis(200);
 
 pub fn calculate_fare(
     pickup_latitude: i32,

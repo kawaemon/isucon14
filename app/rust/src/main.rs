@@ -1,12 +1,21 @@
 use axum::extract::State;
-use isuride::{AppState, Error};
+use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
 use std::net::SocketAddr;
+use std::process::Stdio;
 use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let v = std::env::var_os("V").is_some();
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "info,tower_http=debug,axum::rejection=trace");
+        std::env::set_var(
+            "RUST_LOG",
+            if v {
+                "info,tower_http=debug,axum::rejection=trace"
+            } else {
+                "info,axum::rejection=trace"
+            },
+        );
     }
     tracing_subscriber::fmt::init();
 
@@ -35,6 +44,8 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let app_state = AppState { pool };
+
+    spawn_matching_thread(app_state.clone());
 
     let app = axum::Router::new()
         .route("/api/initialize", axum::routing::post(post_initialize))
@@ -70,13 +81,14 @@ async fn post_initialize(
     State(AppState { pool, .. }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
-    let output = tokio::process::Command::new("../sql/init.sh")
-        .output()
+    let status = tokio::process::Command::new("../sql/init.sh")
+        .stdout(Stdio::inherit())
+        .status()
         .await?;
-    if !output.status.success() {
+    if !status.success() {
         return Err(Error::Initialize {
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            stdout: String::new(),
+            stderr: String::new(),
         });
     }
 
