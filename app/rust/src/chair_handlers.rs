@@ -4,7 +4,7 @@ use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use ulid::Ulid;
 
-use crate::models::{Chair, ChairLocation, Owner, Ride, RideStatus, User};
+use crate::models::{Chair, ChairLocation, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
 use crate::{AppState, Coordinate, Error};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -46,7 +46,7 @@ struct ChairPostChairsRequest {
 #[derive(Debug, serde::Serialize)]
 struct ChairPostChairsResponse {
     id: String,
-    owner_id: String,
+    owner_id: Id<Owner>,
 }
 
 async fn chair_post_chairs(
@@ -144,10 +144,10 @@ async fn chair_post_coordinate(
             .await?;
     if let Some(ride) = ride {
         let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-        if status != "COMPLETED" && status != "CANCELED" {
+        if status != RideStatusEnum::Completed && status != RideStatusEnum::Canceled {
             if req.latitude == ride.pickup_latitude
                 && req.longitude == ride.pickup_longitude
-                && status == "ENROUTE"
+                && status == RideStatusEnum::Enroute
             {
                 sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
                     .bind(Ulid::new().to_string())
@@ -159,7 +159,7 @@ async fn chair_post_coordinate(
 
             if req.latitude == ride.destination_latitude
                 && req.longitude == ride.destination_longitude
-                && status == "CARRYING"
+                && status == RideStatusEnum::Carrying
             {
                 sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
                     .bind(Ulid::new().to_string())
@@ -180,7 +180,7 @@ async fn chair_post_coordinate(
 
 #[derive(Debug, serde::Serialize)]
 struct SimpleUser {
-    id: String,
+    id: Id<User>,
     name: String,
 }
 
@@ -192,11 +192,11 @@ struct ChairGetNotificationResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct ChairGetNotificationResponseData {
-    ride_id: String,
+    ride_id: Id<Ride>,
     user: SimpleUser,
     pickup_coordinate: Coordinate,
     destination_coordinate: Coordinate,
-    status: String,
+    status: RideStatusEnum,
 }
 
 async fn chair_get_notification(
@@ -269,7 +269,7 @@ async fn chair_get_notification(
 
 #[derive(Debug, serde::Deserialize)]
 struct PostChairRidesRideIDStatusRequest {
-    status: String,
+    status: RideStatusEnum,
 }
 
 async fn chair_post_ride_status(
@@ -292,26 +292,26 @@ async fn chair_post_ride_status(
         return Err(Error::BadRequest("not assigned to this ride"));
     }
 
-    match req.status.as_str() {
+    match req.status {
         // Acknowledge the ride
-        "ENROUTE" => {
+        RideStatusEnum::Enroute => {
             sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
                 .bind(Ulid::new().to_string())
                 .bind(ride.id)
-                .bind("ENROUTE")
+                .bind(RideStatusEnum::Enroute)
                 .execute(&mut *tx)
                 .await?;
         }
         // After Picking up user
-        "CARRYING" => {
+        RideStatusEnum::Carrying => {
             let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-            if status != "PICKUP" {
+            if status != RideStatusEnum::Pickup {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
             sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
                 .bind(Ulid::new().to_string())
                 .bind(ride.id)
-                .bind("CARRYING")
+                .bind(RideStatusEnum::Carrying)
                 .execute(&mut *tx)
                 .await?;
         }
