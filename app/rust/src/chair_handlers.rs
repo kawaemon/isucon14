@@ -132,22 +132,14 @@ async fn chair_post_coordinate(
     let created_at = repo.chair_location_update(&mut tx, &chair.id, req).await?;
 
     if let Some((ride, status)) = repo.rides_get_assigned(&mut tx, &chair.id).await? {
-        if status != RideStatusEnum::Completed && status != RideStatusEnum::Canceled {
-            if req.latitude == ride.pickup_latitude
-                && req.longitude == ride.pickup_longitude
-                && status == RideStatusEnum::Enroute
-            {
-                repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Pickup)
-                    .await?;
-            }
+        if req == ride.pickup_coord() && status == RideStatusEnum::Enroute {
+            repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Pickup)
+                .await?;
+        }
 
-            if req.latitude == ride.destination_latitude
-                && req.longitude == ride.destination_longitude
-                && status == RideStatusEnum::Carrying
-            {
-                repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Arrived)
-                    .await?;
-            }
+        if req == ride.destination_coord() && status == RideStatusEnum::Carrying {
+            repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Arrived)
+                .await?;
         }
     }
 

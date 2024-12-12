@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
+use crate::Coordinate;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RideStatusEnum {
@@ -181,6 +183,21 @@ pub struct Ride {
     pub evaluation: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl Ride {
+    pub fn pickup_coord(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.pickup_latitude,
+            longitude: self.pickup_longitude,
+        }
+    }
+    pub fn destination_coord(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.destination_latitude,
+            longitude: self.destination_longitude,
+        }
+    }
 }
 
 #[derive(Debug, sqlx::FromRow)]
