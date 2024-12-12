@@ -438,8 +438,10 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let result = sqlx::query("UPDATE rides SET evaluation = ? WHERE id = ?")
+    let updated_at = Utc::now();
+    let result = sqlx::query("UPDATE rides SET evaluation = ?, updated_at = ? WHERE id = ?")
         .bind(req.evaluation)
+        .bind(updated_at)
         .bind(&ride_id)
         .execute(&mut *tx)
         .await?;
@@ -450,14 +452,6 @@ async fn app_post_ride_evaluation(
 
     repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
         .await?;
-
-    let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
-        .bind(&ride_id)
-        .fetch_optional(&mut *tx)
-        .await?
-    else {
-        return Err(Error::NotFound("ride not found"));
-    };
 
     let Some(payment_token): Option<PaymentToken> =
         sqlx::query_as("SELECT * FROM payment_tokens WHERE user_id = ?")
@@ -477,10 +471,7 @@ async fn app_post_ride_evaluation(
     )
     .await?;
 
-    let payment_gateway_url: String =
-        sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'")
-            .fetch_one(&mut *tx)
-            .await?;
+    let payment_gateway_url: String = repo.pgw_get(&mut tx).await?;
 
     async fn retrieve_rides_order_by_created_at_asc(
         tx: &mut sqlx::MySqlConnection,
@@ -507,7 +498,7 @@ async fn app_post_ride_evaluation(
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
         fare,
-        completed_at: ride.updated_at.timestamp_millis(),
+        completed_at: updated_at.timestamp_millis(),
     }))
 }
 

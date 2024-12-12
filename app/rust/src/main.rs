@@ -81,7 +81,7 @@ struct PostInitializeResponse {
 }
 
 async fn post_initialize(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let status = tokio::process::Command::new("../sql/init.sh")
@@ -95,10 +95,7 @@ async fn post_initialize(
         });
     }
 
-    sqlx::query("UPDATE settings SET value = ? WHERE name = 'payment_gateway_url'")
-        .bind(req.payment_server)
-        .execute(&pool)
-        .await?;
+    repo.pgw_set(&req.payment_server).await?;
 
     Ok(axum::Json(PostInitializeResponse { language: "rust" }))
 }

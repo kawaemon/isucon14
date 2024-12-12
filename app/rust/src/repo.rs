@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sqlx::{MySql, Pool, Transaction};
+use sqlx::{pool::maybe, MySql, Pool, Transaction};
 
 use crate::{
     models::{Chair, ChairLocation, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
@@ -269,5 +269,21 @@ impl Repository {
         maybe_tx!(self, tx, q.execute)?;
 
         Ok(())
+    }
+}
+
+impl Repository {
+    pub async fn pgw_set(&self, s: &str) -> Result<()> {
+        sqlx::query("UPDATE settings SET value = ? WHERE name = 'payment_gateway_url'")
+            .bind(s)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn pgw_get(&self, tx: impl Into<Option<&mut Tx>>) -> Result<String> {
+        let mut tx = tx.into();
+        let q = sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'");
+        Ok(maybe_tx!(self, tx, q.fetch_one)?)
     }
 }
