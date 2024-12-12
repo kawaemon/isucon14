@@ -302,16 +302,14 @@ async fn app_post_rides(
         return Err(Error::Conflict("ride already exists"));
     }
 
-    sqlx::query("INSERT INTO rides (id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude) VALUES (?, ?, ?, ?, ?, ?)")
-        .bind(&ride_id)
-        .bind(&user.id)
-        .bind(req.pickup_coordinate.latitude)
-        .bind(req.pickup_coordinate.longitude)
-        .bind(req.destination_coordinate.latitude)
-        .bind(req.destination_coordinate.longitude)
-        .execute(&mut *tx)
-        .await?;
-
+    repo.rides_new(
+        &mut tx,
+        &ride_id,
+        &user.id,
+        req.pickup_coordinate,
+        req.destination_coordinate,
+    )
+    .await?;
     repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Matching)
         .await?;
 
@@ -610,15 +608,9 @@ async fn app_get_notification_inner(
     .await?;
 
     let mut data = AppGetNotificationResponseData {
+        pickup_coordinate: ride.pickup_coord(),
+        destination_coordinate: ride.destination_coord(),
         ride_id: ride.id,
-        pickup_coordinate: Coordinate {
-            latitude: ride.pickup_latitude,
-            longitude: ride.pickup_longitude,
-        },
-        destination_coordinate: Coordinate {
-            latitude: ride.destination_latitude,
-            longitude: ride.destination_longitude,
-        },
         fare,
         status,
         chair: None,

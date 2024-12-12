@@ -124,6 +124,28 @@ impl Repository {
 
 // rides
 impl Repository {
+    pub async fn rides_new(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        id: &Id<Ride>,
+        user: &Id<User>,
+        pickup: Coordinate,
+        dest: Coordinate,
+    ) -> Result<()> {
+        let mut tx = tx.into();
+
+        let q = sqlx::query("INSERT INTO rides (id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude) VALUES (?, ?, ?, ?, ?, ?)")
+            .bind(id)
+            .bind(user)
+            .bind(pickup.latitude)
+            .bind(pickup.longitude)
+            .bind(dest.latitude)
+            .bind(dest.longitude);
+
+        maybe_tx!(self, tx, q.execute)?;
+        Ok(())
+    }
+
     pub async fn rides_get_assigned(
         &self,
         tx: impl Into<Option<&mut Tx>>,

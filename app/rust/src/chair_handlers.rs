@@ -84,6 +84,8 @@ async fn chair_post_chairs(
 
     let jar = jar.add(Cookie::build(("chair_session", access_token)).path("/"));
 
+    tracing::info!("new chair registered");
+
     Ok((
         jar,
         (
@@ -194,9 +196,9 @@ async fn chair_get_notification_inner(
 
     let yet_sent_ride_status: Option<RideStatus> =
         sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
-        .bind(&ride.id)
-        .fetch_optional(&mut *tx)
-        .await?;
+            .bind(&ride.id)
+            .fetch_optional(&mut *tx)
+            .await?;
     let (yet_sent_ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status
     {
         (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
