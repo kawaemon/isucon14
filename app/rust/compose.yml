@@ -1,0 +1,16 @@
+services:
+  db:
+    image: mysql
+    container_name: isuride-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: isucon
+      MYSQL_DATABASE: isuride
+      MYSQL_USER: isucon
+      MYSQL_PASSWORD: isucon
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+    ports:
+      - "3306:3306"
