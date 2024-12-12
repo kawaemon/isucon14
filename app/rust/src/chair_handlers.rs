@@ -6,6 +6,7 @@ use axum::response::sse::Event;
 use axum::response::Sse;
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
+use chrono::Utc;
 use futures::Stream;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
@@ -128,21 +129,18 @@ async fn chair_post_coordinate(
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
     let mut tx = pool.begin().await?;
 
+    let created_at = Utc::now();
     let chair_location_id = Ulid::new().to_string();
     sqlx::query(
-        "INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)",
+        "INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)",
     )
     .bind(&chair_location_id)
     .bind(&chair.id)
     .bind(req.latitude)
     .bind(req.longitude)
+    .bind(created_at)
     .execute(&mut *tx)
     .await?;
-
-    let location: ChairLocation = sqlx::query_as("SELECT * FROM chair_locations WHERE id = ?")
-        .bind(chair_location_id)
-        .fetch_one(&mut *tx)
-        .await?;
 
     let ride: Option<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
@@ -173,7 +171,7 @@ async fn chair_post_coordinate(
     tx.commit().await?;
 
     Ok(axum::Json(ChairPostCoordinateResponse {
-        recorded_at: location.created_at.timestamp_millis(),
+        recorded_at: created_at.timestamp_millis(),
     }))
 }
 
