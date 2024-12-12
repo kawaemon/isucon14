@@ -124,6 +124,45 @@ impl Repository {
 
 // rides
 impl Repository {
+    pub async fn rides_user_ongoing(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        user: &Id<User>,
+    ) -> Result<bool> {
+        let mut tx = tx.into();
+
+        let q = sqlx::query_as("SELECT * FROM rides WHERE user_id = ?").bind(user);
+
+        let rides: Vec<Ride> = maybe_tx!(self, tx, q.fetch_all)?;
+
+        for ride in rides {
+            let status = self.ride_status_latest(tx.as_deref_mut(), &ride.id).await?;
+            if status != RideStatusEnum::Completed {
+                return Ok(true);
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub async fn rides_get_assigned(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        chair_id: &Id<Chair>,
+    ) -> Result<Option<(Ride, RideStatusEnum)>> {
+        let mut tx = tx.into();
+        let q = sqlx::query_as(
+            "SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1",
+        )
+        .bind(chair_id);
+
+        let Some(ride): Option<Ride> = maybe_tx!(self, tx, q.fetch_optional)? else {
+            return Ok(None);
+        };
+
+        let status = self.ride_status_latest(tx, &ride.id).await?;
+        Ok(Some((ride, status)))
+    }
     pub async fn rides_new(
         &self,
         tx: impl Into<Option<&mut Tx>>,
@@ -144,25 +183,6 @@ impl Repository {
 
         maybe_tx!(self, tx, q.execute)?;
         Ok(())
-    }
-
-    pub async fn rides_get_assigned(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        chair_id: &Id<Chair>,
-    ) -> Result<Option<(Ride, RideStatusEnum)>> {
-        let mut tx = tx.into();
-        let q = sqlx::query_as(
-            "SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1",
-        )
-        .bind(chair_id);
-
-        let Some(ride): Option<Ride> = maybe_tx!(self, tx, q.fetch_optional)? else {
-            return Ok(None);
-        };
-
-        let status = self.ride_status_latest(tx, &ride.id).await?;
-        Ok(Some((ride, status)))
     }
 }
 

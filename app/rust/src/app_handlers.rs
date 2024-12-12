@@ -220,7 +220,7 @@ async fn app_get_rides(
         let fare = calculate_discounted_fare(
             &mut tx,
             &user.id,
-            Some(&ride),
+            Some(&ride.id),
             ride.pickup_coord(),
             ride.destination_coord(),
         )
@@ -285,20 +285,7 @@ async fn app_post_rides(
 
     let mut tx = pool.begin().await?;
 
-    let rides: Vec<Ride> = sqlx::query_as("SELECT * FROM rides WHERE user_id = ?")
-        .bind(&user.id)
-        .fetch_all(&mut *tx)
-        .await?;
-
-    let mut continuing_ride_count = 0;
-    for ride in rides {
-        let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
-        if status != RideStatusEnum::Completed {
-            continuing_ride_count += 1;
-        }
-    }
-
-    if continuing_ride_count > 0 {
+    if repo.rides_user_ongoing(&mut tx, &user.id).await? {
         return Err(Error::Conflict("ride already exists"));
     }
 
@@ -361,17 +348,12 @@ async fn app_post_rides(
         }
     }
 
-    let ride: Ride = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
-        .bind(&ride_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
     let fare = calculate_discounted_fare(
         &mut tx,
         &user.id,
-        Some(&ride),
-        ride.pickup_coord(),
-        ride.destination_coord(),
+        Some(&ride_id),
+        req.pickup_coordinate,
+        req.destination_coordinate,
     )
     .await?;
 
@@ -488,7 +470,7 @@ async fn app_post_ride_evaluation(
     let fare = calculate_discounted_fare(
         &mut tx,
         &ride.user_id,
-        Some(&ride),
+        Some(&ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
     )
@@ -601,7 +583,7 @@ async fn app_get_notification_inner(
     let fare = calculate_discounted_fare(
         &mut tx,
         &user.id,
-        Some(&ride),
+        Some(&ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
     )
@@ -799,17 +781,14 @@ async fn app_get_nearby_chairs(
 async fn calculate_discounted_fare(
     tx: &mut sqlx::MySqlConnection,
     user_id: &Id<User>,
-    ride: Option<&Ride>,
-    mut pickup: Coordinate,
-    mut dest: Coordinate,
+    ride_id: Option<&Id<Ride>>,
+    pickup: Coordinate,
+    dest: Coordinate,
 ) -> sqlx::Result<i32> {
-    let discount = if let Some(ride) = ride {
-        pickup = ride.pickup_coord();
-        dest = ride.destination_coord();
-
+    let discount = if let Some(ride_id) = ride_id {
         // すでにクーポンが紐づいているならそれの割引額を参照
         let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE used_by = ?")
-            .bind(&ride.id)
+            .bind(ride_id)
             .fetch_optional(&mut *tx)
             .await?;
         coupon.map(|c| c.discount).unwrap_or(0)
