@@ -1,7 +1,14 @@
+use std::time::Duration;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::Event;
+use axum::response::Sse;
 use axum_extra::extract::CookieJar;
+use futures::Stream;
 use sqlx::Type;
+use tokio_stream::wrappers::IntervalStream;
+use tokio_stream::StreamExt;
 use ulid::Ulid;
 
 use crate::models::{
@@ -536,12 +543,6 @@ async fn app_post_ride_evaluation(
 }
 
 #[derive(Debug, serde::Serialize)]
-struct AppGetNotificationResponse {
-    data: Option<AppGetNotificationResponseData>,
-    retry_after_ms: Option<i32>,
-}
-
-#[derive(Debug, serde::Serialize)]
 struct AppGetNotificationResponseData {
     ride_id: Id<Ride>,
     pickup_coordinate: Coordinate,
@@ -569,9 +570,27 @@ struct AppGetNotificationResponseChairStats {
 }
 
 async fn app_get_notification(
-    State(AppState { pool, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
-) -> Result<axum::Json<AppGetNotificationResponse>, Error> {
+) -> Sse<impl Stream<Item = Result<Event, Error>>> {
+    let stream =
+        IntervalStream::new(tokio::time::interval(Duration::from_millis(30))).then(move |_| {
+            let state = state.clone();
+            let user = user.clone();
+            async move {
+                let s = app_get_notification_inner(&state, &user).await?;
+                let s = serde_json::to_string(&s).unwrap();
+                Ok(Event::default().data(s))
+            }
+        });
+
+    Sse::new(stream)
+}
+
+async fn app_get_notification_inner(
+    AppState { pool, .. }: &AppState,
+    user: &User,
+) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let mut tx = pool.begin().await?;
 
     let Some(ride): Option<Ride> =
@@ -580,10 +599,7 @@ async fn app_get_notification(
             .fetch_optional(&mut *tx)
             .await?
     else {
-        return Ok(axum::Json(AppGetNotificationResponse {
-            data: None,
-            retry_after_ms: Some(30),
-        }));
+        return Ok(None);
     };
 
     let yet_sent_ride_status: Option<RideStatus> = sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
@@ -652,10 +668,7 @@ async fn app_get_notification(
 
     tx.commit().await?;
 
-    Ok(axum::Json(AppGetNotificationResponse {
-        data: Some(data),
-        retry_after_ms: Some(30),
-    }))
+    Ok(Some(data))
 }
 
 async fn get_chair_stats(
