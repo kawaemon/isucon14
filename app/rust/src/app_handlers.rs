@@ -476,10 +476,10 @@ async fn app_post_ride_evaluation(
     async fn retrieve_rides_order_by_created_at_asc(
         tx: &mut sqlx::MySqlConnection,
         user_id: &Id<User>,
-    ) -> Result<Vec<Ride>, Error> {
-        sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at ASC")
+    ) -> Result<i32, Error> {
+        sqlx::query_scalar("SELECT count(*) FROM rides WHERE user_id = ?")
             .bind(user_id)
-            .fetch_all(tx)
+            .fetch_one(tx)
             .await
             .map_err(Error::Sqlx)
     }
@@ -495,6 +495,8 @@ async fn app_post_ride_evaluation(
     .await?;
 
     tx.commit().await?;
+
+    tracing::info!("evaluation done");
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
         fare,
