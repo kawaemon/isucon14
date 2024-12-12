@@ -7,14 +7,10 @@ use axum::response::Sse;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use futures::Stream;
-use sqlx::Type;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
-use ulid::Ulid;
 
-use crate::models::{
-    Chair, ChairLocation, Coupon, Id, Owner, PaymentToken, Ride, RideStatus, RideStatusEnum, User,
-};
+use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
 use crate::{AppState, Coordinate, Error};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -64,31 +60,32 @@ struct AppPostUsersRequest {
 
 #[derive(Debug, serde::Serialize)]
 struct AppPostUsersResponse {
-    id: String,
+    id: Id<User>,
     invitation_code: String,
 }
 
 async fn app_post_users(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<AppPostUsersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
-    let user_id = Ulid::new().to_string();
+    let user_id = Id::new();
     let access_token = crate::secure_random_str(32);
     let invitation_code = crate::secure_random_str(15);
 
     let mut tx = pool.begin().await?;
 
-    sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code) VALUES (?, ?, ?, ?, ?, ?, ?)")
-        .bind(&user_id)
-        .bind(req.username)
-        .bind(req.firstname)
-        .bind(req.lastname)
-        .bind(req.date_of_birth)
-        .bind(&access_token)
-        .bind(&invitation_code)
-        .execute(&mut *tx)
-        .await?;
+    repo.user_add(
+        &mut tx,
+        &user_id,
+        &req.username,
+        &req.firstname,
+        &req.lastname,
+        &req.date_of_birth,
+        &access_token,
+        &invitation_code,
+    )
+    .await?;
 
     // 初回登録キャンペーンのクーポンを付与
     sqlx::query("INSERT INTO coupons (user_id, code, discount) VALUES (?, ?, ?)")
@@ -161,16 +158,11 @@ struct AppPostPaymentMethodsRequest {
 }
 
 async fn app_post_payment_methods(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostPaymentMethodsRequest>,
 ) -> Result<StatusCode, Error> {
-    sqlx::query("INSERT INTO payment_tokens (user_id, token) VALUES (?, ?)")
-        .bind(user.id)
-        .bind(req.token)
-        .execute(&pool)
-        .await?;
-
+    repo.payment_token_add(&user.id, &req.token).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -447,11 +439,8 @@ async fn app_post_ride_evaluation(
     repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
         .await?;
 
-    let Some(payment_token): Option<PaymentToken> =
-        sqlx::query_as("SELECT * FROM payment_tokens WHERE user_id = ?")
-            .bind(&ride.user_id)
-            .fetch_optional(&mut *tx)
-            .await?
+    let Some(payment_token): Option<String> =
+        repo.payment_token_get(&mut tx, &ride.user_id).await?
     else {
         return Err(Error::BadRequest("payment token not registered"));
     };
@@ -480,7 +469,7 @@ async fn app_post_ride_evaluation(
 
     crate::payment_gateway::request_payment_gateway_post_payment(
         &payment_gateway_url,
-        &payment_token.token,
+        &payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
         &mut tx,
         &ride.user_id,

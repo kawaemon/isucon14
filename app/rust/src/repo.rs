@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use sqlx::{pool::maybe, MySql, Pool, Transaction};
+use sqlx::{MySql, Pool, Transaction};
 
 use crate::{
     models::{Chair, ChairLocation, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
@@ -41,6 +41,53 @@ impl Repository {
             .await?;
         Ok(t)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn user_add(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        id: &Id<User>,
+        username: &str,
+        first: &str,
+        last: &str,
+        dob: &str,
+        token: &str,
+        inv_code: &str,
+    ) -> Result<()> {
+        let mut tx = tx.into();
+        let q = sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code) VALUES (?, ?, ?, ?, ?, ?, ?)")
+            .bind(id)
+            .bind(username)
+            .bind(first)
+            .bind(last)
+            .bind(dob)
+            .bind(token)
+            .bind(inv_code);
+        maybe_tx!(self, tx, q.execute)?;
+        Ok(())
+    }
+}
+
+// payment_token
+impl Repository {
+    pub async fn payment_token_get(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        user: &Id<User>,
+    ) -> Result<Option<String>> {
+        let mut tx = tx.into();
+        let q = sqlx::query_scalar("SELECT token FROM payment_tokens WHERE user_id = ?").bind(user);
+        Ok(maybe_tx!(self, tx, q.fetch_optional)?)
+    }
+
+    pub async fn payment_token_add(&self, user: &Id<User>, token: &str) -> Result<()> {
+        sqlx::query("INSERT INTO payment_tokens (user_id, token) VALUES (?, ?)")
+            .bind(user)
+            .bind(token)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 // owners
@@ -51,6 +98,27 @@ impl Repository {
             .fetch_optional(&self.pool)
             .await?;
         Ok(t)
+    }
+
+    // write
+
+    pub async fn owner_add(
+        &self,
+        id: &Id<Owner>,
+        name: &str,
+        token: &str,
+        chair_reg_token: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO owners (id, name, access_token, chair_register_token) VALUES (?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(name)
+        .bind(token)
+        .bind(chair_reg_token)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 

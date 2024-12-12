@@ -67,7 +67,7 @@ async fn do_matching(AppState { pool, .. }: &AppState) -> Result<StatusCode, Err
         }
     }
 
-    if matches > 0 {
+    if waiting > 0 {
         tracing::info!("waiting={waiting}, matches={matches}");
     }
 

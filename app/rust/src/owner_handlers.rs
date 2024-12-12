@@ -31,28 +31,21 @@ struct OwnerPostOwnersRequest {
 
 #[derive(Debug, serde::Serialize)]
 struct OwnerPostOwnersResponse {
-    id: String,
+    id: Id<Owner>,
     chair_register_token: String,
 }
 
 async fn owner_post_owners(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<OwnerPostOwnersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<OwnerPostOwnersResponse>)), Error> {
-    let owner_id = ulid::Ulid::new().to_string();
+    let owner_id = Id::new();
     let access_token = crate::secure_random_str(32);
     let chair_register_token = crate::secure_random_str(32);
 
-    sqlx::query(
-        "INSERT INTO owners (id, name, access_token, chair_register_token) VALUES (?, ?, ?, ?)",
-    )
-    .bind(&owner_id)
-    .bind(req.name)
-    .bind(&access_token)
-    .bind(&chair_register_token)
-    .execute(&pool)
-    .await?;
+    repo.owner_add(&owner_id, &req.name, &access_token, &chair_register_token)
+        .await?;
 
     let jar = jar.add(Cookie::build(("owner_session", access_token)).path("/"));
 
