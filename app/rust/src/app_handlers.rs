@@ -450,7 +450,7 @@ async fn app_post_ride_evaluation(
 
     let payment_gateway_url: String = repo.pgw_get(&mut tx).await?;
 
-    async fn retrieve_rides_order_by_created_at_asc(
+    async fn get_ride_count(
         tx: &mut sqlx::MySqlConnection,
         user_id: &Id<User>,
     ) -> Result<i32, Error> {
@@ -467,7 +467,7 @@ async fn app_post_ride_evaluation(
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
         &mut tx,
         &ride.user_id,
-        retrieve_rides_order_by_created_at_asc,
+        get_ride_count,
     )
     .await?;
 
