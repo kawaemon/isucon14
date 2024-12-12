@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::State;
@@ -29,7 +30,7 @@ async fn internal_get_matching(_: State<AppState>) -> Result<StatusCode, Error> 
 }
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
-async fn do_matching(AppState { pool, .. }: &AppState) -> Result<StatusCode, Error> {
+async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCode, Error> {
     let waiting_rides: Vec<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at")
             .fetch_all(pool)
@@ -56,11 +57,7 @@ async fn do_matching(AppState { pool, .. }: &AppState) -> Result<StatusCode, Err
             .await?;
 
             if empty {
-                sqlx::query("UPDATE rides SET chair_id = ? WHERE id = ?")
-                    .bind(matched.id)
-                    .bind(ride.id)
-                    .execute(pool)
-                    .await?;
+                repo.rides_assign(&ride.id, &matched.id).await?;
                 matches += 1;
                 break;
             }

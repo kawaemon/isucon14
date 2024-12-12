@@ -211,11 +211,8 @@ async fn chair_get_notification_inner(
         .fetch_one(&mut *tx)
         .await?;
 
-    if let Some(yet_sent_ride_status_id) = yet_sent_ride_status_id {
-        sqlx::query("UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
-            .bind(yet_sent_ride_status_id)
-            .execute(&mut *tx)
-            .await?;
+    if let Some(y) = yet_sent_ride_status_id {
+        repo.ride_status_chair_notified(&mut tx, &y).await?;
     }
 
     tx.commit().await?;

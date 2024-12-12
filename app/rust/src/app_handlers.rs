@@ -140,6 +140,8 @@ async fn app_post_users(
     let jar = jar
         .add(axum_extra::extract::cookie::Cookie::build(("app_session", access_token)).path("/"));
 
+    tracing::info!("new user added");
+
     Ok((
         jar,
         (
@@ -424,17 +426,9 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let updated_at = Utc::now();
-    let result = sqlx::query("UPDATE rides SET evaluation = ?, updated_at = ? WHERE id = ?")
-        .bind(req.evaluation)
-        .bind(updated_at)
-        .bind(&ride_id)
-        .execute(&mut *tx)
+    let updated_at = repo
+        .rides_set_evaluation(&mut tx, &ride_id, req.evaluation)
         .await?;
-    let count = result.rows_affected();
-    if count == 0 {
-        return Err(Error::NotFound("ride not found"));
-    }
 
     repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
         .await?;
@@ -594,9 +588,7 @@ async fn app_get_notification_inner(
     }
 
     if let Some(ride_status_id) = ride_status_id {
-        sqlx::query("UPDATE ride_statuses SET app_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
-            .bind(ride_status_id)
-            .execute(&mut *tx)
+        repo.ride_status_app_notified(&mut tx, &ride_status_id)
             .await?;
     }
 

@@ -323,6 +323,9 @@ impl Repository {
         let status = self.ride_status_latest(tx, &ride.id).await?;
         Ok(Some((ride, status)))
     }
+
+    // writes
+
     pub async fn rides_new(
         &self,
         tx: impl Into<Option<&mut Tx>>,
@@ -344,6 +347,34 @@ impl Repository {
         maybe_tx!(self, tx, q.execute)?;
         Ok(())
     }
+
+    pub async fn rides_assign(&self, ride_id: &Id<Ride>, chair_id: &Id<Chair>) -> Result<()> {
+        sqlx::query("update rides set chair_id = ? where id = ?")
+            .bind(chair_id)
+            .bind(ride_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn rides_set_evaluation(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        id: &Id<Ride>,
+        eval: i32,
+    ) -> Result<DateTime<Utc>> {
+        let now = Utc::now();
+        let mut tx = tx.into();
+
+        let q = sqlx::query("UPDATE rides SET evaluation = ?, updated_at = ? WHERE id = ?")
+            .bind(eval)
+            .bind(now)
+            .bind(id);
+
+        maybe_tx!(self, tx, q.execute)?;
+
+        Ok(now)
+    }
 }
 
 // ride_status
@@ -364,6 +395,8 @@ impl Repository {
         Ok(s)
     }
 
+    // writes
+
     pub async fn ride_status_update(
         &self,
         tx: impl Into<Option<&mut Tx>>,
@@ -375,6 +408,37 @@ impl Repository {
             .bind(Id::<RideStatus>::new())
             .bind(ride_id)
             .bind(status);
+
+        maybe_tx!(self, tx, q.execute)?;
+
+        Ok(())
+    }
+
+    pub async fn ride_status_chair_notified(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        status_id: &Id<RideStatus>,
+    ) -> Result<()> {
+        let mut tx = tx.into();
+        let q = sqlx::query(
+            "UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?",
+        )
+        .bind(status_id);
+
+        maybe_tx!(self, tx, q.execute)?;
+
+        Ok(())
+    }
+
+    pub async fn ride_status_app_notified(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        status_id: &Id<RideStatus>,
+    ) -> Result<()> {
+        let mut tx = tx.into();
+        let q =
+            sqlx::query("UPDATE ride_statuses SET app_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
+                .bind(status_id);
 
         maybe_tx!(self, tx, q.execute)?;
 
