@@ -6,7 +6,7 @@ use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::models::{Chair, Owner, Ride};
+use crate::models::{Chair, Id, Owner, Ride};
 use crate::{AppState, Error};
 
 pub fn owner_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -70,7 +70,7 @@ async fn owner_post_owners(
 
 #[derive(Debug, serde::Serialize)]
 struct ChairSales {
-    id: String,
+    id: Id<Chair>,
     name: String,
     sales: i32,
 }

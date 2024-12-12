@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use axum::{http::StatusCode, response::Response};
+use models::{Id, Ride, RideStatusEnum};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -62,7 +63,10 @@ pub fn secure_random_str(b: usize) -> String {
     hex::encode(&buf)
 }
 
-pub async fn get_latest_ride_status<'e, E>(executor: E, ride_id: &str) -> sqlx::Result<String>
+pub async fn get_latest_ride_status<'e, E>(
+    executor: E,
+    ride_id: &Id<Ride>,
+) -> sqlx::Result<RideStatusEnum>
 where
     E: 'e + sqlx::Executor<'e, Database = sqlx::MySql>,
 {

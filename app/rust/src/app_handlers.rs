@@ -1,9 +1,12 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum_extra::extract::CookieJar;
+use sqlx::Type;
 use ulid::Ulid;
 
-use crate::models::{Chair, ChairLocation, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
+use crate::models::{
+    Chair, ChairLocation, Coupon, Id, Owner, PaymentToken, Ride, RideStatus, RideStatusEnum, User,
+};
 use crate::{AppState, Coordinate, Error};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -170,7 +173,7 @@ struct GetAppRidesResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct GetAppRidesResponseItem {
-    id: String,
+    id: Id<Ride>,
     pickup_coordinate: Coordinate,
     destination_coordinate: Coordinate,
     chair: GetAppRidesResponseItemChair,
@@ -182,7 +185,7 @@ struct GetAppRidesResponseItem {
 
 #[derive(Debug, serde::Serialize)]
 struct GetAppRidesResponseItemChair {
-    id: String,
+    id: Id<Chair>,
     owner: String,
     name: String,
     model: String,
@@ -203,7 +206,7 @@ async fn app_get_rides(
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
         let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-        if status != "COMPLETED" {
+        if status != RideStatusEnum::Completed {
             continue;
         }
 
@@ -285,7 +288,7 @@ async fn app_post_rides(
     let mut continuing_ride_count = 0;
     for ride in rides {
         let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-        if status != "COMPLETED" {
+        if status != RideStatusEnum::Completed {
             continuing_ride_count += 1;
         }
     }
@@ -457,7 +460,7 @@ async fn app_post_ride_evaluation(
     };
     let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
 
-    if status != "ARRIVED" {
+    if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
@@ -474,7 +477,7 @@ async fn app_post_ride_evaluation(
     sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
         .bind(Ulid::new().to_string())
         .bind(&ride_id)
-        .bind("COMPLETED")
+        .bind(RideStatusEnum::Completed)
         .execute(&mut *tx)
         .await?;
 
@@ -513,7 +516,7 @@ async fn app_post_ride_evaluation(
 
     async fn retrieve_rides_order_by_created_at_asc(
         tx: &mut sqlx::MySqlConnection,
-        user_id: &str,
+        user_id: &Id<User>,
     ) -> Result<Vec<Ride>, Error> {
         sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at ASC")
             .bind(user_id)
@@ -548,11 +551,11 @@ struct AppGetNotificationResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct AppGetNotificationResponseData {
-    ride_id: String,
+    ride_id: Id<Ride>,
     pickup_coordinate: Coordinate,
     destination_coordinate: Coordinate,
     fare: i32,
-    status: String,
+    status: RideStatusEnum,
     #[serde(skip_serializing_if = "Option::is_none")]
     chair: Option<AppGetNotificationResponseChair>,
     created_at: i64,
@@ -561,7 +564,7 @@ struct AppGetNotificationResponseData {
 
 #[derive(Debug, serde::Serialize)]
 struct AppGetNotificationResponseChair {
-    id: String,
+    id: Id<Chair>,
     name: String,
     model: String,
     stats: AppGetNotificationResponseChairStats,
@@ -665,7 +668,7 @@ async fn app_get_notification(
 
 async fn get_chair_stats(
     tx: &mut sqlx::MySqlConnection,
-    chair_id: &str,
+    chair_id: &Id<Chair>,
 ) -> Result<AppGetNotificationResponseChairStats, Error> {
     let rides: Vec<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC")
@@ -684,19 +687,19 @@ async fn get_chair_stats(
 
         if !ride_statuses
             .iter()
-            .any(|status| status.status == "ARRIVED")
+            .any(|status| status.status == RideStatusEnum::Arrived)
         {
             continue;
         }
         if !ride_statuses
             .iter()
-            .any(|status| (status.status == "CARRYING"))
+            .any(|status| (status.status == RideStatusEnum::Carrying))
         {
             continue;
         }
         let is_completed = ride_statuses
             .iter()
-            .any(|status| status.status == "COMPLETED");
+            .any(|status| status.status == RideStatusEnum::Completed);
         if !is_completed {
             continue;
         }
@@ -732,7 +735,7 @@ struct AppGetNearbyChairsResponse {
 
 #[derive(Debug, serde::Serialize)]
 struct AppGetNearbyChairsResponseChair {
-    id: String,
+    id: Id<Chair>,
     name: String,
     model: String,
     current_coordinate: Coordinate,
@@ -770,7 +773,7 @@ async fn app_get_nearby_chairs(
         for ride in rides {
             // 過去にライドが存在し、かつ、それが完了していない場合はスキップ
             let status = crate::get_latest_ride_status(&mut *tx, &ride.id).await?;
-            if status != "COMPLETED" {
+            if status != RideStatusEnum::Completed {
                 skip = true;
                 break;
             }
@@ -821,7 +824,7 @@ async fn app_get_nearby_chairs(
 
 async fn calculate_discounted_fare(
     tx: &mut sqlx::MySqlConnection,
-    user_id: &str,
+    user_id: &Id<User>,
     ride: Option<&Ride>,
     mut pickup_latitude: i32,
     mut pickup_longitude: i32,
