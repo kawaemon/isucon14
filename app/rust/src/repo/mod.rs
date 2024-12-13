@@ -1,6 +1,9 @@
+mod cache_init;
 mod location;
 
+use cache_init::CacheInit;
 use chrono::{DateTime, Utc};
+use location::ChairLocationCache;
 use sqlx::{MySql, Pool, Transaction};
 
 use crate::{
@@ -27,11 +30,18 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub struct Repository {
     pool: Pool<MySql>,
+
+    chair_location_cache: ChairLocationCache,
 }
 
 impl Repository {
-    pub fn new(pool: &Pool<MySql>) -> Self {
-        Self { pool: pool.clone() }
+    pub async fn new(pool: &Pool<MySql>) -> Self {
+        let mut init = CacheInit::load(pool).await;
+
+        Self {
+            pool: pool.clone(),
+            chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
+        }
     }
 }
 

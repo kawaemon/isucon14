@@ -140,8 +140,6 @@ async fn app_post_users(
     let jar = jar
         .add(axum_extra::extract::cookie::Cookie::build(("app_session", access_token)).path("/"));
 
-    tracing::info!("new user added");
-
     Ok((
         jar,
         (
@@ -472,8 +470,6 @@ async fn app_post_ride_evaluation(
     .await?;
 
     tx.commit().await?;
-
-    tracing::info!("evaluation done");
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
         fare,

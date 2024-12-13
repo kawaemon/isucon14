@@ -90,7 +90,7 @@ impl<'de, T> serde::Deserialize<'de> for Id<T> {
         Ok(Self(String::deserialize(deserializer)?, PhantomData))
     }
 }
-impl<T: std::hash::Hash> std::hash::Hash for Id<T> {
+impl<T> std::hash::Hash for Id<T> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.0.hash(state);
     }
@@ -100,6 +100,7 @@ impl<T> PartialEq<Id<T>> for Id<T> {
         self.0 == other.0
     }
 }
+impl<T> Eq for Id<T> {}
 impl<'r, T> sqlx::Encode<'r, MySql> for Id<T> {
     fn encode_by_ref(
         &self,
@@ -146,7 +147,7 @@ pub struct Chair {
 #[derive(Debug, sqlx::FromRow)]
 pub struct ChairLocation {
     pub id: Id<ChairLocation>,
-    pub chair_id: String,
+    pub chair_id: Id<Chair>,
     pub latitude: i32,
     pub longitude: i32,
     pub created_at: DateTime<Utc>,

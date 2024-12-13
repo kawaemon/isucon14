@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?;
 
-    let repo = Arc::new(Repository::new(&pool));
+    let repo = Arc::new(Repository::new(&pool).await);
     let app_state = AppState { pool, repo };
 
     spawn_matching_thread(app_state.clone());

@@ -70,8 +70,6 @@ where
                 .map_err(PaymentGatewayError::Reqwest)?;
 
             if res.status() != reqwest::StatusCode::NO_CONTENT {
-                tracing::warn!("pgw request failed?");
-
                 // エラーが返ってきても成功している場合があるので、社内決済マイクロサービスに問い合わせ
                 let get_res = reqwest::Client::new()
                     .get(format!("{payment_gateway_url}/payments"))

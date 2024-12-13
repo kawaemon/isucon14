@@ -84,8 +84,6 @@ async fn chair_post_chairs(
 
     let jar = jar.add(Cookie::build(("chair_session", access_token)).path("/"));
 
-    tracing::info!("new chair registered");
-
     Ok((
         jar,
         (
