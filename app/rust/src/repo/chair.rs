@@ -224,14 +224,17 @@ impl Repository {
     }
 
     pub async fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
+        let now = Utc::now();
         {
             let mut cache = self.chair_cache.by_id.write().await;
             let mut entry = cache.get_mut(id).unwrap().write().await;
             entry.is_active = active;
+            entry.updated_at = now;
         }
 
-        sqlx::query("UPDATE chairs SET is_active = ? WHERE id = ?")
+        sqlx::query("UPDATE chairs SET is_active = ?, updated_at = ? WHERE id = ?")
             .bind(active)
+            .bind(now)
             .bind(id)
             .execute(&self.pool)
             .await?;

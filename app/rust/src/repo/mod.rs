@@ -1,12 +1,14 @@
 mod cache_init;
-mod chairs;
+mod chair;
 mod location;
+mod user;
 
 use cache_init::CacheInit;
-use chairs::ChairCache;
+use chair::ChairCache;
 use chrono::{DateTime, Utc};
 use location::ChairLocationCache;
 use sqlx::{MySql, Pool, Transaction};
+use user::UserCache;
 
 use crate::{
     models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
@@ -32,6 +34,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Repository {
     pool: Pool<MySql>,
 
+    user_cache: UserCache,
     chair_cache: ChairCache,
     chair_location_cache: ChairLocationCache,
 }
@@ -42,45 +45,11 @@ impl Repository {
 
         Self {
             pool: pool.clone(),
+
+            user_cache: Self::init_user_cache(&mut init).await,
             chair_cache: Self::init_chair_cache(&mut init).await,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
         }
-    }
-}
-
-// users
-impl Repository {
-    pub async fn user_get_by_acess_token(&self, token: &str) -> Result<Option<User>> {
-        let t = sqlx::query_as("SELECT * FROM users WHERE access_token = ?")
-            .bind(token)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(t)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn user_add(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        id: &Id<User>,
-        username: &str,
-        first: &str,
-        last: &str,
-        dob: &str,
-        token: &str,
-        inv_code: &str,
-    ) -> Result<()> {
-        let mut tx = tx.into();
-        let q = sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code) VALUES (?, ?, ?, ?, ?, ?, ?)")
-            .bind(id)
-            .bind(username)
-            .bind(first)
-            .bind(last)
-            .bind(dob)
-            .bind(token)
-            .bind(inv_code);
-        maybe_tx!(self, tx, q.execute)?;
-        Ok(())
     }
 }
 

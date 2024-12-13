@@ -204,10 +204,7 @@ async fn chair_get_notification_inner(
         (None, repo.ride_status_latest(&mut tx, &ride.id).await?)
     };
 
-    let user: User = sqlx::query_as("SELECT * FROM users WHERE id = ? FOR SHARE")
-        .bind(ride.user_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let user: User = repo.user_get_by_id(&ride.user_id).await?.unwrap();
 
     if let Some(y) = yet_sent_ride_status_id {
         repo.ride_status_chair_notified(&mut tx, &y).await?;

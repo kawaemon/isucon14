@@ -1,7 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use axum::{http::StatusCode, response::Response};
-use models::{Id, Ride, RideStatusEnum};
 use repo::Repository;
 
 #[derive(Debug, Clone)]

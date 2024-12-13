@@ -29,7 +29,7 @@ impl Deferred {
         let pool = pool.clone();
         let queue = Arc::new(Mutex::new(vec![]));
 
-        let mqueue = queue.clone();
+        let mqueue = Arc::clone(&queue);
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
@@ -40,24 +40,28 @@ impl Deferred {
                 let frx = rx.recv();
                 tokio::pin!(frx);
 
+                let mut lock;
+
                 tokio::select! {
-                    _ = &mut sleep => { }
+                    _ = &mut sleep => {
+                        lock = mqueue.lock().await;
+                    }
                     _ = &mut frx => {
-                        if mqueue.lock().await.len() < threshold {
+                        lock = mqueue.lock().await;
+                        if lock.len() < threshold {
                             continue;
                         }
                     }
                 }
 
-                let mut queue = mqueue.lock().await;
-                if queue.is_empty() {
+                if lock.is_empty() {
                     continue;
                 }
 
                 let mut query = sqlx::QueryBuilder::new(
                     "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
                 );
-                query.push_values(queue.iter(), |mut b, e: &ChairLocation| {
+                query.push_values(lock.iter(), |mut b, e: &ChairLocation| {
                     b.push_bind(&e.id)
                         .push_bind(&e.chair_id)
                         .push_bind(e.latitude)
@@ -66,8 +70,8 @@ impl Deferred {
                 });
                 query.build().execute(&pool).await.unwrap();
 
-                tracing::info!("pushed {} locations", queue.len());
-                queue.clear();
+                tracing::info!("pushed {} locations", lock.len());
+                lock.clear();
             }
         });
 
