@@ -3,7 +3,7 @@ use tokio::sync::RwLock;
 
 use crate::models::{Id, User};
 
-use super::{cache_init::CacheInit, maybe_tx, Repository, Result, Tx};
+use super::{cache_init::CacheInit, Repository, Result, Tx};
 
 pub type PtCache = Arc<RwLock<HashMap<Id<User>, String>>>;
 

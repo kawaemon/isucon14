@@ -77,9 +77,17 @@ impl FromStr for RideStatusEnum {
     }
 }
 
-#[derive(Debug, Clone)]
 pub struct Id<T>(pub String, PhantomData<fn() -> T>);
-
+impl<T> std::fmt::Debug for Id<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl<T> std::clone::Clone for Id<T> {
+    fn clone(&self) -> Self {
+        Id(self.0.clone(), PhantomData)
+    }
+}
 impl<T> serde::Serialize for Id<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
