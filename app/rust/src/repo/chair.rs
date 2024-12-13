@@ -37,7 +37,7 @@ impl ChairCacheInner {
 }
 
 impl Repository {
-    pub(super) async fn init_chair_cache(init: &mut CacheInit) -> ChairCache {
+    pub(super) fn init_chair_cache(init: &mut CacheInit) -> ChairCache {
         let mut bid = HashMap::new();
         let mut ac = HashMap::new();
         let mut owner = HashMap::new();

@@ -28,7 +28,7 @@ impl UserCacheInner {
 }
 
 impl Repository {
-    pub(super) async fn init_user_cache(init: &mut CacheInit) -> UserCache {
+    pub(super) fn init_user_cache(init: &mut CacheInit) -> UserCache {
         let mut id = HashMap::new();
         let mut t = HashMap::new();
         for user in &init.users {

@@ -28,7 +28,7 @@ impl OwnerCacheInner {
 }
 
 impl Repository {
-    pub(super) async fn init_owner_cache(init: &mut CacheInit) -> OwnerCache {
+    pub(super) fn init_owner_cache(init: &mut CacheInit) -> OwnerCache {
         let mut id = HashMap::new();
         let mut t = HashMap::new();
         for owner in &init.owners {

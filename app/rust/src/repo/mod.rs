@@ -2,6 +2,7 @@ mod cache_init;
 mod chair;
 mod location;
 mod owner;
+mod payment_token;
 mod pgw;
 mod user;
 
@@ -10,6 +11,7 @@ use chair::ChairCache;
 use chrono::{DateTime, Utc};
 use location::ChairLocationCache;
 use owner::OwnerCache;
+use payment_token::PtCache;
 use pgw::PgwCache;
 use sqlx::{MySql, Pool, Transaction};
 use user::UserCache;
@@ -43,6 +45,7 @@ pub struct Repository {
     chair_cache: ChairCache,
     chair_location_cache: ChairLocationCache,
     pgw_cache: PgwCache,
+    pt_cache: PtCache,
 }
 
 impl Repository {
@@ -52,34 +55,13 @@ impl Repository {
         Self {
             pool: pool.clone(),
 
-            user_cache: Self::init_user_cache(&mut init).await,
-            owner_cache: Self::init_owner_cache(&mut init).await,
-            chair_cache: Self::init_chair_cache(&mut init).await,
+            user_cache: Self::init_user_cache(&mut init),
+            owner_cache: Self::init_owner_cache(&mut init),
+            chair_cache: Self::init_chair_cache(&mut init),
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,
+            pt_cache: Self::init_pt_cache(&mut init),
         }
-    }
-}
-
-// payment_token
-impl Repository {
-    pub async fn payment_token_get(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        user: &Id<User>,
-    ) -> Result<Option<String>> {
-        let mut tx = tx.into();
-        let q = sqlx::query_scalar("SELECT token FROM payment_tokens WHERE user_id = ?").bind(user);
-        Ok(maybe_tx!(self, tx, q.fetch_optional)?)
-    }
-
-    pub async fn payment_token_add(&self, user: &Id<User>, token: &str) -> Result<()> {
-        sqlx::query("INSERT INTO payment_tokens (user_id, token) VALUES (?, ?)")
-            .bind(user)
-            .bind(token)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
     }
 }
 
