@@ -49,14 +49,14 @@ impl Repository {
         let Some(entry) = cache.get(token) else {
             return Ok(None);
         };
-        Ok(Some(User::clone(&entry)))
+        Ok(Some(User::clone(entry)))
     }
     pub async fn user_get_by_id(&self, id: &Id<User>) -> Result<Option<User>> {
         let cache = self.user_cache.by_id.read().await;
         let Some(entry) = cache.get(id) else {
             return Ok(None);
         };
-        Ok(Some(User::clone(&entry)))
+        Ok(Some(User::clone(entry)))
     }
 
     #[allow(clippy::too_many_arguments)]

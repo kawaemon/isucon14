@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool};
@@ -40,38 +44,43 @@ impl Deferred {
                 let frx = rx.recv();
                 tokio::pin!(frx);
 
-                let mut lock;
+                let mut thistime = vec![];
+                {
+                    let mut lock;
 
-                tokio::select! {
-                    _ = &mut sleep => {
-                        lock = mqueue.lock().await;
-                    }
-                    _ = &mut frx => {
-                        lock = mqueue.lock().await;
-                        if lock.len() < threshold {
-                            continue;
+                    tokio::select! {
+                        _ = &mut sleep => {
+                            lock = mqueue.lock().await;
+                        }
+                        _ = &mut frx => {
+                            lock = mqueue.lock().await;
+                            if lock.len() < threshold {
+                                continue;
+                            }
                         }
                     }
+                    let range = 0..lock.len().min(threshold);
+                    thistime.extend(lock.drain(range));
                 }
 
-                if lock.is_empty() {
+                if thistime.is_empty() {
                     continue;
                 }
-
                 let mut query = sqlx::QueryBuilder::new(
                     "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
                 );
-                query.push_values(lock.iter(), |mut b, e: &ChairLocation| {
+                query.push_values(thistime.iter(), |mut b, e: &ChairLocation| {
                     b.push_bind(&e.id)
                         .push_bind(&e.chair_id)
                         .push_bind(e.latitude)
                         .push_bind(e.longitude)
                         .push_bind(e.created_at);
                 });
-                query.build().execute(&pool).await.unwrap();
 
-                tracing::info!("pushed {} locations", lock.len());
-                lock.clear();
+                let t = Instant::now();
+                query.build().execute(&pool).await.unwrap();
+                let e = t.elapsed().as_millis();
+                tracing::info!("pushed {} locations in {e} ms", thistime.len());
             }
         });
 

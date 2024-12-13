@@ -100,7 +100,7 @@ where
         .await;
 
         if let Err(err) = result {
-            tracing::warn!("[{}/{RETRY_COUNT}] pgw request failed: retrying", retry + 1);
+            tracing::warn!("pgw request failed: retrying [{}/{RETRY_COUNT}]", retry + 1);
             if retry < RETRY_COUNT {
                 retry += 1;
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
