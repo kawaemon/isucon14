@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use crate::{
     app_handlers::ChairStats,
-    models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum},
+    models::{Chair, Id, Owner, Ride, RideStatusEnum},
 };
 
 use super::{cache_init::CacheInit, maybe_tx, Repository, Result, Tx};
@@ -14,25 +14,52 @@ pub type ChairCache = Arc<ChairCacheInner>;
 
 type SharedChair = Arc<RwLock<Chair>>;
 
+#[derive(Debug, Clone)]
+struct ChairStat {
+    total_evaluation: i32,
+    total_rides: i32,
+}
+impl ChairStat {
+    fn new() -> Self {
+        Self {
+            total_evaluation: 0,
+            total_rides: 0,
+        }
+    }
+    fn update(&mut self, eval: i32) {
+        self.total_evaluation += eval;
+        self.total_rides += 1;
+    }
+}
+
 #[derive(Debug)]
 pub struct ChairCacheInner {
     by_id: RwLock<HashMap<Id<Chair>, SharedChair>>,
     by_access_token: RwLock<HashMap<String, SharedChair>>,
     by_owner: RwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
+
+    stats: RwLock<HashMap<Id<Chair>, ChairStat>>,
 }
 
 impl ChairCacheInner {
-    async fn push_chair(&self, c: Chair) {
+    pub async fn push_chair(&self, c: Chair) {
         let shared = Arc::new(RwLock::new(c.clone()));
         let mut id = self.by_id.write().await;
         let mut ac = self.by_access_token.write().await;
         let mut ow = self.by_owner.write().await;
+        let mut st = self.stats.write().await;
 
-        id.insert(c.id, Arc::clone(&shared));
+        id.insert(c.id.clone(), Arc::clone(&shared));
         ac.insert(c.access_token, Arc::clone(&shared));
         ow.entry(c.owner_id)
             .or_insert_with(Vec::new)
             .push(Arc::clone(&shared));
+        st.insert(c.id, ChairStat::new());
+    }
+
+    pub async fn on_eval(&self, chair_id: &Id<Chair>, eval: i32) {
+        let mut cache = self.stats.write().await;
+        cache.get_mut(chair_id).unwrap().update(eval);
     }
 }
 
@@ -41,6 +68,7 @@ impl Repository {
         let mut bid = HashMap::new();
         let mut ac = HashMap::new();
         let mut owner = HashMap::new();
+        let mut stats = HashMap::new();
         for chair in &init.chairs {
             let c = Arc::new(RwLock::new(chair.clone()));
             bid.insert(chair.id.clone(), Arc::clone(&c));
@@ -49,12 +77,22 @@ impl Repository {
                 .entry(chair.owner_id.clone())
                 .or_insert_with(Vec::new)
                 .push(Arc::clone(&c));
+            stats.insert(chair.id.clone(), ChairStat::new());
+        }
+
+        for s in &init.rides {
+            if let Some(eval) = s.evaluation.as_ref() {
+                let chair_id = s.chair_id.as_ref().unwrap();
+                let stat = stats.get_mut(chair_id).unwrap();
+                stat.update(*eval);
+            }
         }
 
         ChairCache::new(ChairCacheInner {
             by_id: RwLock::new(bid),
             by_access_token: RwLock::new(ac),
             by_owner: RwLock::new(owner),
+            stats: RwLock::new(stats),
         })
     }
 }
@@ -95,57 +133,27 @@ impl Repository {
         Ok(res)
     }
 
+    // COMPLETED なものを集める(1)
     pub async fn chair_get_stats(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
+        _tx: impl Into<Option<&mut Tx>>,
         id: &Id<Chair>,
     ) -> Result<ChairStats> {
-        let mut tx = tx.into();
+        let stat: ChairStat = {
+            let cache = self.chair_cache.stats.read().await;
+            cache.get(id).unwrap().clone()
+        };
 
-        let q = sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC")
-            .bind(id);
-        let rides: Vec<Ride> = maybe_tx!(self, tx, q.fetch_all)?;
-
-        let mut total_ride_count = 0;
-        let mut total_evaluation = 0.0;
-        for ride in rides {
-            let q =
-                sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? ORDER BY created_at")
-                    .bind(&ride.id);
-
-            let ride_statuses: Vec<RideStatus> = maybe_tx!(self, tx, q.fetch_all)?;
-
-            if !ride_statuses
-                .iter()
-                .any(|status| status.status == RideStatusEnum::Arrived)
-            {
-                continue;
+        let total_evaluation_avg = {
+            if stat.total_rides > 0 {
+                stat.total_evaluation as f64 / stat.total_rides as f64
+            } else {
+                0.0
             }
-            if !ride_statuses
-                .iter()
-                .any(|status| (status.status == RideStatusEnum::Carrying))
-            {
-                continue;
-            }
-            let is_completed = ride_statuses
-                .iter()
-                .any(|status| status.status == RideStatusEnum::Completed);
-            if !is_completed {
-                continue;
-            }
-
-            total_ride_count += 1;
-            total_evaluation += ride.evaluation.unwrap() as f64;
-        }
-
-        let total_evaluation_avg = if total_ride_count > 0 {
-            total_evaluation / total_ride_count as f64
-        } else {
-            0.0
         };
 
         Ok(ChairStats {
-            total_rides_count: total_ride_count,
+            total_rides_count: stat.total_rides as i32,
             total_evaluation_avg,
         })
     }

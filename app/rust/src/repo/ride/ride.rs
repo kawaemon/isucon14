@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::time::Duration;
+
 use crate::models::{Chair, Id, Ride, RideStatusEnum, User};
 use crate::repo::{maybe_tx, Repository, Result, Tx};
 use crate::Coordinate;
@@ -89,6 +92,7 @@ impl Repository {
         &self,
         tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
+        chair_id: &Id<Chair>,
         eval: i32,
     ) -> Result<DateTime<Utc>> {
         let now = Utc::now();
@@ -100,6 +104,16 @@ impl Repository {
             .bind(id);
 
         maybe_tx!(self, tx, q.execute)?;
+
+        // 更新が早すぎて警告が出る
+        {
+            let chair_cache = Arc::clone(&self.chair_cache);
+            let chair_id = chair_id.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                chair_cache.on_eval(&chair_id, eval).await;
+            });
+        }
 
         Ok(now)
     }

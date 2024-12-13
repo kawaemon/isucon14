@@ -423,13 +423,6 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let updated_at = repo
-        .rides_set_evaluation(&mut tx, &ride_id, req.evaluation)
-        .await?;
-
-    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
-        .await?;
-
     let Some(payment_token): Option<String> =
         repo.payment_token_get(&mut tx, &ride.user_id).await?
     else {
@@ -467,6 +460,13 @@ async fn app_post_ride_evaluation(
         get_ride_count,
     )
     .await?;
+
+    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
+        .await?;
+    let chair_id = ride.chair_id.as_ref().unwrap();
+    let updated_at = repo
+        .rides_set_evaluation(&mut tx, &ride_id, chair_id, req.evaluation)
+        .await?;
 
     tx.commit().await?;
 

@@ -13,6 +13,7 @@ use location::ChairLocationCache;
 use owner::OwnerCache;
 use payment_token::PtCache;
 use pgw::PgwCache;
+use ride::RideCache;
 use sqlx::{MySql, Pool, Transaction};
 use user::UserCache;
 
@@ -41,6 +42,7 @@ pub struct Repository {
     owner_cache: OwnerCache,
     chair_cache: ChairCache,
     chair_location_cache: ChairLocationCache,
+    ride_cache: RideCache,
     pgw_cache: PgwCache,
     pt_cache: PtCache,
 }
@@ -55,6 +57,7 @@ impl Repository {
             user_cache: Self::init_user_cache(&mut init),
             owner_cache: Self::init_owner_cache(&mut init),
             chair_cache: Self::init_chair_cache(&mut init),
+            ride_cache: Self::init_ride_cache(pool, &mut init).await,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init),
