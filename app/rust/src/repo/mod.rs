@@ -1,12 +1,14 @@
 mod cache_init;
 mod chair;
 mod location;
+mod owner;
 mod user;
 
 use cache_init::CacheInit;
 use chair::ChairCache;
 use chrono::{DateTime, Utc};
 use location::ChairLocationCache;
+use owner::OwnerCache;
 use sqlx::{MySql, Pool, Transaction};
 use user::UserCache;
 
@@ -35,6 +37,7 @@ pub struct Repository {
     pool: Pool<MySql>,
 
     user_cache: UserCache,
+    owner_cache: OwnerCache,
     chair_cache: ChairCache,
     chair_location_cache: ChairLocationCache,
 }
@@ -47,6 +50,7 @@ impl Repository {
             pool: pool.clone(),
 
             user_cache: Self::init_user_cache(&mut init).await,
+            owner_cache: Self::init_owner_cache(&mut init).await,
             chair_cache: Self::init_chair_cache(&mut init).await,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
         }
@@ -71,47 +75,6 @@ impl Repository {
             .bind(token)
             .execute(&self.pool)
             .await?;
-        Ok(())
-    }
-}
-
-// owners
-impl Repository {
-    pub async fn owner_get_by_access_token(&self, token: &str) -> Result<Option<Owner>> {
-        let t = sqlx::query_as("SELECT * FROM owners WHERE access_token = ?")
-            .bind(token)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(t)
-    }
-    pub async fn owner_get_by_id(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Owner>,
-    ) -> Result<Option<Owner>> {
-        let mut tx = tx.into();
-        let q = sqlx::query_as("SELECT * FROM owners WHERE id = ?").bind(id);
-        Ok(maybe_tx!(self, tx, q.fetch_optional)?)
-    }
-
-    // write
-
-    pub async fn owner_add(
-        &self,
-        id: &Id<Owner>,
-        name: &str,
-        token: &str,
-        chair_reg_token: &str,
-    ) -> Result<()> {
-        sqlx::query(
-            "INSERT INTO owners (id, name, access_token, chair_register_token) VALUES (?, ?, ?, ?)",
-        )
-        .bind(id)
-        .bind(name)
-        .bind(token)
-        .bind(chair_reg_token)
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 }

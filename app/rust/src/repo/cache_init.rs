@@ -1,9 +1,10 @@
 use sqlx::{MySql, Pool};
 
-use crate::models::{Chair, ChairLocation, User};
+use crate::models::{Chair, ChairLocation, Owner, User};
 
 pub struct CacheInit {
     pub users: Vec<User>,
+    pub owners: Vec<Owner>,
     pub chairs: Vec<Chair>,
     pub locations: Vec<ChairLocation>,
 }
@@ -12,6 +13,10 @@ impl CacheInit {
     pub async fn load(pool: &Pool<MySql>) -> Self {
         Self {
             users: sqlx::query_as("select * from users")
+                .fetch_all(pool)
+                .await
+                .unwrap(),
+            owners: sqlx::query_as("select * from owners")
                 .fetch_all(pool)
                 .await
                 .unwrap(),
