@@ -29,12 +29,8 @@ async fn internal_get_matching(_: State<AppState>) -> Result<StatusCode, Error> 
     Ok(StatusCode::NO_CONTENT)
 }
 
-// このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCode, Error> {
-    let waiting_rides: Vec<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at")
-            .fetch_all(pool)
-            .await?;
+    let waiting_rides: Vec<Ride> = repo.rides_waiting_for_match().await?;
     let waiting = waiting_rides.len();
 
     let mut matches = 0;
@@ -42,9 +38,9 @@ async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCod
     for ride in waiting_rides {
         for _ in 0..10 {
             let Some(matched): Option<Chair> =
-            sqlx::query_as("SELECT * FROM chairs INNER JOIN (SELECT id FROM chairs WHERE is_active = TRUE ORDER BY RAND() LIMIT 1) AS tmp ON chairs.id = tmp.id LIMIT 1")
-                .fetch_optional(pool)
-                .await?
+                sqlx::query_as("SELECT * FROM chairs INNER JOIN (SELECT id FROM chairs WHERE is_active = TRUE ORDER BY RAND() LIMIT 1) AS tmp ON chairs.id = tmp.id LIMIT 1")
+                    .fetch_optional(pool)
+                    .await?
             else {
                 return Ok(StatusCode::NO_CONTENT);
             };

@@ -11,7 +11,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
-use crate::{AppState, Coordinate, Error};
+use crate::{AppState, Coordinate, Error, RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
@@ -219,15 +219,14 @@ async fn app_get_rides(
         )
         .await?;
 
-        let chair: Chair = sqlx::query_as("SELECT * FROM chairs WHERE id = ?")
-            .bind(&ride.chair_id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let owner: Owner = sqlx::query_as("SELECT * FROM owners WHERE id = ?")
-            .bind(chair.owner_id)
-            .fetch_one(&mut *tx)
-            .await?;
+        let chair: Chair = repo
+            .chair_get_by_id(&mut tx, ride.chair_id.as_ref().unwrap())
+            .await?
+            .unwrap();
+        let owner: Owner = repo
+            .owner_get_by_id(&mut tx, &chair.owner_id)
+            .await?
+            .unwrap();
 
         items.push(GetAppRidesResponseItem {
             pickup_coordinate: ride.pickup_coord(),
@@ -495,21 +494,21 @@ struct AppGetNotificationResponseChair {
     id: Id<Chair>,
     name: String,
     model: String,
-    stats: AppGetNotificationResponseChairStats,
+    stats: ChairStats,
 }
 
 #[derive(Debug, serde::Serialize)]
-struct AppGetNotificationResponseChairStats {
-    total_rides_count: i32,
-    total_evaluation_avg: f64,
+pub struct ChairStats {
+    pub total_rides_count: i32,
+    pub total_evaluation_avg: f64,
 }
 
 async fn app_get_notification(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let stream =
-        IntervalStream::new(tokio::time::interval(Duration::from_millis(30))).then(move |_| {
+    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(RETRY_MS_APP)))
+        .then(move |_| {
             let state = state.clone();
             let user = user.clone();
             async move {
@@ -568,12 +567,8 @@ async fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair: Chair = sqlx::query_as("SELECT * FROM chairs WHERE id = ?")
-            .bind(chair_id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-        let stats = get_chair_stats(&mut tx, &chair.id).await?;
+        let chair: Chair = repo.chair_get_by_id(&mut tx, &chair_id).await?.unwrap();
+        let stats = repo.chair_get_stats(&mut tx, &chair.id).await?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
@@ -591,60 +586,6 @@ async fn app_get_notification_inner(
     tx.commit().await?;
 
     Ok(Some(data))
-}
-
-async fn get_chair_stats(
-    tx: &mut sqlx::MySqlConnection,
-    chair_id: &Id<Chair>,
-) -> Result<AppGetNotificationResponseChairStats, Error> {
-    let rides: Vec<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC")
-            .bind(chair_id)
-            .fetch_all(&mut *tx)
-            .await?;
-
-    let mut total_ride_count = 0;
-    let mut total_evaluation = 0.0;
-    for ride in rides {
-        let ride_statuses: Vec<RideStatus> =
-            sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? ORDER BY created_at")
-                .bind(&ride.id)
-                .fetch_all(&mut *tx)
-                .await?;
-
-        if !ride_statuses
-            .iter()
-            .any(|status| status.status == RideStatusEnum::Arrived)
-        {
-            continue;
-        }
-        if !ride_statuses
-            .iter()
-            .any(|status| (status.status == RideStatusEnum::Carrying))
-        {
-            continue;
-        }
-        let is_completed = ride_statuses
-            .iter()
-            .any(|status| status.status == RideStatusEnum::Completed);
-        if !is_completed {
-            continue;
-        }
-
-        total_ride_count += 1;
-        total_evaluation += ride.evaluation.unwrap() as f64;
-    }
-
-    let total_evaluation_avg = if total_ride_count > 0 {
-        total_evaluation / total_ride_count as f64
-    } else {
-        0.0
-    };
-
-    Ok(AppGetNotificationResponseChairStats {
-        total_rides_count: total_ride_count,
-        total_evaluation_avg,
-    })
 }
 
 #[derive(Debug, serde::Deserialize)]

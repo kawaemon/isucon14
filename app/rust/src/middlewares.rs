@@ -35,7 +35,7 @@ pub async fn owner_auth_middleware(
         return Err(Error::Unauthorized("owner_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(owner): Option<Owner> = repo.owner_get_by_acess_token(access_token).await? else {
+    let Some(owner): Option<Owner> = repo.owner_get_by_access_token(access_token).await? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -54,7 +54,7 @@ pub async fn chair_auth_middleware(
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(chair): Option<Chair> = repo.chair_get_by_acess_token(access_token).await? else {
+    let Some(chair): Option<Chair> = repo.chair_get_by_access_token(access_token).await? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 

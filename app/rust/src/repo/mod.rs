@@ -1,14 +1,15 @@
 mod cache_init;
+mod chairs;
 mod location;
 
 use cache_init::CacheInit;
+use chairs::ChairCache;
 use chrono::{DateTime, Utc};
 use location::ChairLocationCache;
 use sqlx::{MySql, Pool, Transaction};
 
 use crate::{
-    models::{Chair, ChairLocation, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
-    owner_handlers::MysqlDecimal,
+    models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum, User},
     Coordinate, Error,
 };
 
@@ -31,6 +32,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Repository {
     pool: Pool<MySql>,
 
+    chair_cache: ChairCache,
     chair_location_cache: ChairLocationCache,
 }
 
@@ -40,6 +42,7 @@ impl Repository {
 
         Self {
             pool: pool.clone(),
+            chair_cache: Self::init_chair_cache(&mut init).await,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
         }
     }
@@ -105,12 +108,21 @@ impl Repository {
 
 // owners
 impl Repository {
-    pub async fn owner_get_by_acess_token(&self, token: &str) -> Result<Option<Owner>> {
+    pub async fn owner_get_by_access_token(&self, token: &str) -> Result<Option<Owner>> {
         let t = sqlx::query_as("SELECT * FROM owners WHERE access_token = ?")
             .bind(token)
             .fetch_optional(&self.pool)
             .await?;
         Ok(t)
+    }
+    pub async fn owner_get_by_id(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        id: &Id<Owner>,
+    ) -> Result<Option<Owner>> {
+        let mut tx = tx.into();
+        let q = sqlx::query_as("SELECT * FROM owners WHERE id = ?").bind(id);
+        Ok(maybe_tx!(self, tx, q.fetch_optional)?)
     }
 
     // write
@@ -131,89 +143,6 @@ impl Repository {
         .bind(chair_reg_token)
         .execute(&self.pool)
         .await?;
-        Ok(())
-    }
-}
-
-// chairs
-impl Repository {
-    pub async fn chair_get_by_acess_token(&self, token: &str) -> Result<Option<Chair>> {
-        let t = sqlx::query_as("SELECT * FROM chairs WHERE access_token = ?")
-            .bind(token)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(t)
-    }
-
-    pub async fn chair_get_by_owner(&self, owner: &Id<Owner>) -> Result<Vec<Chair>> {
-        let t = sqlx::query_as("SELECT * FROM chairs WHERE owner_id = ?")
-            .bind(owner)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(t)
-    }
-
-    /// latest が completed になっていればよい
-    pub async fn chair_get_completeds(&self, tx: impl Into<Option<&mut Tx>>) -> Result<Vec<Chair>> {
-        let mut tx = tx.into();
-
-        let q = sqlx::query_as("SELECT * FROM chairs");
-        let chairs: Vec<Chair> = maybe_tx!(self, tx, q.fetch_all)?;
-
-        let mut res = vec![];
-        'chair: for chair in chairs {
-            if !chair.is_active {
-                continue;
-            }
-
-            let q =
-                sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC")
-                    .bind(&chair.id);
-
-            let rides: Vec<Ride> = maybe_tx!(self, tx, q.fetch_all)?;
-
-            for ride in rides {
-                let status = self.ride_status_latest(tx.as_deref_mut(), &ride.id).await?;
-                if status != RideStatusEnum::Completed {
-                    continue 'chair;
-                }
-            }
-
-            res.push(chair);
-        }
-
-        Ok(res)
-    }
-
-    // writes
-
-    pub async fn chair_add(
-        &self,
-        id: &Id<Chair>,
-        owner: &Id<Owner>,
-        name: &str,
-        model: &str,
-        is_active: bool,
-        access_token: &str,
-    ) -> Result<()> {
-        sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token) VALUES (?, ?, ?, ?, ?, ?)")
-            .bind(id)
-            .bind(owner)
-            .bind(name)
-            .bind(model)
-            .bind(is_active)
-            .bind(access_token)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
-        sqlx::query("UPDATE chairs SET is_active = ? WHERE id = ?")
-            .bind(active)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
         Ok(())
     }
 }
@@ -239,6 +168,13 @@ impl Repository {
         }
 
         Ok(false)
+    }
+
+    pub async fn rides_waiting_for_match(&self) -> Result<Vec<Ride>> {
+        let t = sqlx::query_as("select * from rides where chair_id is null order by created_at")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(t)
     }
 
     pub async fn rides_get_assigned(

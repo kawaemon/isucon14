@@ -11,7 +11,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
-use crate::{AppState, Coordinate, Error};
+use crate::{AppState, Coordinate, Error, RETRY_MS_CHAIR};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes =
@@ -163,8 +163,8 @@ async fn chair_get_notification(
     State(state): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let stream =
-        IntervalStream::new(tokio::time::interval(Duration::from_millis(30))).then(move |_| {
+    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(RETRY_MS_CHAIR)))
+        .then(move |_| {
             let state = state.clone();
             let chair = chair.clone();
             async move {

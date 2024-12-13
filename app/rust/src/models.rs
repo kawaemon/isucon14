@@ -135,7 +135,7 @@ impl<T> Id<T> {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Chair {
     pub id: Id<Chair>,
-    pub owner_id: String,
+    pub owner_id: Id<Owner>,
     pub name: String,
     pub access_token: String,
     pub model: String,

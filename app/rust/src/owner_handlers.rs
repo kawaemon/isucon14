@@ -88,7 +88,7 @@ struct GetOwnerSalesQuery {
 }
 
 async fn owner_get_sales(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { pool, repo, .. }): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
     Query(query): Query<GetOwnerSalesQuery>,
 ) -> Result<axum::Json<OwnerGetSalesResponse>, Error> {
@@ -111,10 +111,7 @@ async fn owner_get_sales(
 
     let mut tx = pool.begin().await?;
 
-    let chairs: Vec<Chair> = sqlx::query_as("SELECT * FROM chairs WHERE owner_id = ?")
-        .bind(&owner.id)
-        .fetch_all(&mut *tx)
-        .await?;
+    let chairs: Vec<Chair> = repo.chair_get_by_owner(&owner.id).await?;
 
     let mut res = OwnerGetSalesResponse {
         total_sales: 0,
