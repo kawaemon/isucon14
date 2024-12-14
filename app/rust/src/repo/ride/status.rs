@@ -5,18 +5,11 @@ use crate::repo::{maybe_tx, Repository, Result, Tx};
 impl Repository {
     pub async fn ride_status_latest(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
+        _tx: impl Into<Option<&mut Tx>>,
         ride_id: &Id<Ride>,
     ) -> Result<RideStatusEnum> {
-        let mut tx = tx.into();
-        let q = sqlx::query_scalar(
-            "SELECT status FROM ride_statuses WHERE ride_id = ? ORDER BY created_at DESC LIMIT 1",
-        )
-        .bind(ride_id);
-
-        let s = maybe_tx!(self, tx, q.fetch_one)?;
-
-        Ok(s)
+        let cache = self.ride_cache.latest_ride_stat.read().await;
+        Ok(*cache.get(ride_id).unwrap())
     }
 
     // writes
@@ -35,6 +28,10 @@ impl Repository {
 
         maybe_tx!(self, tx, q.execute)?;
 
+        {
+            let mut cache = self.ride_cache.latest_ride_stat.write().await;
+            cache.insert(ride_id.clone(), status);
+        }
         Ok(())
     }
 
