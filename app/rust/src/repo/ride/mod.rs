@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use std::{
     collections::{HashMap, VecDeque},
-    hash::Hash,
     sync::Arc,
 };
 use tokio::sync::RwLock;
@@ -67,7 +66,8 @@ impl Repository {
                     ride_status_id: status.id.clone(),
                     status: status.status,
                 };
-                queue.push(b, status.app_sent_at.is_some());
+                let mark_sent = queue.push(b, status.app_sent_at.is_some());
+                assert!(!mark_sent);
             }
         }
 
@@ -92,7 +92,8 @@ impl Repository {
                     ride_status_id: status.id.clone(),
                     status: status.status,
                 };
-                queue.push(b, status.chair_sent_at.is_some());
+                let mark_sent = queue.push(b, status.chair_sent_at.is_some());
+                assert!(!mark_sent);
             }
         }
 
@@ -107,7 +108,7 @@ impl Repository {
                     destination: ride.destination_coord(),
                     created_at: ride.created_at,
                     chair_id: RwLock::new(ride.chair_id.clone()),
-                    evaluation: RwLock::new(ride.evaluation.clone()),
+                    evaluation: RwLock::new(ride.evaluation),
                     updated_at: RwLock::new(ride.updated_at),
                 }),
             );
@@ -137,7 +138,42 @@ impl RideCacheInner {
     }
 }
 
+pub struct NotificationTransceiver {
+    /// received notification must be sent (W)
+    pub notification_rx: tokio::sync::broadcast::Receiver<Option<NotificationBody>>,
+}
+
 impl Repository {
+    pub async fn chair_get_next_notification_sse(
+        &self,
+        id: &Id<Chair>,
+    ) -> Result<NotificationTransceiver> {
+        let mut cache = self.ride_cache.chair_notification.write().await;
+        let queue = cache.get_mut(id).unwrap();
+
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+
+        let next = queue.get_next();
+        tx.send(next.clone().map(|x| x.body)).unwrap();
+        let mut send = 1;
+
+        if let Some(mut next) = next {
+            while !next.sent {
+                next = queue.get_next().unwrap();
+                tx.send(Some(next.body.clone())).unwrap();
+                send += 1;
+            }
+        }
+
+        tracing::info!("chair sse beginning, sent to sync={send}");
+
+        queue.tx = Some(tx);
+
+        Ok(NotificationTransceiver {
+            notification_rx: rx,
+        })
+    }
+
     pub async fn chair_get_next_notification(
         &self,
         id: &Id<Chair>,
@@ -180,6 +216,8 @@ impl Repository {
 pub struct NotificationQueue {
     last_sent: Option<NotificationBody>,
     queue: VecDeque<NotificationBody>,
+
+    tx: Option<tokio::sync::broadcast::Sender<Option<NotificationBody>>>,
 }
 impl std::fmt::Debug for NotificationQueue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -205,19 +243,37 @@ impl NotificationQueue {
         Self {
             last_sent: None,
             queue: VecDeque::new(),
+            tx: None,
         }
     }
-    pub fn push(&mut self, b: NotificationBody, sent: bool) {
+
+    #[must_use = "if true returned, you must set sent flag"]
+    pub fn push(&mut self, b: NotificationBody, sent: bool) -> bool {
         if sent {
+            if self.tx.is_some() {
+                tracing::warn!("bug: sent notification pushed after tx registered");
+            }
             if !self.queue.is_empty() {
-                tracing::warn!("bug? sent notification after not-sent one; discarding queue");
+                tracing::warn!("bug?: sent notification after not-sent one; discarding queue");
                 self.queue.clear();
             }
             self.last_sent = Some(b);
-            return;
+            return false;
+        }
+        if let Some(tx) = self.tx.as_ref() {
+            assert!(self.queue.is_empty());
+            let sent = tx.send(Some(b.clone())).is_ok();
+            if sent {
+                tracing::debug!("queue: sse sent");
+                self.last_sent = Some(b);
+                return true;
+            }
+            tracing::warn!("notification queue tx dropped");
+            self.tx = None;
         }
         self.last_sent = None;
         self.queue.push_back(b);
+        false
     }
 
     pub fn get_next(&mut self) -> Option<NotificationEntry> {

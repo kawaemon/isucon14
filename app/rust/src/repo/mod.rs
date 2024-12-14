@@ -1,11 +1,11 @@
-mod cache_init;
-mod chair;
-mod location;
-mod owner;
-mod payment_token;
-mod pgw;
-mod ride;
-mod user;
+pub mod cache_init;
+pub mod chair;
+pub mod location;
+pub mod owner;
+pub mod payment_token;
+pub mod pgw;
+pub mod ride;
+pub mod user;
 
 use cache_init::CacheInit;
 use chair::ChairCache;

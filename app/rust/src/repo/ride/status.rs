@@ -44,11 +44,18 @@ impl Repository {
         };
         {
             let mut t = self.ride_cache.user_notification.write().await;
-            t.get_mut(user_id).unwrap().push(b.clone(), false);
+            let mark_sent = t.get_mut(user_id).unwrap().push(b.clone(), false);
+            if mark_sent {
+                self.ride_status_app_notified(tx.as_deref_mut(), &status_id)
+                    .await?;
+            }
         }
         if let Some(c) = chair_id {
             let mut t = self.ride_cache.chair_notification.write().await;
-            t.get_mut(c).unwrap().push(b.clone(), false);
+            let mark_sent = t.get_mut(c).unwrap().push(b.clone(), false);
+            if mark_sent {
+                self.ride_status_chair_notified(tx, &status_id).await?;
+            }
         }
         Ok(())
     }

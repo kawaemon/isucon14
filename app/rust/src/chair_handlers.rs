@@ -11,6 +11,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, User};
+use crate::repo::ride::NotificationBody;
 use crate::{AppState, Coordinate, Error, RETRY_MS_CHAIR};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -175,12 +176,23 @@ async fn chair_get_notification(
     State(state): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(RETRY_MS_CHAIR)))
-        .then(move |_| {
+    let ts = state
+        .repo
+        .chair_get_next_notification_sse(&chair.id)
+        .await
+        .unwrap();
+
+    let stream =
+        tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
+            let body = body.unwrap();
             let state = state.clone();
-            let chair = chair.clone();
+            if let Some(b) = body.as_ref() {
+                tracing::debug!("sending sse notification: {:?}={}", b.ride_id, b.status);
+            } else {
+                tracing::debug!("sending sse notification: None");
+            }
             async move {
-                let s = chair_get_notification_inner(&state, &chair).await?;
+                let s = chair_get_notification_inner(&state, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
                 Ok(Event::default().data(s))
             }
@@ -190,19 +202,14 @@ async fn chair_get_notification(
 }
 
 async fn chair_get_notification_inner(
-    AppState { pool, repo, .. }: &AppState,
-    chair: &Chair,
+    AppState { repo, .. }: &AppState,
+    body: Option<NotificationBody>,
 ) -> Result<Option<ChairGetNotificationResponseData>, Error> {
-    let mut tx = pool.begin().await?;
-
-    let Some(body) = repo.chair_get_next_notification(&chair.id).await? else {
+    let Some(body) = body else {
         return Ok(None);
     };
-
-    let ride = repo.ride_get(&mut tx, &body.ride_id).await?.unwrap();
+    let ride = repo.ride_get(None, &body.ride_id).await?.unwrap();
     let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
-
-    tx.commit().await?;
 
     Ok(Some(ChairGetNotificationResponseData {
         ride_id: ride.id,

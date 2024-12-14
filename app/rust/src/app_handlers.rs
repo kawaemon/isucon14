@@ -521,7 +521,7 @@ async fn app_get_notification_inner(
     let status = body.status;
 
     let fare = calculate_discounted_fare(
-        &pool,
+        pool,
         &user.id,
         Some(&ride.id),
         ride.pickup_coord(),

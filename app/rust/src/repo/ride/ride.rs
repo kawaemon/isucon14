@@ -142,7 +142,12 @@ impl Repository {
         }
         {
             let mut cache = self.ride_cache.chair_notification.write().await;
-            cache.get_mut(chair_id).unwrap().push(b, false);
+            let mark_sent = cache.get_mut(chair_id).unwrap().push(b, false);
+            if mark_sent {
+                self.ride_status_chair_notified(None, &status.id)
+                    .await
+                    .unwrap();
+            }
         }
         Ok(())
     }
