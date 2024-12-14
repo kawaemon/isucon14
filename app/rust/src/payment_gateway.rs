@@ -59,10 +59,9 @@ where
 {
     // 失敗したらとりあえずリトライ
     // FIXME: 社内決済マイクロサービスのインフラに異常が発生していて、同時にたくさんリクエストすると変なことになる可能性あり
-    let mut retry = 0;
 
-    loop {
-        let result = async {
+    for retry in 1.. {
+        let result: Result<(), Error> = async {
             let res = reqwest::Client::new()
                 .post(format!("{payment_gateway_url}/payments"))
                 .bearer_auth(token)
@@ -101,14 +100,9 @@ where
         }
         .await;
 
-        if let Err(err) = result {
-            tracing::warn!("pgw request failed: retrying [{}/{RETRY_COUNT}]", retry + 1);
-            if retry < RETRY_COUNT {
-                retry += 1;
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-                continue;
-            }
-            return Err(err);
+        if result.is_err() {
+            tracing::warn!("pgw request failed: retrying [{}/inf]", retry + 1);
+            continue;
         }
         break;
     }
