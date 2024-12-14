@@ -1,8 +1,10 @@
 use sqlx::{MySql, Pool};
+use tokio::sync::Semaphore;
 
 use crate::models::{Id, User};
 use crate::Error;
 use std::future::Future;
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentGatewayError {
@@ -44,9 +46,23 @@ where
     }
 }
 
-const RETRY_COUNT: usize = 5;
+const CONCURRENCY: usize = 10;
+const RETRY_LIMIT: usize = 10;
+
+#[derive(Debug, Clone)]
+pub struct PaymentGatewayRestricter {
+    sema: Arc<Semaphore>,
+}
+impl PaymentGatewayRestricter {
+    pub fn new() -> Self {
+        Self {
+            sema: Arc::new(Semaphore::new(CONCURRENCY)),
+        }
+    }
+}
 
 pub async fn request_payment_gateway_post_payment<F>(
+    pgw: &PaymentGatewayRestricter,
     payment_gateway_url: &str,
     token: &str,
     param: &PaymentGatewayPostPaymentRequest,
@@ -60,7 +76,11 @@ where
     // 失敗したらとりあえずリトライ
     // FIXME: 社内決済マイクロサービスのインフラに異常が発生していて、同時にたくさんリクエストすると変なことになる可能性あり
 
-    for retry in 1.. {
+    let _permit = pgw.sema.acquire().await.unwrap();
+    tracing::info!("permit acquired; remain = {}", pgw.sema.available_permits());
+
+    let mut retry = 0;
+    loop {
         let result: Result<(), Error> = async {
             let res = reqwest::Client::new()
                 .post(format!("{payment_gateway_url}/payments"))
@@ -101,7 +121,12 @@ where
         .await;
 
         if result.is_err() {
-            tracing::warn!("pgw request failed: retrying [{}/inf]", retry + 1);
+            if retry >= RETRY_LIMIT {
+                tracing::error!("pgw request failed: retrying limit reached");
+                break;
+            }
+            retry += 1;
+            // tracing::warn!("pgw request failed: retrying [{}/{RETRY_LIMIT}]", retry + 1);
             continue;
         }
         break;

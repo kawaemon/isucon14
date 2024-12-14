@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use axum::{http::StatusCode, response::Response};
+use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
+    pub pgw: PaymentGatewayRestricter,
 }
 
 #[derive(Debug, thiserror::Error)]

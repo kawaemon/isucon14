@@ -390,7 +390,9 @@ struct AppPostRideEvaluationResponse {
 }
 
 async fn app_post_ride_evaluation(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState {
+        pool, repo, pgw, ..
+    }): State<AppState>,
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
 ) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
@@ -432,6 +434,7 @@ async fn app_post_ride_evaluation(
     }
 
     crate::payment_gateway::request_payment_gateway_post_payment(
+        &pgw,
         &payment_gateway_url,
         &payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },

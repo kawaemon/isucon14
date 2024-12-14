@@ -22,7 +22,7 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
         }
         tokio::select! {
             _ = &mut timeout => {
-                tracing::warn!("{path} is taking {i} seconds and continuing...")
+                // tracing::warn!("{path} is taking {i} seconds and continuing...")
             }
             res = &mut response_fut => {
                 return Ok(res)

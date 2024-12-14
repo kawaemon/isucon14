@@ -1,4 +1,5 @@
 use axum::extract::State;
+use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
 use std::net::SocketAddr;
@@ -47,7 +48,8 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let repo = Arc::new(Repository::new(&pool).await);
-    let app_state = AppState { pool, repo };
+    let pgw = PaymentGatewayRestricter::new();
+    let app_state = AppState { pool, repo, pgw };
 
     spawn_matching_thread(app_state.clone());
 
