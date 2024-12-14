@@ -215,6 +215,7 @@ impl Repository {
                 updated_at: at,
             })
             .await;
+        self.ride_cache.on_chair_add(id).await;
 
         sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(id)

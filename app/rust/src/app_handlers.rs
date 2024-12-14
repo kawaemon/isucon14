@@ -10,7 +10,7 @@ use futures::Stream;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
-use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
+use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, User};
 use crate::{AppState, Coordinate, Error, RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -283,7 +283,7 @@ async fn app_post_rides(
         req.destination_coordinate,
     )
     .await?;
-    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Matching)
+    repo.ride_status_update(&mut tx, &ride_id, &user.id, None, RideStatusEnum::Matching)
         .await?;
 
     let ride_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rides WHERE user_id = ?")
@@ -461,9 +461,15 @@ async fn app_post_ride_evaluation(
     )
     .await?;
 
-    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
-        .await?;
     let chair_id = ride.chair_id.as_ref().unwrap();
+    repo.ride_status_update(
+        &mut tx,
+        &ride_id,
+        &ride.user_id,
+        Some(chair_id),
+        RideStatusEnum::Completed,
+    )
+    .await?;
     let updated_at = repo
         .rides_set_evaluation(&mut tx, &ride_id, chair_id, req.evaluation)
         .await?;
@@ -527,24 +533,12 @@ async fn app_get_notification_inner(
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let mut tx = pool.begin().await?;
 
-    let Some(ride): Option<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC LIMIT 1")
-            .bind(&user.id)
-            .fetch_optional(&mut *tx)
-            .await?
-    else {
+    let Some(body) = repo.app_get_next_notification(&user.id).await? else {
         return Ok(None);
     };
 
-    let yet_sent_ride_status: Option<RideStatus> = sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND app_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
-        .bind(&ride.id)
-        .fetch_optional(&mut *tx)
-        .await?;
-    let (ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status {
-        (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
-    } else {
-        (None, repo.ride_status_latest(&mut tx, &ride.id).await?)
-    };
+    let ride = repo.ride_get(&mut tx, &body.ride_id).await?.unwrap();
+    let status = body.status;
 
     let fare = calculate_discounted_fare(
         &mut tx,
@@ -576,11 +570,6 @@ async fn app_get_notification_inner(
             model: chair.model,
             stats,
         });
-    }
-
-    if let Some(ride_status_id) = ride_status_id {
-        repo.ride_status_app_notified(&mut tx, &ride_status_id)
-            .await?;
     }
 
     tx.commit().await?;

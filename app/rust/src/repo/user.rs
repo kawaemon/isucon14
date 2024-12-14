@@ -85,6 +85,7 @@ impl Repository {
             updated_at: now,
         };
         self.user_cache.push(u).await;
+        self.ride_cache.on_user_add(id).await;
 
         let q = sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(id)

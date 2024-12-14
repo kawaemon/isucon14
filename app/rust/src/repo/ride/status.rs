@@ -1,5 +1,7 @@
-use crate::models::{Id, Ride, RideStatus, RideStatusEnum};
+use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::{maybe_tx, Repository, Result, Tx};
+
+use super::NotificationBody;
 
 // ride_status
 impl Repository {
@@ -18,11 +20,14 @@ impl Repository {
         &self,
         tx: impl Into<Option<&mut Tx>>,
         ride_id: &Id<Ride>,
+        user_id: &Id<User>,
+        chair_id: Option<&Id<Chair>>,
         status: RideStatusEnum,
     ) -> Result<()> {
         let mut tx = tx.into();
+        let status_id = Id::<RideStatus>::new();
         let q = sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-            .bind(Id::<RideStatus>::new())
+            .bind(&status_id)
             .bind(ride_id)
             .bind(status);
 
@@ -31,6 +36,19 @@ impl Repository {
         {
             let mut cache = self.ride_cache.latest_ride_stat.write().await;
             cache.insert(ride_id.clone(), status);
+        }
+        let b = NotificationBody {
+            ride_id: ride_id.clone(),
+            ride_status_id: status_id.clone(),
+            status,
+        };
+        {
+            let mut t = self.ride_cache.user_notification.write().await;
+            t.get_mut(user_id).unwrap().push(b.clone(), false);
+        }
+        if let Some(c) = chair_id {
+            let mut t = self.ride_cache.chair_notification.write().await;
+            t.get_mut(c).unwrap().push(b.clone(), false);
         }
         Ok(())
     }

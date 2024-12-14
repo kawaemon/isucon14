@@ -10,7 +10,7 @@ use futures::Stream;
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
-use crate::models::{Chair, Id, Owner, Ride, RideStatus, RideStatusEnum, User};
+use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, User};
 use crate::{AppState, Coordinate, Error, RETRY_MS_CHAIR};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -127,13 +127,25 @@ async fn chair_post_coordinate(
 
     if let Some((ride, status)) = repo.rides_get_assigned(&mut tx, &chair.id).await? {
         if req == ride.pickup_coord() && status == RideStatusEnum::Enroute {
-            repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Pickup)
-                .await?;
+            repo.ride_status_update(
+                &mut tx,
+                &ride.id,
+                &ride.user_id,
+                Some(&chair.id),
+                RideStatusEnum::Pickup,
+            )
+            .await?;
         }
 
         if req == ride.destination_coord() && status == RideStatusEnum::Carrying {
-            repo.ride_status_update(&mut tx, &ride.id, RideStatusEnum::Arrived)
-                .await?;
+            repo.ride_status_update(
+                &mut tx,
+                &ride.id,
+                &ride.user_id,
+                Some(&chair.id),
+                RideStatusEnum::Arrived,
+            )
+            .await?;
         }
     }
 
@@ -183,32 +195,12 @@ async fn chair_get_notification_inner(
 ) -> Result<Option<ChairGetNotificationResponseData>, Error> {
     let mut tx = pool.begin().await?;
 
-    let Some(ride): Option<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1")
-            .bind(&chair.id)
-            .fetch_optional(&mut *tx)
-            .await?
-    else {
+    let Some(body) = repo.chair_get_next_notification(&chair.id).await? else {
         return Ok(None);
     };
 
-    let yet_sent_ride_status: Option<RideStatus> =
-        sqlx::query_as("SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1")
-            .bind(&ride.id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let (yet_sent_ride_status_id, status) = if let Some(yet_sent_ride_status) = yet_sent_ride_status
-    {
-        (Some(yet_sent_ride_status.id), yet_sent_ride_status.status)
-    } else {
-        (None, repo.ride_status_latest(&mut tx, &ride.id).await?)
-    };
-
-    let user: User = repo.user_get_by_id(&ride.user_id).await?.unwrap();
-
-    if let Some(y) = yet_sent_ride_status_id {
-        repo.ride_status_chair_notified(&mut tx, &y).await?;
-    }
+    let ride = repo.ride_get(&mut tx, &body.ride_id).await?.unwrap();
+    let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
 
     tx.commit().await?;
 
@@ -226,7 +218,7 @@ async fn chair_get_notification_inner(
             latitude: ride.destination_latitude,
             longitude: ride.destination_longitude,
         },
-        status,
+        status: body.status,
     }))
 }
 
@@ -251,7 +243,11 @@ async fn chair_post_ride_status(
         return Err(Error::NotFound("rides not found"));
     };
 
-    if ride.chair_id.is_none_or(|chair_id| chair_id != chair.id) {
+    if ride
+        .chair_id
+        .as_ref()
+        .is_none_or(|chair_id| chair_id != &chair.id)
+    {
         return Err(Error::BadRequest("not assigned to this ride"));
     }
 
@@ -271,7 +267,14 @@ async fn chair_post_ride_status(
         }
     };
 
-    repo.ride_status_update(&mut tx, &ride_id, next).await?;
+    repo.ride_status_update(
+        &mut tx,
+        &ride_id,
+        &ride.user_id,
+        Some(ride.chair_id.as_ref().unwrap()),
+        next,
+    )
+    .await?;
 
     tx.commit().await?;
 

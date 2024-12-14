@@ -1,13 +1,25 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::models::{Chair, Id, Ride, RideStatusEnum, User};
+use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::{maybe_tx, Repository, Result, Tx};
 use crate::Coordinate;
 use chrono::{DateTime, Utc};
 
+use super::NotificationBody;
+
 // rides
 impl Repository {
+    pub async fn ride_get(
+        &self,
+        tx: impl Into<Option<&mut Tx>>,
+        id: &Id<Ride>,
+    ) -> Result<Option<Ride>> {
+        let mut tx = tx.into();
+        let q = sqlx::query_as("select * from rides where id = ?").bind(id);
+        Ok(maybe_tx!(self, tx, q.fetch_optional)?)
+    }
+
     pub async fn rides_user_ongoing(
         &self,
         tx: impl Into<Option<&mut Tx>>,
@@ -85,6 +97,23 @@ impl Repository {
             .bind(ride_id)
             .execute(&self.pool)
             .await?;
+        let statuses: Vec<RideStatus> =
+            sqlx::query_as("select * from ride_statuses where ride_id = ?")
+                .bind(ride_id)
+                .fetch_all(&self.pool)
+                .await?;
+        assert!(statuses.len() == 1);
+        let status = &statuses[0];
+        assert!(status.status == RideStatusEnum::Matching);
+        let b = NotificationBody {
+            ride_id: ride_id.clone(),
+            ride_status_id: status.id.clone(),
+            status: RideStatusEnum::Matching,
+        };
+        {
+            let mut cache = self.ride_cache.chair_notification.write().await;
+            cache.get_mut(chair_id).unwrap().push(b, false);
+        }
         Ok(())
     }
 

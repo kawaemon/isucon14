@@ -222,7 +222,7 @@ impl Ride {
     }
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct RideStatus {
     pub id: Id<RideStatus>,
     pub ride_id: Id<Ride>,
