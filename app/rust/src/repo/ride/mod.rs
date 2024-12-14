@@ -159,13 +159,15 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
+                self.ride_status_chair_notified(None, &next.body.ride_status_id)
+                    .await?;
                 next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
             }
         }
 
-        tracing::info!("chair sse beginning, sent to sync={send}");
+        tracing::debug!("chair sse beginning, sent to sync={send}");
 
         queue.tx = Some(tx);
 
@@ -174,42 +176,36 @@ impl Repository {
         })
     }
 
-    pub async fn chair_get_next_notification(
-        &self,
-        id: &Id<Chair>,
-    ) -> Result<Option<NotificationBody>> {
-        let next = {
-            let mut cache = self.ride_cache.chair_notification.write().await;
-            let queue = cache.get_mut(id).unwrap();
-            let Some(next) = queue.get_next() else {
-                return Ok(None);
-            };
-            next
-        };
-        if !next.sent {
-            self.ride_status_chair_notified(None, &next.body.ride_status_id)
-                .await?;
-        }
-        Ok(Some(next.body))
-    }
-
-    pub async fn app_get_next_notification(
+    pub async fn user_get_next_notification_sse(
         &self,
         id: &Id<User>,
-    ) -> Result<Option<NotificationBody>> {
-        let next = {
-            let mut cache = self.ride_cache.user_notification.write().await;
-            let queue = cache.get_mut(id).unwrap();
-            let Some(next) = queue.get_next() else {
-                return Ok(None);
-            };
-            next
-        };
-        if !next.sent {
-            self.ride_status_app_notified(None, &next.body.ride_status_id)
-                .await?;
+    ) -> Result<NotificationTransceiver> {
+        let mut cache = self.ride_cache.user_notification.write().await;
+        let queue = cache.get_mut(id).unwrap();
+
+        let (tx, rx) = tokio::sync::broadcast::channel(8);
+
+        let next = queue.get_next();
+        tx.send(next.clone().map(|x| x.body)).unwrap();
+        let mut send = 1;
+
+        if let Some(mut next) = next {
+            while !next.sent {
+                self.ride_status_app_notified(None, &next.body.ride_status_id)
+                    .await?;
+                next = queue.get_next().unwrap();
+                tx.send(Some(next.body.clone())).unwrap();
+                send += 1;
+            }
         }
-        Ok(Some(next.body))
+
+        tracing::debug!("app sse beginning, sent to sync={send}");
+
+        queue.tx = Some(tx);
+
+        Ok(NotificationTransceiver {
+            notification_rx: rx,
+        })
     }
 }
 
@@ -268,7 +264,7 @@ impl NotificationQueue {
                 self.last_sent = Some(b);
                 return true;
             }
-            tracing::warn!("notification queue tx dropped");
+            tracing::debug!("notification queue tx dropped");
             self.tx = None;
         }
         self.last_sent = None;

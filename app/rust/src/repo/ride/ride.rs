@@ -175,15 +175,7 @@ impl Repository {
             e.set_evaluation(eval, now).await;
         }
 
-        // 更新が早すぎて警告が出る
-        {
-            let chair_cache = Arc::clone(&self.chair_cache);
-            let chair_id = chair_id.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                chair_cache.on_eval(&chair_id, eval).await;
-            });
-        }
+        self.chair_cache.on_eval(chair_id, eval).await;
 
         Ok(now)
     }

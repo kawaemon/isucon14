@@ -33,28 +33,29 @@ impl Repository {
 
         maybe_tx!(self, tx, q.execute)?;
 
-        {
-            let mut cache = self.ride_cache.latest_ride_stat.write().await;
-            cache.insert(ride_id.clone(), status);
-        }
         let b = NotificationBody {
             ride_id: ride_id.clone(),
             ride_status_id: status_id.clone(),
             status,
         };
+
         {
-            let mut t = self.ride_cache.user_notification.write().await;
-            let mark_sent = t.get_mut(user_id).unwrap().push(b.clone(), false);
+            let mut stat = self.ride_cache.latest_ride_stat.write().await;
+            stat.insert(ride_id.clone(), status);
+
+            let mut user = self.ride_cache.user_notification.write().await;
+            let mark_sent = user.get_mut(user_id).unwrap().push(b.clone(), false);
             if mark_sent {
                 self.ride_status_app_notified(tx.as_deref_mut(), &status_id)
                     .await?;
             }
-        }
-        if let Some(c) = chair_id {
-            let mut t = self.ride_cache.chair_notification.write().await;
-            let mark_sent = t.get_mut(c).unwrap().push(b.clone(), false);
-            if mark_sent {
-                self.ride_status_chair_notified(tx, &status_id).await?;
+
+            if let Some(c) = chair_id {
+                let mut chair = self.ride_cache.chair_notification.write().await;
+                let mark_sent = chair.get_mut(c).unwrap().push(b.clone(), false);
+                if mark_sent {
+                    self.ride_status_chair_notified(tx, &status_id).await?;
+                }
             }
         }
         Ok(())

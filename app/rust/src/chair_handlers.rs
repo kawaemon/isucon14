@@ -186,11 +186,6 @@ async fn chair_get_notification(
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
             let body = body.unwrap();
             let state = state.clone();
-            if let Some(b) = body.as_ref() {
-                tracing::debug!("sending sse notification: {:?}={}", b.ride_id, b.status);
-            } else {
-                tracing::debug!("sending sse notification: None");
-            }
             async move {
                 let s = chair_get_notification_inner(&state, body).await?;
                 let s = serde_json::to_string(&s).unwrap();

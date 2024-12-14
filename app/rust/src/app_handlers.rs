@@ -12,6 +12,7 @@ use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, User};
+use crate::repo::ride::NotificationBody;
 use crate::{AppState, Coordinate, Error, RETRY_MS_APP};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -66,9 +67,29 @@ struct AppPostUsersResponse {
 }
 
 async fn app_post_users(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<AppPostUsersRequest>,
+) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
+    let mut jar = Some(jar);
+    for retry in 1.. {
+        match app_post_users_inner(&state, &mut jar, &req).await {
+            Ok(t) => return Ok(t),
+            Err(Error::Sqlx(sqlx::Error::Database(e))) if matches!(e.code(), Some(s) if s == "40001") =>
+            {
+                tracing::warn!("user post deadlock; retrying {retry}");
+                continue;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    unreachable!()
+}
+
+async fn app_post_users_inner(
+    AppState { pool, repo, .. }: &AppState,
+    jar: &mut Option<CookieJar>,
+    req: &AppPostUsersRequest,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
     let user_id = Id::new();
     let access_token = crate::secure_random_str(32);
@@ -97,7 +118,7 @@ async fn app_post_users(
         .await?;
 
     // 招待コードを使った登録
-    if let Some(req_invitation_code) = req.invitation_code {
+    if let Some(req_invitation_code) = req.invitation_code.as_ref() {
         if !req_invitation_code.is_empty() {
             // 招待する側の招待数をチェック
             let coupons: Vec<Coupon> =
@@ -139,6 +160,8 @@ async fn app_post_users(
     tx.commit().await?;
 
     let jar = jar
+        .take()
+        .unwrap()
         .add(axum_extra::extract::cookie::Cookie::build(("app_session", access_token)).path("/"));
 
     Ok((
@@ -447,6 +470,9 @@ async fn app_post_ride_evaluation(
     let mut tx = pool.begin().await?;
 
     let chair_id = ride.chair_id.as_ref().unwrap();
+    let updated_at = repo
+        .rides_set_evaluation(&mut tx, &ride_id, chair_id, req.evaluation)
+        .await?;
     repo.ride_status_update(
         &mut tx,
         &ride_id,
@@ -455,9 +481,6 @@ async fn app_post_ride_evaluation(
         RideStatusEnum::Completed,
     )
     .await?;
-    let updated_at = repo
-        .rides_set_evaluation(&mut tx, &ride_id, chair_id, req.evaluation)
-        .await?;
 
     tx.commit().await?;
 
@@ -498,12 +521,24 @@ async fn app_get_notification(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let stream = IntervalStream::new(tokio::time::interval(Duration::from_millis(RETRY_MS_APP)))
-        .then(move |_| {
+    let ts = state
+        .repo
+        .user_get_next_notification_sse(&user.id)
+        .await
+        .unwrap();
+
+    let stream =
+        tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
+            let body = body.unwrap();
             let state = state.clone();
             let user = user.clone();
+            if let Some(b) = body.as_ref() {
+                tracing::debug!("sending sse notification: {:?}={}", b.ride_id, b.status);
+            } else {
+                tracing::debug!("sending sse notification: None");
+            }
             async move {
-                let s = app_get_notification_inner(&state, &user).await?;
+                let s = app_get_notification_inner(&state, &user.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
                 Ok(Event::default().data(s))
             }
@@ -514,18 +549,16 @@ async fn app_get_notification(
 
 async fn app_get_notification_inner(
     AppState { pool, repo, .. }: &AppState,
-    user: &User,
+    user_id: &Id<User>,
+    body: Option<NotificationBody>,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
-    let Some(body) = repo.app_get_next_notification(&user.id).await? else {
-        return Ok(None);
-    };
-
+    let Some(body) = body else { return Ok(None) };
     let ride = repo.ride_get(None, &body.ride_id).await?.unwrap();
     let status = body.status;
 
     let fare = calculate_discounted_fare(
         pool,
-        &user.id,
+        user_id,
         Some(&ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
