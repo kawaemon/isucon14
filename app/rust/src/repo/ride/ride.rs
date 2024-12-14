@@ -5,19 +5,22 @@ use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::{maybe_tx, Repository, Result, Tx};
 use crate::Coordinate;
 use chrono::{DateTime, Utc};
+use tokio::sync::RwLock;
 
-use super::NotificationBody;
+use super::{NotificationBody, RideEntry};
 
 // rides
 impl Repository {
     pub async fn ride_get(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
+        _tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
     ) -> Result<Option<Ride>> {
-        let mut tx = tx.into();
-        let q = sqlx::query_as("select * from rides where id = ?").bind(id);
-        Ok(maybe_tx!(self, tx, q.fetch_optional)?)
+        let cache = self.ride_cache.ride_cache.read().await;
+        let Some(e) = cache.get(id) else {
+            return Ok(None);
+        };
+        Ok(Some(e.ride().await))
     }
 
     pub async fn rides_user_ongoing(
@@ -78,22 +81,44 @@ impl Repository {
         dest: Coordinate,
     ) -> Result<()> {
         let mut tx = tx.into();
+        let now = Utc::now();
 
-        let q = sqlx::query("INSERT INTO rides (id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude) VALUES (?, ?, ?, ?, ?, ?)")
+        let q = sqlx::query("INSERT INTO rides (id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(id)
             .bind(user)
             .bind(pickup.latitude)
             .bind(pickup.longitude)
             .bind(dest.latitude)
-            .bind(dest.longitude);
-
+            .bind(dest.longitude)
+            .bind(now)
+            .bind(now);
         maybe_tx!(self, tx, q.execute)?;
+
+        {
+            let mut cache = self.ride_cache.ride_cache.write().await;
+            cache.insert(
+                id.clone(),
+                Arc::new(RideEntry {
+                    id: id.clone(),
+                    user_id: user.clone(),
+                    pickup,
+                    destination: dest,
+                    created_at: now,
+                    chair_id: RwLock::new(None),
+                    evaluation: RwLock::new(None),
+                    updated_at: RwLock::new(now),
+                }),
+            );
+        }
+
         Ok(())
     }
 
     pub async fn rides_assign(&self, ride_id: &Id<Ride>, chair_id: &Id<Chair>) -> Result<()> {
-        sqlx::query("update rides set chair_id = ? where id = ?")
+        let now = Utc::now();
+        sqlx::query("update rides set chair_id = ?, updated_at = ? where id = ?")
             .bind(chair_id)
+            .bind(now)
             .bind(ride_id)
             .execute(&self.pool)
             .await?;
@@ -110,6 +135,11 @@ impl Repository {
             ride_status_id: status.id.clone(),
             status: RideStatusEnum::Matching,
         };
+        {
+            let mut cache = self.ride_cache.ride_cache.write().await;
+            let e = cache.get_mut(ride_id).unwrap();
+            e.set_chair_id(chair_id, now).await;
+        }
         {
             let mut cache = self.ride_cache.chair_notification.write().await;
             cache.get_mut(chair_id).unwrap().push(b, false);
@@ -133,6 +163,12 @@ impl Repository {
             .bind(id);
 
         maybe_tx!(self, tx, q.execute)?;
+
+        {
+            let mut cache = self.ride_cache.ride_cache.write().await;
+            let e = cache.get_mut(id).unwrap();
+            e.set_evaluation(eval, now).await;
+        }
 
         // 更新が早すぎて警告が出る
         {

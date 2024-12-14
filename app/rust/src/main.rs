@@ -34,7 +34,8 @@ async fn main() -> anyhow::Result<()> {
     let dbname = std::env::var("ISUCON_DB_NAME").unwrap_or_else(|_| "isuride".to_owned());
 
     let pool = sqlx::mysql::MySqlPoolOptions::new()
-        .max_connections(50)
+        .max_connections(128)
+        .min_connections(128)
         .connect_with(
             sqlx::mysql::MySqlConnectOptions::default()
                 .host(&host)
@@ -57,7 +58,10 @@ async fn main() -> anyhow::Result<()> {
         .merge(isuride::chair_handlers::chair_routes(app_state.clone()))
         .merge(isuride::internal_handlers::internal_routes())
         .with_state(app_state)
-        .layer(tower_http::trace::TraceLayer::new_for_http());
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(
+            isuride::middlewares::log_slow_requests,
+        ));
 
     let tcp_listener =
         if let Some(std_listener) = listenfd::ListenFd::from_env().take_tcp_listener(0)? {

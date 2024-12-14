@@ -1,3 +1,5 @@
+use sqlx::{MySql, Pool};
+
 use crate::models::{Id, User};
 use crate::Error;
 use std::future::Future;
@@ -29,15 +31,15 @@ struct PaymentGatewayGetPaymentsResponseOne {
 pub trait PostPaymentCallback<'a> {
     type Output: Future<Output = Result<i32, Error>>;
 
-    fn call(&self, tx: &'a mut sqlx::MySqlConnection, user_id: &'a Id<User>) -> Self::Output;
+    fn call(&self, tx: &'a Pool<MySql>, user_id: &'a Id<User>) -> Self::Output;
 }
 impl<'a, F, Fut> PostPaymentCallback<'a> for F
 where
-    F: Fn(&'a mut sqlx::MySqlConnection, &'a Id<User>) -> Fut,
+    F: Fn(&'a Pool<MySql>, &'a Id<User>) -> Fut,
     Fut: Future<Output = Result<i32, Error>>,
 {
     type Output = Fut;
-    fn call(&self, tx: &'a mut sqlx::MySqlConnection, user_id: &'a Id<User>) -> Fut {
+    fn call(&self, tx: &'a Pool<MySql>, user_id: &'a Id<User>) -> Fut {
         self(tx, user_id)
     }
 }
@@ -48,7 +50,7 @@ pub async fn request_payment_gateway_post_payment<F>(
     payment_gateway_url: &str,
     token: &str,
     param: &PaymentGatewayPostPaymentRequest,
-    tx: &mut sqlx::MySqlConnection,
+    tx: &Pool<MySql>,
     user_id: &Id<User>,
     retrieve_rides_count: F,
 ) -> Result<(), Error>

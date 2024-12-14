@@ -1,12 +1,17 @@
+use chrono::{DateTime, Utc};
 use std::{
     collections::{HashMap, VecDeque},
+    hash::Hash,
     sync::Arc,
 };
 use tokio::sync::RwLock;
 
 use sqlx::{MySql, Pool};
 
-use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
+use crate::{
+    models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User},
+    Coordinate,
+};
 
 use super::{cache_init::CacheInit, Repository, Result};
 
@@ -18,6 +23,7 @@ pub type RideCache = Arc<RideCacheInner>;
 
 #[derive(Debug)]
 pub struct RideCacheInner {
+    ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
     latest_ride_stat: RwLock<HashMap<Id<Ride>, RideStatusEnum>>,
 
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
@@ -90,23 +96,28 @@ impl Repository {
             }
         }
 
-        println!();
-        println!();
-        println!("### users ###");
-        for (u, n) in user_notification.iter() {
-            println!("{u:?}: {n:?}");
-        }
-        println!();
-        println!();
-        println!("### chairs ###");
-        for (c, n) in chair_notification.iter() {
-            println!("{c:?}: {n:?}");
+        let mut rides = HashMap::new();
+        for ride in &init.rides {
+            rides.insert(
+                ride.id.clone(),
+                Arc::new(RideEntry {
+                    id: ride.id.clone(),
+                    user_id: ride.user_id.clone(),
+                    pickup: ride.pickup_coord(),
+                    destination: ride.destination_coord(),
+                    created_at: ride.created_at,
+                    chair_id: RwLock::new(ride.chair_id.clone()),
+                    evaluation: RwLock::new(ride.evaluation.clone()),
+                    updated_at: RwLock::new(ride.updated_at),
+                }),
+            );
         }
 
         Arc::new(RideCacheInner {
             latest_ride_stat: RwLock::new(latest_ride_stat),
             user_notification: RwLock::new(user_notification),
             chair_notification: RwLock::new(chair_notification),
+            ride_cache: RwLock::new(rides),
         })
     }
 }
@@ -131,10 +142,13 @@ impl Repository {
         &self,
         id: &Id<Chair>,
     ) -> Result<Option<NotificationBody>> {
-        let mut cache = self.ride_cache.chair_notification.write().await;
-        let queue = cache.get_mut(id).unwrap();
-        let Some(next) = queue.get_next() else {
-            return Ok(None);
+        let next = {
+            let mut cache = self.ride_cache.chair_notification.write().await;
+            let queue = cache.get_mut(id).unwrap();
+            let Some(next) = queue.get_next() else {
+                return Ok(None);
+            };
+            next
         };
         if !next.sent {
             self.ride_status_chair_notified(None, &next.body.ride_status_id)
@@ -147,10 +161,13 @@ impl Repository {
         &self,
         id: &Id<User>,
     ) -> Result<Option<NotificationBody>> {
-        let mut cache = self.ride_cache.user_notification.write().await;
-        let queue = cache.get_mut(id).unwrap();
-        let Some(next) = queue.get_next() else {
-            return Ok(None);
+        let next = {
+            let mut cache = self.ride_cache.user_notification.write().await;
+            let queue = cache.get_mut(id).unwrap();
+            let Some(next) = queue.get_next() else {
+                return Ok(None);
+            };
+            next
         };
         if !next.sent {
             self.ride_status_app_notified(None, &next.body.ride_status_id)
@@ -228,4 +245,45 @@ pub struct NotificationBody {
     pub ride_id: Id<Ride>,
     pub ride_status_id: Id<RideStatus>,
     pub status: RideStatusEnum,
+}
+
+#[derive(Debug)]
+pub struct RideEntry {
+    id: Id<Ride>,
+    user_id: Id<User>,
+    pickup: Coordinate,
+    destination: Coordinate,
+    created_at: DateTime<Utc>,
+
+    chair_id: RwLock<Option<Id<Chair>>>,
+    evaluation: RwLock<Option<i32>>,
+    updated_at: RwLock<DateTime<Utc>>,
+}
+impl RideEntry {
+    pub async fn ride(&self) -> Ride {
+        Ride {
+            id: self.id.clone(),
+            user_id: self.user_id.clone(),
+            chair_id: self.chair_id.read().await.clone(),
+            pickup_latitude: self.pickup.latitude,
+            pickup_longitude: self.pickup.longitude,
+            destination_latitude: self.destination.latitude,
+            destination_longitude: self.destination.longitude,
+            evaluation: *self.evaluation.read().await,
+            created_at: self.created_at,
+            updated_at: *self.updated_at.read().await,
+        }
+    }
+    pub async fn set_chair_id(&self, chair_id: &Id<Chair>, now: DateTime<Utc>) {
+        let mut c = self.chair_id.write().await;
+        let mut u = self.updated_at.write().await;
+        *c = Some(chair_id.clone());
+        *u = now;
+    }
+    pub async fn set_evaluation(&self, eval: i32, now: DateTime<Utc>) {
+        let mut e = self.evaluation.write().await;
+        let mut u = self.updated_at.write().await;
+        *e = Some(eval);
+        *u = now;
+    }
 }

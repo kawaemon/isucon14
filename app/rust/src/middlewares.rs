@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -5,6 +7,31 @@ use axum_extra::extract::CookieJar;
 
 use crate::models::{Chair, Owner, User};
 use crate::{AppState, Error};
+
+pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Error> {
+    let uri = req.uri().clone();
+    let path = uri.path();
+
+    tokio::pin! {
+        let response_fut = next.run(req);
+    }
+
+    for i in 1.. {
+        tokio::pin! {
+            let timeout = tokio::time::sleep(Duration::from_secs(1));
+        }
+        tokio::select! {
+            _ = &mut timeout => {
+                tracing::warn!("{path} is taking {i} seconds and continuing...")
+            }
+            res = &mut response_fut => {
+                return Ok(res)
+            }
+        }
+    }
+
+    unreachable!()
+}
 
 pub async fn app_auth_middleware(
     State(AppState { repo, .. }): State<AppState>,

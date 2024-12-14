@@ -8,9 +8,17 @@ services:
       MYSQL_DATABASE: isuride
       MYSQL_USER: isucon
       MYSQL_PASSWORD: isucon
-    deploy:
-      resources:
-        limits:
-          cpus: "2"
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: "2"
+    # volumes:
+    #   - ./mysql_logs:/var/log/mysql
+    # command:
+    #   [
+    #     "--log-error=/var/log/mysql/error.log",
+    #     "--general-log=1",
+    #     "--general-log-file=/var/log/mysql/general.log",
+    #   ]
     ports:
       - "3306:3306"

@@ -166,25 +166,20 @@ impl Repository {
         let chairs: Vec<Chair> = maybe_tx!(self, tx, q.fetch_all)?;
 
         let mut res = vec![];
-        'chair: for chair in chairs {
+        for chair in chairs {
             if !chair.is_active {
                 continue;
             }
 
-            let q =
-                sqlx::query_as("SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC")
-                    .bind(&chair.id);
+            let q = sqlx::query_scalar(
+                "SELECT count(*) = 0 FROM rides WHERE chair_id = ? and evaluation is null",
+            )
+            .bind(&chair.id);
 
-            let rides: Vec<Ride> = maybe_tx!(self, tx, q.fetch_all)?;
-
-            for ride in rides {
-                let status = self.ride_status_latest(tx.as_deref_mut(), &ride.id).await?;
-                if status != RideStatusEnum::Completed {
-                    continue 'chair;
-                }
+            let ok: bool = maybe_tx!(self, tx, q.fetch_one)?;
+            if ok {
+                res.push(chair);
             }
-
-            res.push(chair);
         }
 
         Ok(res)

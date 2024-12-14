@@ -7,6 +7,7 @@ use axum::response::Sse;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use futures::Stream;
+use sqlx::{MySql, Pool};
 use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
@@ -195,23 +196,21 @@ async fn app_get_rides(
     State(AppState { pool, repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
-    let mut tx = pool.begin().await?;
-
     let rides: Vec<Ride> =
         sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC")
             .bind(&user.id)
-            .fetch_all(&mut *tx)
+            .fetch_all(&pool)
             .await?;
 
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
+        let status = repo.ride_status_latest(None, &ride.id).await?;
         if status != RideStatusEnum::Completed {
             continue;
         }
 
         let fare = calculate_discounted_fare(
-            &mut tx,
+            &pool,
             &user.id,
             Some(&ride.id),
             ride.pickup_coord(),
@@ -220,13 +219,10 @@ async fn app_get_rides(
         .await?;
 
         let chair: Chair = repo
-            .chair_get_by_id(&mut tx, ride.chair_id.as_ref().unwrap())
+            .chair_get_by_id(None, ride.chair_id.as_ref().unwrap())
             .await?
             .unwrap();
-        let owner: Owner = repo
-            .owner_get_by_id(&mut tx, &chair.owner_id)
-            .await?
-            .unwrap();
+        let owner: Owner = repo.owner_get_by_id(None, &chair.owner_id).await?.unwrap();
 
         items.push(GetAppRidesResponseItem {
             pickup_coordinate: ride.pickup_coord(),
@@ -244,8 +240,6 @@ async fn app_get_rides(
             completed_at: ride.updated_at.timestamp_millis(),
         });
     }
-
-    tx.commit().await?;
 
     Ok(axum::Json(GetAppRidesResponse { rides: items }))
 }
@@ -269,27 +263,27 @@ async fn app_post_rides(
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
     let ride_id = Id::new();
 
-    let mut tx = pool.begin().await?;
-
-    if repo.rides_user_ongoing(&mut tx, &user.id).await? {
+    if repo.rides_user_ongoing(None, &user.id).await? {
         return Err(Error::Conflict("ride already exists"));
     }
 
     repo.rides_new(
-        &mut tx,
+        None,
         &ride_id,
         &user.id,
         req.pickup_coordinate,
         req.destination_coordinate,
     )
     .await?;
-    repo.ride_status_update(&mut tx, &ride_id, &user.id, None, RideStatusEnum::Matching)
+    repo.ride_status_update(None, &ride_id, &user.id, None, RideStatusEnum::Matching)
         .await?;
 
     let ride_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rides WHERE user_id = ?")
         .bind(&user.id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&pool)
         .await?;
+
+    let mut tx = pool.begin().await?;
 
     if ride_count == 1 {
         // 初回利用で、初回利用クーポンがあれば必ず使う
@@ -334,16 +328,16 @@ async fn app_post_rides(
         }
     }
 
+    tx.commit().await?;
+
     let fare = calculate_discounted_fare(
-        &mut tx,
+        &pool,
         &user.id,
         Some(&ride_id),
         req.pickup_coordinate,
         req.destination_coordinate,
     )
     .await?;
-
-    tx.commit().await?;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -368,18 +362,14 @@ async fn app_post_rides_estimated_fare(
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesEstimatedFareRequest>,
 ) -> Result<axum::Json<AppPostRidesEstimatedFareResponse>, Error> {
-    let mut tx = pool.begin().await?;
-
     let discounted = calculate_discounted_fare(
-        &mut tx,
+        &pool,
         &user.id,
         None,
         req.pickup_coordinate,
         req.destination_coordinate,
     )
     .await?;
-
-    tx.commit().await?;
 
     Ok(axum::Json(AppPostRidesEstimatedFareResponse {
         fare: discounted,
@@ -408,29 +398,22 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("evaluation must be between 1 and 5"));
     }
 
-    let mut tx = pool.begin().await?;
-
-    let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ?")
-        .bind(&ride_id)
-        .fetch_optional(&mut *tx)
-        .await?
-    else {
+    let Some(ride): Option<Ride> = repo.ride_get(None, &ride_id).await? else {
         return Err(Error::NotFound("ride not found"));
     };
 
-    let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
+    let status = repo.ride_status_latest(None, &ride.id).await?;
     if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let Some(payment_token): Option<String> =
-        repo.payment_token_get(&mut tx, &ride.user_id).await?
+    let Some(payment_token): Option<String> = repo.payment_token_get(None, &ride.user_id).await?
     else {
         return Err(Error::BadRequest("payment token not registered"));
     };
 
     let fare = calculate_discounted_fare(
-        &mut tx,
+        &pool,
         &ride.user_id,
         Some(&ride.id),
         ride.pickup_coord(),
@@ -438,12 +421,9 @@ async fn app_post_ride_evaluation(
     )
     .await?;
 
-    let payment_gateway_url: String = repo.pgw_get(&mut tx).await?;
+    let payment_gateway_url: String = repo.pgw_get(None).await?;
 
-    async fn get_ride_count(
-        tx: &mut sqlx::MySqlConnection,
-        user_id: &Id<User>,
-    ) -> Result<i32, Error> {
+    async fn get_ride_count(tx: &Pool<MySql>, user_id: &Id<User>) -> Result<i32, Error> {
         sqlx::query_scalar("SELECT count(*) FROM rides WHERE user_id = ?")
             .bind(user_id)
             .fetch_one(tx)
@@ -455,11 +435,13 @@ async fn app_post_ride_evaluation(
         &payment_gateway_url,
         &payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
-        &mut tx,
+        &pool,
         &ride.user_id,
         get_ride_count,
     )
     .await?;
+
+    let mut tx = pool.begin().await?;
 
     let chair_id = ride.chair_id.as_ref().unwrap();
     repo.ride_status_update(
@@ -531,17 +513,15 @@ async fn app_get_notification_inner(
     AppState { pool, repo, .. }: &AppState,
     user: &User,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
-    let mut tx = pool.begin().await?;
-
     let Some(body) = repo.app_get_next_notification(&user.id).await? else {
         return Ok(None);
     };
 
-    let ride = repo.ride_get(&mut tx, &body.ride_id).await?.unwrap();
+    let ride = repo.ride_get(None, &body.ride_id).await?.unwrap();
     let status = body.status;
 
     let fare = calculate_discounted_fare(
-        &mut tx,
+        &pool,
         &user.id,
         Some(&ride.id),
         ride.pickup_coord(),
@@ -561,8 +541,8 @@ async fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair: Chair = repo.chair_get_by_id(&mut tx, &chair_id).await?.unwrap();
-        let stats = repo.chair_get_stats(&mut tx, &chair.id).await?;
+        let chair: Chair = repo.chair_get_by_id(None, &chair_id).await?.unwrap();
+        let stats = repo.chair_get_stats(None, &chair.id).await?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
@@ -571,8 +551,6 @@ async fn app_get_notification_inner(
             stats,
         });
     }
-
-    tx.commit().await?;
 
     Ok(Some(data))
 }
@@ -634,7 +612,7 @@ async fn app_get_nearby_chairs(
 }
 
 async fn calculate_discounted_fare(
-    tx: &mut sqlx::MySqlConnection,
+    tx: &Pool<MySql>,
     user_id: &Id<User>,
     ride_id: Option<&Id<Ride>>,
     pickup: Coordinate,
@@ -644,7 +622,7 @@ async fn calculate_discounted_fare(
         // すでにクーポンが紐づいているならそれの割引額を参照
         let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE used_by = ?")
             .bind(ride_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(tx)
             .await?;
         coupon.map(|c| c.discount).unwrap_or(0)
     } else {
@@ -653,7 +631,7 @@ async fn calculate_discounted_fare(
             "SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL",
         )
         .bind(user_id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(tx)
         .await?;
         if let Some(coupon) = coupon {
             coupon.discount
@@ -661,7 +639,7 @@ async fn calculate_discounted_fare(
             // 無いなら他のクーポンを付与された順番に使う
             let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1")
                 .bind(user_id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(tx)
                 .await?;
             coupon.map(|c| c.discount).unwrap_or(0)
         }
