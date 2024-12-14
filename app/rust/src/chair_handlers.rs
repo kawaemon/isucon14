@@ -183,8 +183,9 @@ async fn chair_get_notification(
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
             let body = body.unwrap();
             let state = state.clone();
+            let chair = chair.clone();
             async move {
-                let s = chair_get_notification_inner(&state, body).await?;
+                let s = chair_get_notification_inner(&state, &chair.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
                 Ok(Event::default().data(s))
             }
@@ -195,6 +196,7 @@ async fn chair_get_notification(
 
 async fn chair_get_notification_inner(
     AppState { repo, .. }: &AppState,
+    chair_id: &Id<Chair>,
     body: Option<NotificationBody>,
 ) -> Result<Option<ChairGetNotificationResponseData>, Error> {
     let Some(body) = body else {
@@ -202,6 +204,15 @@ async fn chair_get_notification_inner(
     };
     let ride = repo.ride_get(None, &body.ride_id).await?.unwrap();
     let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
+
+    if body.status == RideStatusEnum::Completed {
+        let chair_id = chair_id.clone();
+        let repo = repo.clone();
+        tokio::spawn(async move {
+            repo.ride_cache.push_free_chair(&chair_id).await;
+            repo.do_matching().await;
+        });
+    }
 
     Ok(Some(ChairGetNotificationResponseData {
         ride_id: ride.id,

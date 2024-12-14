@@ -42,7 +42,7 @@ pub struct Repository {
     owner_cache: OwnerCache,
     chair_cache: ChairCache,
     chair_location_cache: ChairLocationCache,
-    ride_cache: RideCache,
+    pub ride_cache: RideCache,
     pgw_cache: PgwCache,
     pt_cache: PtCache,
 }

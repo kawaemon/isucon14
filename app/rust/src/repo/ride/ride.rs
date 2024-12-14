@@ -93,20 +93,18 @@ impl Repository {
         maybe_tx!(self, tx, q.execute)?;
 
         {
+            let r = Arc::new(RideEntry {
+                id: id.clone(),
+                user_id: user.clone(),
+                pickup,
+                destination: dest,
+                created_at: now,
+                chair_id: RwLock::new(None),
+                evaluation: RwLock::new(None),
+                updated_at: RwLock::new(now),
+            });
             let mut cache = self.ride_cache.ride_cache.write().await;
-            cache.insert(
-                id.clone(),
-                Arc::new(RideEntry {
-                    id: id.clone(),
-                    user_id: user.clone(),
-                    pickup,
-                    destination: dest,
-                    created_at: now,
-                    chair_id: RwLock::new(None),
-                    evaluation: RwLock::new(None),
-                    updated_at: RwLock::new(now),
-                }),
-            );
+            cache.insert(id.clone(), Arc::clone(&r));
         }
 
         Ok(())
@@ -125,7 +123,7 @@ impl Repository {
                 .bind(ride_id)
                 .fetch_all(&self.pool)
                 .await?;
-        assert!(statuses.len() == 1);
+        assert!(statuses.len() == 1, "{statuses:?}");
         let status = &statuses[0];
         assert!(status.status == RideStatusEnum::Matching);
         let b = NotificationBody {

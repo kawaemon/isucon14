@@ -272,6 +272,10 @@ impl Repository {
             let mut entry = cache.get_mut(id).unwrap().write().await;
             entry.is_active = active;
             entry.updated_at = now;
+
+            if active {
+                self.ride_cache.push_free_chair(id).await;
+            }
         }
 
         sqlx::query("UPDATE chairs SET is_active = ?, updated_at = ? WHERE id = ?")

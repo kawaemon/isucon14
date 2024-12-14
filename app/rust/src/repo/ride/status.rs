@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::{maybe_tx, Repository, Result, Tx};
 
@@ -56,6 +58,13 @@ impl Repository {
                 if mark_sent {
                     self.ride_status_chair_notified(tx, &status_id).await?;
                 }
+            }
+
+            if status == RideStatusEnum::Matching {
+                let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
+                let ride_cache = self.ride_cache.ride_cache.read().await;
+                let ride = ride_cache.get(ride_id).unwrap();
+                waiting_rides.push_back(Arc::clone(ride));
             }
         }
         Ok(())

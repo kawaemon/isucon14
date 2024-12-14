@@ -9,9 +9,10 @@ use crate::{AppState, Error};
 pub fn spawn_matching_thread(state: AppState) {
     tokio::spawn(async move {
         loop {
-            if let Err(e) = do_matching(&state).await {
-                tracing::warn!("matching failed: {e:?}; continuing anyway");
-            }
+            // if let Err(e) = do_matching(&state).await {
+            //     tracing::warn!("matching failed: {e:?}; continuing anyway");
+            // }
+            state.repo.do_matching().await;
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     });
@@ -33,7 +34,7 @@ async fn internal_get_matching(_: State<AppState>) -> Result<StatusCode, Error> 
 //   - COMPLETED を通知した時
 // 待ちのライドが生まれるタイミング
 //   - post rides (こっちの方が多い)
-async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCode, Error> {
+async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<(), Error> {
     let waiting_rides: Vec<Ride> = repo.rides_waiting_for_match().await?;
     let waiting = waiting_rides.len();
 
@@ -46,7 +47,7 @@ async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCod
                     .fetch_optional(pool)
                     .await?
             else {
-                return Ok(StatusCode::NO_CONTENT);
+                return Ok(());
             };
 
             let empty: bool = sqlx::query_scalar(
@@ -68,5 +69,5 @@ async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCod
         tracing::info!("waiting={waiting}, matches={matches}");
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }

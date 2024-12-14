@@ -23,6 +23,8 @@ pub struct ChairLocationCacheInner {
     deferred: Deferred,
 }
 
+const THRESHOLD: usize = 500;
+
 #[derive(Debug)]
 struct Deferred {
     queue: Arc<Mutex<Vec<ChairLocation>>>,
@@ -38,28 +40,19 @@ impl Deferred {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
             loop {
-                let threshold = 500;
-                let sleep = tokio::time::sleep(Duration::from_millis(500));
+                let sleep = tokio::time::sleep(Duration::from_millis(2000));
                 tokio::pin!(sleep);
                 let frx = rx.recv();
                 tokio::pin!(frx);
 
                 let mut thistime = vec![];
                 {
-                    let mut lock;
-
                     tokio::select! {
-                        _ = &mut sleep => {
-                            lock = mqueue.lock().await;
-                        }
-                        _ = &mut frx => {
-                            lock = mqueue.lock().await;
-                            if lock.len() < threshold {
-                                continue;
-                            }
-                        }
+                        _ = &mut sleep => { }
+                        _ = &mut frx => { }
                     }
-                    let range = 0..lock.len().min(threshold);
+                    let mut lock = mqueue.lock().await;
+                    let range = 0..lock.len().min(THRESHOLD);
                     thistime.extend(lock.drain(range));
                 }
 
@@ -80,7 +73,7 @@ impl Deferred {
                 let t = Instant::now();
                 query.build().execute(&pool).await.unwrap();
                 let e = t.elapsed().as_millis();
-                tracing::info!("pushed {} locations in {e} ms", thistime.len());
+                tracing::debug!("pushed {} locations in {e} ms", thistime.len());
             }
         });
 
@@ -91,8 +84,11 @@ impl Deferred {
     }
 
     async fn push(&self, c: ChairLocation) {
-        self.queue.lock().await.push(c);
-        self.on_update.send(()).unwrap();
+        let mut queue = self.queue.lock().await;
+        queue.push(c);
+        if queue.len() == THRESHOLD {
+            self.on_update.send(()).unwrap();
+        }
     }
 }
 

@@ -3,6 +3,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
 };
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
 use sqlx::{MySql, Pool};
@@ -25,6 +26,9 @@ pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
     latest_ride_stat: RwLock<HashMap<Id<Ride>, RideStatusEnum>>,
 
+    waiting_rides: Mutex<VecDeque<Arc<RideEntry>>>,
+    free_chairs: Mutex<Vec<Id<Chair>>>,
+
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 }
@@ -32,6 +36,9 @@ pub struct RideCacheInner {
 struct RideCacheInit {
     ride_cache: HashMap<Id<Ride>, Arc<RideEntry>>,
     latest_ride_stat: HashMap<Id<Ride>, RideStatusEnum>,
+
+    waiting_rides: VecDeque<Arc<RideEntry>>,
+    free_chairs: Vec<Id<Chair>>,
 
     user_notification: HashMap<Id<User>, NotificationQueue>,
     chair_notification: HashMap<Id<Chair>, NotificationQueue>,
@@ -104,6 +111,9 @@ impl RideCacheInit {
             }
         }
 
+        //
+        // rides
+        //
         let mut rides = HashMap::new();
         for ride in &init.rides {
             rides.insert(
@@ -121,11 +131,40 @@ impl RideCacheInit {
             );
         }
 
+        //
+        // waiting_rides
+        //
+        let mut waiting_rides = VecDeque::new();
+        for ride in &init.rides {
+            if ride.chair_id.is_none() {
+                let ride = rides.get(&ride.id).unwrap();
+                waiting_rides.push_back(Arc::clone(ride));
+            }
+        }
+
+        //
+        // free_chairs
+        //
+        let mut free_chairs = Vec::new();
+        for chair in &init.chairs {
+            let n = chair_notification.get(&chair.id).unwrap();
+            let ok = chair.is_active
+                && n.queue.is_empty()
+                && n.last_sent
+                    .as_ref()
+                    .is_none_or(|x| x.status == RideStatusEnum::Completed);
+            if ok {
+                free_chairs.push(chair.id.clone());
+            }
+        }
+
         Self {
             ride_cache: rides,
             latest_ride_stat,
             user_notification,
             chair_notification,
+            waiting_rides,
+            free_chairs,
         }
     }
 }
@@ -138,6 +177,8 @@ impl Repository {
             user_notification: RwLock::new(init.user_notification),
             chair_notification: RwLock::new(init.chair_notification),
             ride_cache: RwLock::new(init.ride_cache),
+            waiting_rides: Mutex::new(init.waiting_rides),
+            free_chairs: Mutex::new(init.free_chairs),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, _pool: &Pool<MySql>, init: &mut CacheInit) {
@@ -148,17 +189,23 @@ impl Repository {
             latest_ride_stat,
             user_notification,
             chair_notification,
+            waiting_rides,
+            free_chairs,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
         let mut l = latest_ride_stat.write().await;
         let mut u = user_notification.write().await;
         let mut c = chair_notification.write().await;
+        let mut f = free_chairs.lock().await;
+        let mut w = waiting_rides.lock().await;
 
         *r = init.ride_cache;
         *l = init.latest_ride_stat;
         *u = init.user_notification;
         *c = init.chair_notification;
+        *f = init.free_chairs;
+        *w = init.waiting_rides;
     }
 }
 
@@ -174,6 +221,9 @@ impl RideCacheInner {
             .write()
             .await
             .insert(id.clone(), NotificationQueue::new());
+    }
+    pub async fn push_free_chair(&self, id: &Id<Chair>) {
+        self.free_chairs.lock().await.push(id.clone());
     }
 }
 
@@ -376,5 +426,30 @@ impl RideEntry {
         let mut u = self.updated_at.write().await;
         *e = Some(eval);
         *u = now;
+    }
+}
+
+impl Repository {
+    pub async fn do_matching(&self) {
+        let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
+        let mut free_chairs = self.ride_cache.free_chairs.lock().await;
+
+        let matches = waiting_rides.len().min(free_chairs.len());
+
+        for _ in 0..matches {
+            let ride = waiting_rides.pop_front().unwrap();
+            let chair = free_chairs.pop().unwrap();
+
+            self.rides_assign(&ride.id, &chair).await.unwrap();
+        }
+
+        if waiting_rides.len() > 0 {
+            tracing::info!(
+                "waiting = {}, free = {}, matches = {}",
+                waiting_rides.len(),
+                free_chairs.len(),
+                matches
+            );
+        }
     }
 }
