@@ -27,8 +27,12 @@ impl UserCacheInner {
     }
 }
 
-impl Repository {
-    pub(super) fn init_user_cache(init: &mut CacheInit) -> UserCache {
+pub struct UserCacheInit {
+    by_id: HashMap<Id<User>, SharedUser>,
+    by_token: HashMap<String, SharedUser>,
+}
+impl UserCacheInit {
+    fn from_init(init: &mut CacheInit) -> Self {
         let mut id = HashMap::new();
         let mut t = HashMap::new();
         for user in &init.users {
@@ -36,10 +40,31 @@ impl Repository {
             id.insert(user.id.clone(), Arc::clone(&user));
             t.insert(user.access_token.clone(), Arc::clone(&user));
         }
+        Self {
+            by_id: id,
+            by_token: t,
+        }
+    }
+}
+
+impl Repository {
+    pub(super) fn init_user_cache(init: &mut CacheInit) -> UserCache {
+        let init = UserCacheInit::from_init(init);
+
         Arc::new(UserCacheInner {
-            by_id: Arc::new(RwLock::new(id)),
-            by_token: Arc::new(RwLock::new(t)),
+            by_id: Arc::new(RwLock::new(init.by_id)),
+            by_token: Arc::new(RwLock::new(init.by_token)),
         })
+    }
+    pub(super) async fn reinit_user_cache(&self, init: &mut CacheInit) {
+        let init = UserCacheInit::from_init(init);
+
+        let UserCacheInner { by_id, by_token } = &*self.user_cache;
+        let mut id = by_id.write().await;
+        let mut t = by_token.write().await;
+
+        *id = init.by_id;
+        *t = init.by_token;
     }
 }
 

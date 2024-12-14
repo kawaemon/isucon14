@@ -6,14 +6,19 @@ use super::{Repository, Result, Tx};
 
 pub type PgwCache = Arc<RwLock<String>>;
 
+async fn init(pool: &Pool<MySql>) -> String {
+    sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'")
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
 impl Repository {
-    pub async fn init_pgw_cache(pool: &Pool<MySql>) -> PgwCache {
-        let now: String =
-            sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        Arc::new(RwLock::new(now))
+    pub(super) async fn init_pgw_cache(pool: &Pool<MySql>) -> PgwCache {
+        Arc::new(RwLock::new(init(pool).await))
+    }
+    pub(super) async fn reinit_pgw_cache(&self, pool: &Pool<MySql>) {
+        *self.pgw_cache.write().await = init(pool).await;
     }
 }
 

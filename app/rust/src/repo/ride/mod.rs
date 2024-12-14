@@ -29,8 +29,15 @@ pub struct RideCacheInner {
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 }
 
-impl Repository {
-    pub(super) async fn init_ride_cache(_pool: &Pool<MySql>, init: &mut CacheInit) -> RideCache {
+struct RideCacheInit {
+    ride_cache: HashMap<Id<Ride>, Arc<RideEntry>>,
+    latest_ride_stat: HashMap<Id<Ride>, RideStatusEnum>,
+
+    user_notification: HashMap<Id<User>, NotificationQueue>,
+    chair_notification: HashMap<Id<Chair>, NotificationQueue>,
+}
+impl RideCacheInit {
+    fn from_init(init: &mut CacheInit) -> Self {
         init.rides.sort_unstable_by_key(|x| x.created_at);
         init.ride_statuses.sort_unstable_by_key(|x| x.created_at);
 
@@ -114,12 +121,44 @@ impl Repository {
             );
         }
 
+        Self {
+            ride_cache: rides,
+            latest_ride_stat,
+            user_notification,
+            chair_notification,
+        }
+    }
+}
+
+impl Repository {
+    pub(super) async fn init_ride_cache(_pool: &Pool<MySql>, init: &mut CacheInit) -> RideCache {
+        let init = RideCacheInit::from_init(init);
         Arc::new(RideCacheInner {
-            latest_ride_stat: RwLock::new(latest_ride_stat),
-            user_notification: RwLock::new(user_notification),
-            chair_notification: RwLock::new(chair_notification),
-            ride_cache: RwLock::new(rides),
+            latest_ride_stat: RwLock::new(init.latest_ride_stat),
+            user_notification: RwLock::new(init.user_notification),
+            chair_notification: RwLock::new(init.chair_notification),
+            ride_cache: RwLock::new(init.ride_cache),
         })
+    }
+    pub(super) async fn reinit_ride_cache(&self, _pool: &Pool<MySql>, init: &mut CacheInit) {
+        let init = RideCacheInit::from_init(init);
+
+        let RideCacheInner {
+            ride_cache,
+            latest_ride_stat,
+            user_notification,
+            chair_notification,
+        } = &*self.ride_cache;
+
+        let mut r = ride_cache.write().await;
+        let mut l = latest_ride_stat.write().await;
+        let mut u = user_notification.write().await;
+        let mut c = chair_notification.write().await;
+
+        *r = init.ride_cache;
+        *l = init.latest_ride_stat;
+        *u = init.user_notification;
+        *c = init.chair_notification;
     }
 }
 

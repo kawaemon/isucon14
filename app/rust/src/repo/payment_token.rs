@@ -6,14 +6,22 @@ use crate::models::{Id, User};
 use super::{cache_init::CacheInit, Repository, Result, Tx};
 
 pub type PtCache = Arc<RwLock<HashMap<Id<User>, String>>>;
+pub type PtCacheInit = HashMap<Id<User>, String>;
+
+fn init(init: &mut CacheInit) -> PtCacheInit {
+    let mut res = HashMap::new();
+    for t in &init.pt {
+        res.insert(t.user_id.clone(), t.token.clone());
+    }
+    res
+}
 
 impl Repository {
-    pub fn init_pt_cache(init: &mut CacheInit) -> PtCache {
-        let mut res = HashMap::new();
-        for t in &init.pt {
-            res.insert(t.user_id.clone(), t.token.clone());
-        }
-        Arc::new(RwLock::new(res))
+    pub fn init_pt_cache(i: &mut CacheInit) -> PtCache {
+        Arc::new(RwLock::new(init(i)))
+    }
+    pub async fn reinit_pt_cache(&self, i: &mut CacheInit) {
+        *self.pt_cache.write().await = init(i);
     }
 }
 

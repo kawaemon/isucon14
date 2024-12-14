@@ -63,4 +63,17 @@ impl Repository {
             pt_cache: Self::init_pt_cache(&mut init),
         }
     }
+
+    pub async fn reinit(&self) {
+        let mut init = CacheInit::load(&self.pool).await;
+
+        self.reinit_user_cache(&mut init).await;
+        self.reinit_owner_cache(&mut init).await;
+        self.reinit_chair_cache(&mut init).await;
+        self.reinit_ride_cache(&self.pool, &mut init).await;
+        self.reinit_chair_location_cache(&self.pool, &mut init)
+            .await;
+        self.reinit_pgw_cache(&self.pool).await;
+        self.reinit_pt_cache(&mut init).await;
+    }
 }

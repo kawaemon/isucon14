@@ -118,11 +118,11 @@ impl Entry {
     }
 }
 
-impl Repository {
-    pub(super) async fn init_chair_location_cache(
-        pool: &Pool<MySql>,
-        init: &mut CacheInit,
-    ) -> ChairLocationCache {
+struct ChairLocationCacheInit {
+    cache: HashMap<Id<Chair>, Entry>,
+}
+impl ChairLocationCacheInit {
+    fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
         init.locations.sort_unstable_by_key(|x| x.created_at);
 
         let mut res: HashMap<Id<Chair>, Entry> = HashMap::new();
@@ -137,10 +137,30 @@ impl Repository {
             }
         }
 
+        ChairLocationCacheInit { cache: res }
+    }
+}
+
+impl Repository {
+    pub(super) async fn init_chair_location_cache(
+        pool: &Pool<MySql>,
+        init: &mut CacheInit,
+    ) -> ChairLocationCache {
+        let init = ChairLocationCacheInit::from_init(init);
+
         Arc::new(ChairLocationCacheInner {
-            cache: RwLock::new(res),
+            cache: RwLock::new(init.cache),
             deferred: Deferred::new(pool).await,
         })
+    }
+
+    pub(super) async fn reinit_chair_location_cache(
+        &self,
+        _pool: &Pool<MySql>,
+        init: &mut CacheInit,
+    ) {
+        let init = ChairLocationCacheInit::from_init(init);
+        *self.chair_location_cache.cache.write().await = init.cache;
     }
 }
 

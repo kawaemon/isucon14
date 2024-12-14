@@ -27,8 +27,12 @@ impl OwnerCacheInner {
     }
 }
 
-impl Repository {
-    pub(super) fn init_owner_cache(init: &mut CacheInit) -> OwnerCache {
+struct OwnerCacheInit {
+    by_id: HashMap<Id<Owner>, SharedOwner>,
+    by_token: HashMap<String, SharedOwner>,
+}
+impl OwnerCacheInit {
+    fn from_init(init: &mut CacheInit) -> Self {
         let mut id = HashMap::new();
         let mut t = HashMap::new();
         for owner in &init.owners {
@@ -36,10 +40,30 @@ impl Repository {
             id.insert(owner.id.clone(), Arc::clone(&owner));
             t.insert(owner.access_token.clone(), Arc::clone(&owner));
         }
+        Self {
+            by_id: id,
+            by_token: t,
+        }
+    }
+}
+
+impl Repository {
+    pub(super) fn init_owner_cache(init: &mut CacheInit) -> OwnerCache {
+        let init = OwnerCacheInit::from_init(init);
         Arc::new(OwnerCacheInner {
-            by_id: Arc::new(RwLock::new(id)),
-            by_token: Arc::new(RwLock::new(t)),
+            by_id: Arc::new(RwLock::new(init.by_id)),
+            by_token: Arc::new(RwLock::new(init.by_token)),
         })
+    }
+    pub(super) async fn reinit_owner_cache(&self, init: &mut CacheInit) {
+        let init = OwnerCacheInit::from_init(init);
+
+        let OwnerCacheInner { by_id, by_token } = &*self.owner_cache;
+        let mut id = by_id.write().await;
+        let mut t = by_token.write().await;
+
+        *id = init.by_id;
+        *t = init.by_token;
     }
 }
 

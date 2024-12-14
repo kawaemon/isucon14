@@ -63,8 +63,14 @@ impl ChairCacheInner {
     }
 }
 
-impl Repository {
-    pub(super) fn init_chair_cache(init: &mut CacheInit) -> ChairCache {
+struct ChairCacheInit {
+    by_id: HashMap<Id<Chair>, SharedChair>,
+    by_access_token: HashMap<String, SharedChair>,
+    by_owner: HashMap<Id<Owner>, Vec<SharedChair>>,
+    stats: HashMap<Id<Chair>, ChairStat>,
+}
+impl ChairCacheInit {
+    fn from_init(init: &mut CacheInit) -> Self {
         let mut bid = HashMap::new();
         let mut ac = HashMap::new();
         let mut owner = HashMap::new();
@@ -88,12 +94,44 @@ impl Repository {
             }
         }
 
+        Self {
+            by_id: bid,
+            by_access_token: ac,
+            by_owner: owner,
+            stats,
+        }
+    }
+}
+
+impl Repository {
+    pub(super) fn init_chair_cache(init: &mut CacheInit) -> ChairCache {
+        let init = ChairCacheInit::from_init(init);
+
         ChairCache::new(ChairCacheInner {
-            by_id: RwLock::new(bid),
-            by_access_token: RwLock::new(ac),
-            by_owner: RwLock::new(owner),
-            stats: RwLock::new(stats),
+            by_id: RwLock::new(init.by_id),
+            by_access_token: RwLock::new(init.by_access_token),
+            by_owner: RwLock::new(init.by_owner),
+            stats: RwLock::new(init.stats),
         })
+    }
+    pub(super) async fn reinit_chair_cache(&self, init: &mut CacheInit) {
+        let init = ChairCacheInit::from_init(init);
+
+        let ChairCacheInner {
+            by_id,
+            by_access_token,
+            by_owner,
+            stats,
+        } = &*self.chair_cache;
+        let mut id = by_id.write().await;
+        let mut ac = by_access_token.write().await;
+        let mut ow = by_owner.write().await;
+        let mut st = stats.write().await;
+
+        *id = init.by_id;
+        *ac = init.by_access_token;
+        *ow = init.by_owner;
+        *st = init.stats;
     }
 }
 
