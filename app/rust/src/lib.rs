@@ -73,8 +73,6 @@ pub fn secure_random_str(b: usize) -> String {
 
 const INITIAL_FARE: i32 = 500;
 const FARE_PER_DISTANCE: i32 = 100;
-const RETRY_MS_APP: u64 = 200;
-const RETRY_MS_CHAIR: u64 = 200;
 
 pub fn calculate_fare(pickup: Coordinate, dest: Coordinate) -> i32 {
     let metered_fare = FARE_PER_DISTANCE * pickup.distance(dest);

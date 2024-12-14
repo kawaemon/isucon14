@@ -5,7 +5,7 @@ use chrono::Utc;
 
 use crate::{
     app_handlers::ChairStats,
-    models::{Chair, Id, Owner, Ride, RideStatusEnum},
+    models::{Chair, Id, Owner},
 };
 
 use super::{cache_init::CacheInit, maybe_tx, Repository, Result, Tx};

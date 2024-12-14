@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -22,7 +22,7 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
         }
         tokio::select! {
             _ = &mut timeout => {
-                // tracing::warn!("{path} is taking {i} seconds and continuing...")
+                 tracing::debug!("{path} is taking {i} seconds and continuing...")
             }
             res = &mut response_fut => {
                 return Ok(res)

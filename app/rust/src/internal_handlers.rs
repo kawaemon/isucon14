@@ -28,6 +28,11 @@ async fn internal_get_matching(_: State<AppState>) -> Result<StatusCode, Error> 
     Ok(StatusCode::NO_CONTENT)
 }
 
+// フリーの椅子が生まれるタイミング
+//   - is_active = true になったとき
+//   - COMPLETED を通知した時
+// 待ちのライドが生まれるタイミング
+//   - post rides
 async fn do_matching(AppState { pool, repo, .. }: &AppState) -> Result<StatusCode, Error> {
     let waiting_rides: Vec<Ride> = repo.rides_waiting_for_match().await?;
     let waiting = waiting_rides.len();

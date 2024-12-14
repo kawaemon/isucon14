@@ -1,10 +1,8 @@
-use std::sync::Arc;
-use std::time::Duration;
-
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::{maybe_tx, Repository, Result, Tx};
 use crate::Coordinate;
 use chrono::{DateTime, Utc};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::{NotificationBody, RideEntry};

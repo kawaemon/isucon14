@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
@@ -7,12 +5,11 @@ use axum::response::Sse;
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use futures::Stream;
-use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, User};
 use crate::repo::ride::NotificationBody;
-use crate::{AppState, Coordinate, Error, RETRY_MS_CHAIR};
+use crate::{AppState, Coordinate, Error};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes =
