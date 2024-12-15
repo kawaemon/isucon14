@@ -472,39 +472,57 @@ impl RideEntry {
 
 impl Repository {
     pub async fn do_matching(&self) {
-        let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
-        let mut free_chairs = self.ride_cache.free_chairs.lock().await;
+        let (pairs, waiting, free) = {
+            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
+            let waiting_rides_len = waiting_rides.len();
+            let mut free_chairs = self.ride_cache.free_chairs.lock().await;
+            let free_chairs_len = free_chairs.len();
 
-        let mut chair_pos = HashMap::new();
-        for chair in free_chairs.iter() {
-            let loc = self.chair_location_get_latest(chair).await.unwrap();
-            chair_pos.insert(chair.clone(), loc);
-        }
+            let mut chair_pos = HashMap::new();
+            for chair in free_chairs.iter() {
+                let loc = self.chair_location_get_latest(chair).await.unwrap();
+                chair_pos.insert(chair.clone(), loc);
+            }
 
-        let matches = waiting_rides.len().min(free_chairs.len());
+            let matches = waiting_rides.len().min(free_chairs.len());
 
-        for ride in waiting_rides.drain(0..matches) {
-            let best = free_chairs
-                .iter()
-                .min_by_key(|cid| {
-                    chair_pos
-                        .get(cid)
-                        .unwrap()
-                        .map(|x| ride.pickup.distance(x))
-                        .unwrap_or(9999999)
-                })
-                .unwrap()
-                .clone();
-            let pos = free_chairs.iter().position(|x| x == &best).unwrap();
-            free_chairs.swap_remove(pos);
-            self.rides_assign(&ride.id, &best).await.unwrap();
+            struct Pair {
+                chair_id: Id<Chair>,
+                ride_id: Id<Ride>,
+            }
+            let mut pairs = vec![];
+
+            for ride in waiting_rides.drain(0..matches) {
+                let best = free_chairs
+                    .iter()
+                    .min_by_key(|cid| {
+                        chair_pos
+                            .get(cid)
+                            .unwrap()
+                            .map(|x| ride.pickup.distance(x))
+                            .unwrap_or(9999999)
+                    })
+                    .unwrap()
+                    .clone();
+                let pos = free_chairs.iter().position(|x| x == &best).unwrap();
+                free_chairs.swap_remove(pos);
+                pairs.push(Pair {
+                    chair_id: best,
+                    ride_id: ride.id.clone(),
+                });
+            }
+            (pairs, waiting_rides_len, free_chairs_len)
+        };
+
+        for pair in &pairs {
+            self.rides_assign(&pair.ride_id, &pair.chair_id)
+                .await
+                .unwrap();
         }
 
         tracing::info!(
-            "waiting = {}, free = {}, matches = {}",
-            waiting_rides.len(),
-            free_chairs.len(),
-            matches
+            "waiting = {waiting}, free = {free}, matches = {}",
+            pairs.len()
         );
     }
 }

@@ -245,6 +245,7 @@ impl Repository {
     pub async fn chair_get_completeds(&self) -> Result<Vec<Chair>> {
         let mut res = vec![];
         for chair in self.chair_cache.by_id.read().await.values() {
+            // DEADLOCK HERE
             if !*chair.is_active.read().await {
                 continue;
             }
