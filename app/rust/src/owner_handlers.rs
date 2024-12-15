@@ -109,8 +109,6 @@ async fn owner_get_sales(
         )
     };
 
-    let mut tx = pool.begin().await?;
-
     let chairs: Vec<Chair> = repo.chair_get_by_owner(&owner.id).await?;
 
     let mut res = OwnerGetSalesResponse {
@@ -134,7 +132,7 @@ async fn owner_get_sales(
         .bind(&chair.id)
         .bind(since)
         .bind(until)
-        .fetch_all(&mut *tx)
+        .fetch_all(&pool)
         .await?;
 
         let sales = reqs.iter().map(|x| x.calc_sale()).sum();

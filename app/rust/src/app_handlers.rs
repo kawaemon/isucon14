@@ -92,10 +92,7 @@ async fn app_post_users_inner(
     let access_token = crate::secure_random_str(32);
     let invitation_code = crate::secure_random_str(15);
 
-    let mut tx = pool.begin().await?;
-
     repo.user_add(
-        &mut tx,
         &user_id,
         &req.username,
         &req.firstname,
@@ -111,7 +108,7 @@ async fn app_post_users_inner(
         .bind(&user_id)
         .bind("CP_NEW2024")
         .bind(3000)
-        .execute(&mut *tx)
+        .execute(pool)
         .await?;
 
     // 招待コードを使った登録
@@ -121,7 +118,7 @@ async fn app_post_users_inner(
             let coupons: Vec<Coupon> =
                 sqlx::query_as("SELECT * FROM coupons WHERE code = ? FOR UPDATE")
                     .bind(format!("INV_{req_invitation_code}"))
-                    .fetch_all(&mut *tx)
+                    .fetch_all(pool)
                     .await?;
             if coupons.len() >= 3 {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
@@ -131,7 +128,7 @@ async fn app_post_users_inner(
             let Some(inviter): Option<User> =
                 sqlx::query_as("SELECT * FROM users WHERE invitation_code = ?")
                     .bind(req_invitation_code)
-                    .fetch_optional(&mut *tx)
+                    .fetch_optional(pool)
                     .await?
             else {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
@@ -142,19 +139,17 @@ async fn app_post_users_inner(
                 .bind(&user_id)
                 .bind(format!("INV_{req_invitation_code}"))
                 .bind(1500)
-                .execute(&mut *tx)
+                .execute(pool)
                 .await?;
             // 招待した人にもRewardを付与
             sqlx::query("INSERT INTO coupons (user_id, code, discount) VALUES (?, CONCAT(?, '_', FLOOR(UNIX_TIMESTAMP(NOW(3))*1000)), ?)")
                 .bind(inviter.id)
                 .bind(format!("RWD_{req_invitation_code}"))
                 .bind(1000)
-                .execute(&mut *tx)
+                .execute(pool)
                 .await?;
         }
     }
-
-    tx.commit().await?;
 
     let jar = jar
         .take()
@@ -283,11 +278,11 @@ async fn app_post_rides(
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
     let ride_id = Id::new();
 
-    if repo.rides_user_ongoing(None, &user.id).await? {
+    if repo.rides_user_ongoing(&user.id).await? {
         return Err(Error::Conflict("ride already exists"));
     }
 
-    repo.rides_new(
+    repo.rides_new_and_set_matching(
         None,
         &ride_id,
         &user.id,
@@ -295,40 +290,36 @@ async fn app_post_rides(
         req.destination_coordinate,
     )
     .await?;
-    repo.ride_status_update(None, &ride_id, &user.id, None, RideStatusEnum::Matching)
-        .await?;
 
     let ride_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rides WHERE user_id = ?")
         .bind(&user.id)
         .fetch_one(&pool)
         .await?;
 
-    let mut tx = pool.begin().await?;
-
     if ride_count == 1 {
         // 初回利用で、初回利用クーポンがあれば必ず使う
         let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL FOR UPDATE")
             .bind(&user.id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&pool)
             .await?;
         if coupon.is_some() {
             sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = 'CP_NEW2024'")
                 .bind(&ride_id)
                 .bind(&user.id)
-                .execute(&mut *tx)
+                .execute(&pool)
                 .await?;
         } else {
             // 無ければ他のクーポンを付与された順番に使う
             let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE")
                 .bind(&user.id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&pool)
                 .await?;
             if let Some(coupon) = coupon {
                 sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
                     .bind(&ride_id)
                     .bind(&user.id)
                     .bind(coupon.code)
-                    .execute(&mut *tx)
+                    .execute(&pool)
                     .await?;
             }
         }
@@ -336,19 +327,17 @@ async fn app_post_rides(
         // 他のクーポンを付与された順番に使う
         let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE")
                 .bind(&user.id)
-                .fetch_optional(&mut *tx)
+                .fetch_optional(&pool)
                 .await?;
         if let Some(coupon) = coupon {
             sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
                 .bind(&ride_id)
                 .bind(&user.id)
                 .bind(coupon.code)
-                .execute(&mut *tx)
+                .execute(&pool)
                 .await?;
         }
     }
-
-    tx.commit().await?;
 
     let fare = calculate_discounted_fare(
         &pool,
@@ -470,14 +459,8 @@ async fn app_post_ride_evaluation(
     let updated_at = repo
         .rides_set_evaluation(&mut tx, &ride_id, chair_id, req.evaluation)
         .await?;
-    repo.ride_status_update(
-        &mut tx,
-        &ride_id,
-        &ride.user_id,
-        Some(chair_id),
-        RideStatusEnum::Completed,
-    )
-    .await?;
+    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
+        .await?;
 
     tx.commit().await?;
 

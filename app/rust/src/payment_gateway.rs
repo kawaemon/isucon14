@@ -5,6 +5,7 @@ use crate::models::{Id, User};
 use crate::Error;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentGatewayError {
@@ -46,8 +47,8 @@ where
     }
 }
 
-const CONCURRENCY: usize = 10;
-const RETRY_LIMIT: usize = 10;
+const CONCURRENCY: usize = 100;
+const RETRY_LIMIT: usize = 20;
 
 #[derive(Debug, Clone)]
 pub struct PaymentGatewayRestricter {
@@ -127,6 +128,7 @@ where
             }
             retry += 1;
             // tracing::warn!("pgw request failed: retrying [{}/{RETRY_LIMIT}]", retry + 1);
+            tokio::time::sleep(Duration::from_millis(10)).await;
             continue;
         }
         break;

@@ -54,15 +54,13 @@ struct ChairPostChairsResponse {
 }
 
 async fn chair_post_chairs(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<ChairPostChairsRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
-    let Some(owner): Option<Owner> =
-        sqlx::query_as("SELECT * FROM owners WHERE chair_register_token = ?")
-            .bind(req.chair_register_token)
-            .fetch_optional(&pool)
-            .await?
+    let Some(owner): Option<Owner> = repo
+        .owner_get_by_chair_register_token(None, &req.chair_register_token)
+        .await?
     else {
         return Err(Error::Unauthorized("invalid chair_register_token"));
     };
@@ -115,39 +113,23 @@ struct ChairPostCoordinateResponse {
 }
 
 async fn chair_post_coordinate(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
-    let mut tx = pool.begin().await?;
+    let created_at = repo.chair_location_update(None, &chair.id, req).await?;
 
-    let created_at = repo.chair_location_update(&mut tx, &chair.id, req).await?;
-
-    if let Some((ride, status)) = repo.rides_get_assigned(&mut tx, &chair.id).await? {
+    if let Some((ride, status)) = repo.rides_get_assigned(None, &chair.id).await? {
         if req == ride.pickup_coord() && status == RideStatusEnum::Enroute {
-            repo.ride_status_update(
-                &mut tx,
-                &ride.id,
-                &ride.user_id,
-                Some(&chair.id),
-                RideStatusEnum::Pickup,
-            )
-            .await?;
+            repo.ride_status_update(None, &ride.id, RideStatusEnum::Pickup)
+                .await?;
         }
 
         if req == ride.destination_coord() && status == RideStatusEnum::Carrying {
-            repo.ride_status_update(
-                &mut tx,
-                &ride.id,
-                &ride.user_id,
-                Some(&chair.id),
-                RideStatusEnum::Arrived,
-            )
-            .await?;
+            repo.ride_status_update(None, &ride.id, RideStatusEnum::Arrived)
+                .await?;
         }
     }
-
-    tx.commit().await?;
 
     Ok(axum::Json(ChairPostCoordinateResponse {
         recorded_at: created_at.timestamp_millis(),
@@ -210,7 +192,7 @@ async fn chair_get_notification_inner(
         let repo = repo.clone();
         tokio::spawn(async move {
             repo.ride_cache.push_free_chair(&chair_id).await;
-            repo.do_matching().await;
+            // repo.do_matching().await;
         });
     }
 
@@ -277,14 +259,7 @@ async fn chair_post_ride_status(
         }
     };
 
-    repo.ride_status_update(
-        &mut tx,
-        &ride_id,
-        &ride.user_id,
-        Some(ride.chair_id.as_ref().unwrap()),
-        next,
-    )
-    .await?;
+    repo.ride_status_update(&mut tx, &ride_id, next).await?;
 
     tx.commit().await?;
 

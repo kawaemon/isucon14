@@ -237,6 +237,7 @@ pub struct Owner {
     pub id: Id<Owner>,
     pub name: String,
     pub access_token: String,
+    pub chair_register_token: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

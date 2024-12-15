@@ -24,10 +24,11 @@ pub type RideCache = Arc<RideCacheInner>;
 #[derive(Debug)]
 pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
-    latest_ride_stat: RwLock<HashMap<Id<Ride>, RideStatusEnum>>,
 
     waiting_rides: Mutex<VecDeque<Arc<RideEntry>>>,
     free_chairs: Mutex<Vec<Id<Chair>>>,
+
+    chair_movement_cache: RwLock<HashMap<Id<Chair>, Arc<RideEntry>>>,
 
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
@@ -35,10 +36,11 @@ pub struct RideCacheInner {
 
 struct RideCacheInit {
     ride_cache: HashMap<Id<Ride>, Arc<RideEntry>>,
-    latest_ride_stat: HashMap<Id<Ride>, RideStatusEnum>,
 
     waiting_rides: VecDeque<Arc<RideEntry>>,
     free_chairs: Vec<Id<Chair>>,
+
+    chair_movement_cache: HashMap<Id<Chair>, Arc<RideEntry>>,
 
     user_notification: HashMap<Id<User>, NotificationQueue>,
     chair_notification: HashMap<Id<Chair>, NotificationQueue>,
@@ -127,8 +129,39 @@ impl RideCacheInit {
                     chair_id: RwLock::new(ride.chair_id.clone()),
                     evaluation: RwLock::new(ride.evaluation),
                     updated_at: RwLock::new(ride.updated_at),
+                    latest_status: RwLock::new(*latest_ride_stat.get(&ride.id).unwrap()),
                 }),
             );
+        }
+
+        //
+        // chair_movement_cache
+        //
+        let mut chair_movement_cache = HashMap::new();
+        for ride in &init.rides {
+            let Some(chair_id) = ride.chair_id.as_ref() else {
+                continue;
+            };
+            let ride = rides.get(&ride.id).unwrap();
+            for status in statuses.get(&ride.id).unwrap() {
+                match status.status {
+                    RideStatusEnum::Matching => {}
+                    RideStatusEnum::Enroute => {
+                        chair_movement_cache.insert(chair_id.clone(), Arc::clone(ride));
+                    }
+                    RideStatusEnum::Pickup => {
+                        chair_movement_cache.remove(chair_id).unwrap();
+                    }
+                    RideStatusEnum::Carrying => {
+                        chair_movement_cache.insert(chair_id.clone(), Arc::clone(ride));
+                    }
+                    RideStatusEnum::Arrived => {
+                        chair_movement_cache.remove(chair_id).unwrap();
+                    }
+                    RideStatusEnum::Completed => {}
+                    RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
+                }
+            }
         }
 
         //
@@ -160,11 +193,11 @@ impl RideCacheInit {
 
         Self {
             ride_cache: rides,
-            latest_ride_stat,
             user_notification,
             chair_notification,
             waiting_rides,
             free_chairs,
+            chair_movement_cache,
         }
     }
 }
@@ -173,12 +206,12 @@ impl Repository {
     pub(super) async fn init_ride_cache(_pool: &Pool<MySql>, init: &mut CacheInit) -> RideCache {
         let init = RideCacheInit::from_init(init);
         Arc::new(RideCacheInner {
-            latest_ride_stat: RwLock::new(init.latest_ride_stat),
             user_notification: RwLock::new(init.user_notification),
             chair_notification: RwLock::new(init.chair_notification),
             ride_cache: RwLock::new(init.ride_cache),
             waiting_rides: Mutex::new(init.waiting_rides),
             free_chairs: Mutex::new(init.free_chairs),
+            chair_movement_cache: RwLock::new(init.chair_movement_cache),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, _pool: &Pool<MySql>, init: &mut CacheInit) {
@@ -186,26 +219,26 @@ impl Repository {
 
         let RideCacheInner {
             ride_cache,
-            latest_ride_stat,
             user_notification,
             chair_notification,
             waiting_rides,
             free_chairs,
+            chair_movement_cache,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
-        let mut l = latest_ride_stat.write().await;
         let mut u = user_notification.write().await;
         let mut c = chair_notification.write().await;
         let mut f = free_chairs.lock().await;
         let mut w = waiting_rides.lock().await;
+        let mut cm = chair_movement_cache.write().await;
 
         *r = init.ride_cache;
-        *l = init.latest_ride_stat;
         *u = init.user_notification;
         *c = init.chair_notification;
         *f = init.free_chairs;
         *w = init.waiting_rides;
+        *cm = init.chair_movement_cache;
     }
 }
 
@@ -399,6 +432,7 @@ pub struct RideEntry {
     chair_id: RwLock<Option<Id<Chair>>>,
     evaluation: RwLock<Option<i32>>,
     updated_at: RwLock<DateTime<Utc>>,
+    latest_status: RwLock<RideStatusEnum>,
 }
 impl RideEntry {
     pub async fn ride(&self) -> Ride {
@@ -427,6 +461,9 @@ impl RideEntry {
         *e = Some(eval);
         *u = now;
     }
+    pub async fn set_latest_ride_status(&self, status: RideStatusEnum) {
+        *self.latest_status.write().await = status;
+    }
 }
 
 impl Repository {
@@ -434,22 +471,36 @@ impl Repository {
         let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
         let mut free_chairs = self.ride_cache.free_chairs.lock().await;
 
+        let mut chair_pos = HashMap::new();
+        for chair in free_chairs.iter() {
+            let loc = self.chair_location_get_latest(None, chair).await.unwrap();
+            chair_pos.insert(chair.clone(), loc);
+        }
+
         let matches = waiting_rides.len().min(free_chairs.len());
 
-        for _ in 0..matches {
-            let ride = waiting_rides.pop_front().unwrap();
-            let chair = free_chairs.pop().unwrap();
-
-            self.rides_assign(&ride.id, &chair).await.unwrap();
+        for ride in waiting_rides.drain(0..matches) {
+            let best = free_chairs
+                .iter()
+                .min_by_key(|cid| {
+                    chair_pos
+                        .get(cid)
+                        .unwrap()
+                        .map(|x| ride.pickup.distance(x))
+                        .unwrap_or(9999999)
+                })
+                .unwrap()
+                .clone();
+            let pos = free_chairs.iter().position(|x| x == &best).unwrap();
+            free_chairs.swap_remove(pos);
+            self.rides_assign(&ride.id, &best).await.unwrap();
         }
 
-        if waiting_rides.len() > 0 {
-            tracing::info!(
-                "waiting = {}, free = {}, matches = {}",
-                waiting_rides.len(),
-                free_chairs.len(),
-                matches
-            );
-        }
+        tracing::info!(
+            "waiting = {}, free = {}, matches = {}",
+            waiting_rides.len(),
+            free_chairs.len(),
+            matches
+        );
     }
 }

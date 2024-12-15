@@ -87,7 +87,6 @@ impl Repository {
     #[allow(clippy::too_many_arguments)]
     pub async fn user_add(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
         id: &Id<User>,
         username: &str,
         first: &str,
@@ -96,7 +95,6 @@ impl Repository {
         token: &str,
         inv_code: &str,
     ) -> Result<()> {
-        let mut tx = tx.into();
         let now = Utc::now();
 
         let u = User {
@@ -112,7 +110,7 @@ impl Repository {
         self.user_cache.push(u).await;
         self.ride_cache.on_user_add(id).await;
 
-        let q = sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(id)
             .bind(username)
             .bind(first)
@@ -121,8 +119,8 @@ impl Repository {
             .bind(token)
             .bind(inv_code)
             .bind(now)
-            .bind(now);
-        maybe_tx!(self, tx, q.execute)?;
+            .bind(now)
+            .execute(&self.pool).await?;
         Ok(())
     }
 }

@@ -11,6 +11,7 @@ use crate::{AppState, Error};
 pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Error> {
     let uri = req.uri().clone();
     let path = uri.path();
+    let method = req.method().clone();
 
     tokio::pin! {
         let response_fut = next.run(req);
@@ -22,10 +23,10 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
         }
         tokio::select! {
             _ = &mut timeout => {
-                 tracing::debug!("{path} is taking {i} seconds and continuing...")
+                tracing::warn!("{method} {path} is taking {i} seconds and continuing...");
             }
             res = &mut response_fut => {
-                return Ok(res)
+                return Ok(res);
             }
         }
     }

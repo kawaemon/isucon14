@@ -21,56 +21,37 @@ impl Repository {
         Ok(Some(e.ride().await))
     }
 
-    pub async fn rides_user_ongoing(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        user: &Id<User>,
-    ) -> Result<bool> {
-        let mut tx = tx.into();
-
-        let q = sqlx::query_as("SELECT * FROM rides WHERE user_id = ?").bind(user);
-
-        let rides: Vec<Ride> = maybe_tx!(self, tx, q.fetch_all)?;
-
-        for ride in rides {
-            let status = self.ride_status_latest(tx.as_deref_mut(), &ride.id).await?;
-            if status != RideStatusEnum::Completed {
+    // COMPLETED
+    pub async fn rides_user_ongoing(&self, user: &Id<User>) -> Result<bool> {
+        let cache = self.ride_cache.ride_cache.read().await;
+        for ride in cache.values() {
+            if &ride.user_id != user {
+                continue;
+            }
+            if *ride.latest_status.read().await != RideStatusEnum::Completed {
                 return Ok(true);
             }
         }
-
         Ok(false)
-    }
-
-    pub async fn rides_waiting_for_match(&self) -> Result<Vec<Ride>> {
-        let t = sqlx::query_as("select * from rides where chair_id is null order by created_at")
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(t)
     }
 
     pub async fn rides_get_assigned(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
+        _tx: impl Into<Option<&mut Tx>>,
         chair_id: &Id<Chair>,
     ) -> Result<Option<(Ride, RideStatusEnum)>> {
-        let mut tx = tx.into();
-        let q = sqlx::query_as(
-            "SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1",
-        )
-        .bind(chair_id);
-
-        let Some(ride): Option<Ride> = maybe_tx!(self, tx, q.fetch_optional)? else {
+        let cache = self.ride_cache.chair_movement_cache.read().await;
+        let Some(m) = cache.get(chair_id) else {
             return Ok(None);
         };
-
-        let status = self.ride_status_latest(tx, &ride.id).await?;
+        let ride = m.ride().await;
+        let status = *m.latest_status.read().await;
         Ok(Some((ride, status)))
     }
 
     // writes
 
-    pub async fn rides_new(
+    pub async fn rides_new_and_set_matching(
         &self,
         tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
@@ -102,10 +83,14 @@ impl Repository {
                 chair_id: RwLock::new(None),
                 evaluation: RwLock::new(None),
                 updated_at: RwLock::new(now),
+                latest_status: RwLock::new(RideStatusEnum::Matching),
             });
             let mut cache = self.ride_cache.ride_cache.write().await;
             cache.insert(id.clone(), Arc::clone(&r));
         }
+
+        self.ride_status_update(tx, id, RideStatusEnum::Matching)
+            .await?;
 
         Ok(())
     }
