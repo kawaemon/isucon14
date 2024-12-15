@@ -35,7 +35,7 @@ use maybe_tx;
 pub type Tx = Transaction<'static, MySql>;
 type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Repository {
     pool: Pool<MySql>,
 

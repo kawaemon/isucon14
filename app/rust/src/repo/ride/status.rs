@@ -65,7 +65,7 @@ impl Repository {
 
         if let Some(c) = chair_id {
             if status == RideStatusEnum::Completed {
-                self.chair_cache.on_chair_status_change(&c, false).await;
+                self.ride_cache.on_chair_status_change(&c, false).await;
             }
 
             {

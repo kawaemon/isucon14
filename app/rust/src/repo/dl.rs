@@ -1,5 +1,4 @@
 use std::{
-    backtrace::Backtrace,
     future::Future,
     ops::{Deref, DerefMut},
     time::Duration,

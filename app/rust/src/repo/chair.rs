@@ -25,9 +25,6 @@ pub struct ChairEntry {
     pub is_active: RwLock<bool>,
     pub updated_at: RwLock<DateTime<Utc>>,
 
-    /// 通知されているとは限らない
-    pub is_latest_completed: RwLock<bool>,
-
     pub stat: RwLock<ChairStat>,
 }
 impl ChairEntry {
@@ -41,7 +38,6 @@ impl ChairEntry {
             is_active: RwLock::new(c.is_active),
             created_at: c.created_at,
             updated_at: RwLock::new(c.updated_at),
-            is_latest_completed: RwLock::new(true),
             stat: RwLock::new(ChairStat::new()),
         }
     }
@@ -107,12 +103,6 @@ impl ChairCacheInner {
     pub async fn on_eval(&self, chair_id: &Id<Chair>, eval: i32) {
         let cache = self.by_id.read().await;
         cache.get(chair_id).unwrap().stat.write().await.update(eval);
-    }
-
-    pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
-        let cache = self.by_id.read().await;
-        let mut m = cache.get(id).unwrap().is_latest_completed.write().await;
-        *m = !on_duty;
     }
 }
 
@@ -241,22 +231,6 @@ impl Repository {
         })
     }
 
-    /// latest が completed になっていればよい
-    pub async fn chair_get_completeds(&self) -> Result<Vec<Chair>> {
-        let mut res = vec![];
-        for chair in self.chair_cache.by_id.read().await.values() {
-            // DEADLOCK HERE
-            if !*chair.is_active.read().await {
-                continue;
-            }
-            if !*chair.is_latest_completed.read().await {
-                continue;
-            }
-            res.push(chair.chair().await);
-        }
-        Ok(res)
-    }
-
     // writes
 
     pub async fn chair_add(
@@ -307,6 +281,7 @@ impl Repository {
             entry.set_active(active, now).await;
 
             if active {
+                self.ride_cache.on_chair_status_change(id, false).await;
                 self.ride_cache.push_free_chair(id).await;
             }
         }

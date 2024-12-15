@@ -1,6 +1,8 @@
+use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::repo::dl::DlMutex as Mutex;
 use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
+use std::collections::HashSet;
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
@@ -24,7 +26,8 @@ pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
 
     waiting_rides: Mutex<VecDeque<Arc<RideEntry>>>,
-    free_chairs: Mutex<Vec<Id<Chair>>>,
+    free_chairs_lv1: Mutex<HashSet<Id<Chair>>>,
+    free_chairs_lv2: Mutex<Vec<Id<Chair>>>,
 
     chair_movement_cache: RwLock<HashMap<Id<Chair>, Arc<RideEntry>>>,
 
@@ -36,7 +39,8 @@ struct RideCacheInit {
     ride_cache: HashMap<Id<Ride>, Arc<RideEntry>>,
 
     waiting_rides: VecDeque<Arc<RideEntry>>,
-    free_chairs: Vec<Id<Chair>>,
+    free_chairs_lv1: HashSet<Id<Chair>>,
+    free_chairs_lv2: Vec<Id<Chair>>,
 
     chair_movement_cache: HashMap<Id<Chair>, Arc<RideEntry>>,
 
@@ -44,7 +48,7 @@ struct RideCacheInit {
     chair_notification: HashMap<Id<Chair>, NotificationQueue>,
 }
 impl RideCacheInit {
-    async fn from_init(init: &mut CacheInit, chair_cache: &ChairCache) -> Self {
+    async fn from_init(init: &mut CacheInit) -> Self {
         init.rides.sort_unstable_by_key(|x| x.created_at);
         init.ride_statuses.sort_unstable_by_key(|x| x.created_at);
 
@@ -145,7 +149,6 @@ impl RideCacheInit {
                 match status.status {
                     RideStatusEnum::Matching => {}
                     RideStatusEnum::Enroute => {
-                        chair_cache.on_chair_status_change(chair_id, true).await;
                         chair_movement_cache.insert(chair_id.clone(), Arc::clone(ride));
                     }
                     RideStatusEnum::Pickup => {
@@ -157,9 +160,7 @@ impl RideCacheInit {
                     RideStatusEnum::Arrived => {
                         chair_movement_cache.remove(chair_id).unwrap();
                     }
-                    RideStatusEnum::Completed => {
-                        chair_cache.on_chair_status_change(chair_id, false).await;
-                    }
+                    RideStatusEnum::Completed => {}
                     RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
                 }
             }
@@ -179,16 +180,35 @@ impl RideCacheInit {
         //
         // free_chairs
         //
-        let mut free_chairs = Vec::new();
+        let mut free_chairs_lv1 = HashSet::new();
+        let mut free_chairs_lv2 = Vec::new();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
-            let ok = chair.is_active
+            // active かつ 送信済みかそうでないかに関わらず最後に作成された通知が Completed であればいい
+            let mut lv1 = chair.is_active;
+            if !n.queue.is_empty() {
+                lv1 &= n.queue.back().unwrap().status == RideStatusEnum::Completed
+            } else if n.last_sent.is_some() {
+                lv1 &= n
+                    .last_sent
+                    .as_ref()
+                    .is_some_and(|x| x.status == RideStatusEnum::Completed);
+            } else if n.queue.is_empty() && n.last_sent.is_none() {
+            } else {
+                unreachable!()
+            }
+            if lv1 {
+                free_chairs_lv1.insert(chair.id.clone());
+            }
+
+            // active かつ最後の通知が Completed でそれが送信済みであればいい
+            let lv2 = chair.is_active
                 && n.queue.is_empty()
                 && n.last_sent
                     .as_ref()
                     .is_none_or(|x| x.status == RideStatusEnum::Completed);
-            if ok {
-                free_chairs.push(chair.id.clone());
+            if lv2 {
+                free_chairs_lv2.push(chair.id.clone());
             }
         }
 
@@ -197,7 +217,8 @@ impl RideCacheInit {
             user_notification,
             chair_notification,
             waiting_rides,
-            free_chairs,
+            free_chairs_lv1,
+            free_chairs_lv2,
             chair_movement_cache,
         }
     }
@@ -206,43 +227,75 @@ impl RideCacheInit {
 impl Repository {
     pub(super) async fn init_ride_cache(
         init: &mut CacheInit,
-        chair_cache: &ChairCache,
+        _chair_cache: &ChairCache,
     ) -> RideCache {
-        let init = RideCacheInit::from_init(init, chair_cache).await;
+        let init = RideCacheInit::from_init(init).await;
         Arc::new(RideCacheInner {
             user_notification: RwLock::new(init.user_notification),
             chair_notification: RwLock::new(init.chair_notification),
             ride_cache: RwLock::new(init.ride_cache),
             waiting_rides: Mutex::new(init.waiting_rides),
-            free_chairs: Mutex::new(init.free_chairs),
+            free_chairs_lv1: Mutex::new(init.free_chairs_lv1),
+            free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
-        let init = RideCacheInit::from_init(init, &self.chair_cache).await;
+        let init = RideCacheInit::from_init(init).await;
 
         let RideCacheInner {
             ride_cache,
             user_notification,
             chair_notification,
             waiting_rides,
-            free_chairs,
+            free_chairs_lv1,
+            free_chairs_lv2,
             chair_movement_cache,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
         let mut u = user_notification.write().await;
         let mut c = chair_notification.write().await;
-        let mut f = free_chairs.lock().await;
+        let mut f1 = free_chairs_lv1.lock().await;
+        let mut f2 = free_chairs_lv2.lock().await;
         let mut w = waiting_rides.lock().await;
         let mut cm = chair_movement_cache.write().await;
 
         *r = init.ride_cache;
         *u = init.user_notification;
         *c = init.chair_notification;
-        *f = init.free_chairs;
+        *f1 = init.free_chairs_lv1;
+        *f2 = init.free_chairs_lv2;
         *w = init.waiting_rides;
         *cm = init.chair_movement_cache;
+    }
+}
+
+// notification の送信後
+impl Repository {
+    /// latest が completed になっていればよい
+    pub async fn chair_huifhiubher(
+        &self,
+        coord: Coordinate,
+        dist: i32,
+    ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
+        let cache = self.ride_cache.free_chairs_lv1.lock().await;
+        let mut res = vec![];
+        for chair in cache.iter() {
+            let Some(chair_coord) = self.chair_location_get_latest(chair).await? else {
+                continue;
+            };
+            if coord.distance(chair_coord) <= dist {
+                let chair = self.chair_get_by_id(None, chair).await?.unwrap();
+                res.push(AppGetNearbyChairsResponseChair {
+                    id: chair.id,
+                    name: chair.name,
+                    model: chair.model,
+                    current_coordinate: chair_coord,
+                });
+            }
+        }
+        Ok(res)
     }
 }
 
@@ -260,7 +313,15 @@ impl RideCacheInner {
             .insert(id.clone(), NotificationQueue::new());
     }
     pub async fn push_free_chair(&self, id: &Id<Chair>) {
-        self.free_chairs.lock().await.push(id.clone()); // DEADLOCK HERE
+        self.free_chairs_lv2.lock().await.push(id.clone());
+    }
+    pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
+        let mut cache = self.free_chairs_lv1.lock().await;
+        if on_duty {
+            cache.remove(id);
+        } else {
+            cache.insert(id.clone());
+        }
     }
 }
 
@@ -475,7 +536,7 @@ impl Repository {
         let (pairs, waiting, free) = {
             let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
             let waiting_rides_len = waiting_rides.len();
-            let mut free_chairs = self.ride_cache.free_chairs.lock().await;
+            let mut free_chairs = self.ride_cache.free_chairs_lv2.lock().await;
             let free_chairs_len = free_chairs.len();
 
             let mut chair_pos = HashMap::new();
@@ -514,15 +575,13 @@ impl Repository {
             (pairs, waiting_rides_len, free_chairs_len)
         };
 
-        for pair in &pairs {
+        let pairs_len = pairs.len();
+        for pair in pairs {
             self.rides_assign(&pair.ride_id, &pair.chair_id)
                 .await
                 .unwrap();
         }
 
-        tracing::info!(
-            "waiting = {waiting}, free = {free}, matches = {}",
-            pairs.len()
-        );
+        tracing::info!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
     }
 }

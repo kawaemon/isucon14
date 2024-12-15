@@ -585,11 +585,11 @@ struct AppGetNearbyChairsResponse {
 }
 
 #[derive(Debug, serde::Serialize)]
-struct AppGetNearbyChairsResponseChair {
-    id: Id<Chair>,
-    name: String,
-    model: String,
-    current_coordinate: Coordinate,
+pub struct AppGetNearbyChairsResponseChair {
+    pub id: Id<Chair>,
+    pub name: String,
+    pub model: String,
+    pub current_coordinate: Coordinate,
 }
 
 async fn app_get_nearby_chairs(
@@ -602,25 +602,8 @@ async fn app_get_nearby_chairs(
         longitude: query.longitude,
     };
 
-    let chairs: Vec<Chair> = repo.chair_get_completeds().await?;
-
-    let mut nearby_chairs = Vec::new();
-    for chair in chairs {
-        let Some(chair_coord) = repo.chair_location_get_latest(&chair.id).await? else {
-            continue;
-        };
-        if coordinate.distance(chair_coord) <= distance {
-            nearby_chairs.push(AppGetNearbyChairsResponseChair {
-                id: chair.id,
-                name: chair.name,
-                model: chair.model,
-                current_coordinate: chair_coord,
-            });
-        }
-    }
-
     Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs: nearby_chairs,
+        chairs: repo.chair_huifhiubher(coordinate, distance).await?,
         retrieved_at: Utc::now().timestamp(),
     }))
 }

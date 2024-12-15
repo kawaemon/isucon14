@@ -1,9 +1,9 @@
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
+use crate::repo::dl::DlRwLock as RwLock;
 use crate::repo::{maybe_tx, Repository, Result, Tx};
 use crate::Coordinate;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use crate::repo::dl::DlRwLock as RwLock;
 
 use super::{NotificationBody, RideEntry};
 
@@ -97,6 +97,14 @@ impl Repository {
 
     pub async fn rides_assign(&self, ride_id: &Id<Ride>, chair_id: &Id<Chair>) -> Result<()> {
         let now = Utc::now();
+        {
+            let mut cache = self.ride_cache.ride_cache.write().await;
+            let e = cache.get_mut(ride_id).unwrap();
+            e.set_chair_id(chair_id, now).await;
+        }
+        {
+            self.ride_cache.on_chair_status_change(chair_id, true).await;
+        }
         sqlx::query("update rides set chair_id = ?, updated_at = ? where id = ?")
             .bind(chair_id)
             .bind(now)
@@ -116,16 +124,6 @@ impl Repository {
             ride_status_id: status.id.clone(),
             status: RideStatusEnum::Matching,
         };
-        {
-            let mut cache = self.ride_cache.ride_cache.write().await;
-            let e = cache.get_mut(ride_id).unwrap();
-            e.set_chair_id(chair_id, now).await;
-        }
-        {
-            self.chair_cache
-                .on_chair_status_change(chair_id, true)
-                .await;
-        }
         {
             let mut cache = self.ride_cache.chair_notification.write().await;
             let mark_sent = cache.get_mut(chair_id).unwrap().push(b, false);
