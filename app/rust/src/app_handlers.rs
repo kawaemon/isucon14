@@ -593,7 +593,7 @@ struct AppGetNearbyChairsResponseChair {
 }
 
 async fn app_get_nearby_chairs(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
 ) -> Result<axum::Json<AppGetNearbyChairsResponse>, Error> {
     let distance = query.distance.unwrap_or(50);
@@ -602,13 +602,11 @@ async fn app_get_nearby_chairs(
         longitude: query.longitude,
     };
 
-    let mut tx = pool.begin().await?;
-
-    let chairs: Vec<Chair> = repo.chair_get_completeds(&mut tx).await?;
+    let chairs: Vec<Chair> = repo.chair_get_completeds().await?;
 
     let mut nearby_chairs = Vec::new();
     for chair in chairs {
-        let Some(chair_coord) = repo.chair_location_get_latest(&mut tx, &chair.id).await? else {
+        let Some(chair_coord) = repo.chair_location_get_latest(&chair.id).await? else {
             continue;
         };
         if coordinate.distance(chair_coord) <= distance {

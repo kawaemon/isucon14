@@ -6,14 +6,12 @@ use std::{
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 
-use sqlx::{MySql, Pool};
-
 use crate::{
     models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User},
     Coordinate,
 };
 
-use super::{cache_init::CacheInit, Repository, Result};
+use super::{cache_init::CacheInit, chair::ChairCache, Repository, Result};
 
 #[allow(clippy::module_inception)]
 mod ride;
@@ -46,7 +44,7 @@ struct RideCacheInit {
     chair_notification: HashMap<Id<Chair>, NotificationQueue>,
 }
 impl RideCacheInit {
-    fn from_init(init: &mut CacheInit) -> Self {
+    async fn from_init(init: &mut CacheInit, chair_cache: &ChairCache) -> Self {
         init.rides.sort_unstable_by_key(|x| x.created_at);
         init.ride_statuses.sort_unstable_by_key(|x| x.created_at);
 
@@ -147,6 +145,7 @@ impl RideCacheInit {
                 match status.status {
                     RideStatusEnum::Matching => {}
                     RideStatusEnum::Enroute => {
+                        chair_cache.on_chair_status_change(chair_id, true).await;
                         chair_movement_cache.insert(chair_id.clone(), Arc::clone(ride));
                     }
                     RideStatusEnum::Pickup => {
@@ -158,7 +157,9 @@ impl RideCacheInit {
                     RideStatusEnum::Arrived => {
                         chair_movement_cache.remove(chair_id).unwrap();
                     }
-                    RideStatusEnum::Completed => {}
+                    RideStatusEnum::Completed => {
+                        chair_cache.on_chair_status_change(chair_id, false).await;
+                    }
                     RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
                 }
             }
@@ -203,8 +204,11 @@ impl RideCacheInit {
 }
 
 impl Repository {
-    pub(super) async fn init_ride_cache(_pool: &Pool<MySql>, init: &mut CacheInit) -> RideCache {
-        let init = RideCacheInit::from_init(init);
+    pub(super) async fn init_ride_cache(
+        init: &mut CacheInit,
+        chair_cache: &ChairCache,
+    ) -> RideCache {
+        let init = RideCacheInit::from_init(init, chair_cache).await;
         Arc::new(RideCacheInner {
             user_notification: RwLock::new(init.user_notification),
             chair_notification: RwLock::new(init.chair_notification),
@@ -214,8 +218,8 @@ impl Repository {
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
         })
     }
-    pub(super) async fn reinit_ride_cache(&self, _pool: &Pool<MySql>, init: &mut CacheInit) {
-        let init = RideCacheInit::from_init(init);
+    pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
+        let init = RideCacheInit::from_init(init, &self.chair_cache).await;
 
         let RideCacheInner {
             ride_cache,
@@ -473,7 +477,7 @@ impl Repository {
 
         let mut chair_pos = HashMap::new();
         for chair in free_chairs.iter() {
-            let loc = self.chair_location_get_latest(None, chair).await.unwrap();
+            let loc = self.chair_location_get_latest(chair).await.unwrap();
             chair_pos.insert(chair.clone(), loc);
         }
 

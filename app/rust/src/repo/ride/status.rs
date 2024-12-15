@@ -58,6 +58,10 @@ impl Repository {
             }
 
             if let Some(c) = ride.chair_id.read().await.as_ref() {
+                if status == RideStatusEnum::Completed {
+                    self.chair_cache.on_chair_status_change(c, false).await;
+                }
+
                 let mut chair = self.ride_cache.chair_notification.write().await;
                 let mark_sent = chair.get_mut(c).unwrap().push(b.clone(), false);
                 if mark_sent {

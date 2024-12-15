@@ -122,6 +122,11 @@ impl Repository {
             e.set_chair_id(chair_id, now).await;
         }
         {
+            self.chair_cache
+                .on_chair_status_change(chair_id, true)
+                .await;
+        }
+        {
             let mut cache = self.ride_cache.chair_notification.write().await;
             let mark_sent = cache.get_mut(chair_id).unwrap().push(b, false);
             if mark_sent {

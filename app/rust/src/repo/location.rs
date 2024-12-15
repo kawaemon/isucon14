@@ -161,11 +161,7 @@ impl Repository {
 }
 
 impl Repository {
-    pub async fn chair_location_get_latest(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Chair>,
-    ) -> Result<Option<Coordinate>> {
+    pub async fn chair_location_get_latest(&self, id: &Id<Chair>) -> Result<Option<Coordinate>> {
         let cache = self.chair_location_cache.cache.read().await;
         Ok(cache.get(id).map(|x| x.latest_coord))
     }

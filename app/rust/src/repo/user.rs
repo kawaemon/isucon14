@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 
 use crate::models::{Id, User};
 
-use super::{cache_init::CacheInit, maybe_tx, Repository, Result, Tx};
+use super::{cache_init::CacheInit, Repository, Result};
 
 pub type UserCache = Arc<UserCacheInner>;
 type SharedUser = Arc<User>;
