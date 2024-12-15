@@ -1,6 +1,6 @@
 use sqlx::{MySql, Pool};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use crate::repo::dl::DlRwLock as RwLock;
 
 use super::{Repository, Result, Tx};
 

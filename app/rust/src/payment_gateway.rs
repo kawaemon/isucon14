@@ -47,7 +47,7 @@ where
     }
 }
 
-const CONCURRENCY: usize = 100;
+const CONCURRENCY: usize = 10;
 const RETRY_LIMIT: usize = 20;
 
 #[derive(Debug, Clone)]

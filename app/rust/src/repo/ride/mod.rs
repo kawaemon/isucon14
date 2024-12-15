@@ -1,10 +1,10 @@
+use crate::repo::dl::DlMutex as Mutex;
+use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
 use std::{
     collections::{HashMap, VecDeque},
     sync::Arc,
 };
-use tokio::sync::Mutex;
-use tokio::sync::RwLock;
 
 use crate::{
     models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User},
@@ -260,7 +260,7 @@ impl RideCacheInner {
             .insert(id.clone(), NotificationQueue::new());
     }
     pub async fn push_free_chair(&self, id: &Id<Chair>) {
-        self.free_chairs.lock().await.push(id.clone());
+        self.free_chairs.lock().await.push(id.clone()); // DEADLOCK HERE
     }
 }
 

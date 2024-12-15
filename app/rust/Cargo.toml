@@ -8,6 +8,7 @@ publish = false
 anyhow = { version = "1", features = ["backtrace"] }
 axum = "0.7"
 axum-extra = { version = "0.9", features = ["cookie"] }
+backtrace = "0.3.74"
 chrono = "0.4"
 console-subscriber = "0.4.1"
 futures = "0.3.31"
@@ -22,6 +23,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.133"
+sha2 = "0.10.8"
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
     "mysql",

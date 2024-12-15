@@ -3,7 +3,7 @@ use crate::repo::{maybe_tx, Repository, Result, Tx};
 use crate::Coordinate;
 use chrono::{DateTime, Utc};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use crate::repo::dl::DlRwLock as RwLock;
 
 use super::{NotificationBody, RideEntry};
 

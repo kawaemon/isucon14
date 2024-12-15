@@ -56,41 +56,48 @@ impl Repository {
                 self.ride_status_app_notified(tx.as_deref_mut(), &status_id)
                     .await?;
             }
+        }
 
-            if let Some(c) = ride.chair_id.read().await.as_ref() {
-                if status == RideStatusEnum::Completed {
-                    self.chair_cache.on_chair_status_change(c, false).await;
-                }
+        let chair_id = {
+            let ref_ = ride.chair_id.read().await;
+            ref_.clone()
+        };
 
+        if let Some(c) = chair_id {
+            if status == RideStatusEnum::Completed {
+                self.chair_cache.on_chair_status_change(&c, false).await;
+            }
+
+            {
                 let mut chair = self.ride_cache.chair_notification.write().await;
-                let mark_sent = chair.get_mut(c).unwrap().push(b.clone(), false);
+                let mark_sent = chair.get_mut(&c).unwrap().push(b.clone(), false);
                 if mark_sent {
                     self.ride_status_chair_notified(tx, &status_id).await?;
                 }
+            }
 
-                let mut movement_cache = self.ride_cache.chair_movement_cache.write().await;
-                match status {
-                    RideStatusEnum::Matching => {}
-                    RideStatusEnum::Enroute => {
-                        movement_cache.insert(c.clone(), Arc::clone(&ride));
-                    }
-                    RideStatusEnum::Pickup => {
-                        movement_cache.remove(c).unwrap();
-                    }
-                    RideStatusEnum::Carrying => {
-                        movement_cache.insert(c.clone(), Arc::clone(&ride));
-                    }
-                    RideStatusEnum::Arrived => {
-                        movement_cache.remove(c).unwrap();
-                    }
-                    RideStatusEnum::Completed => {}
-                    RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
+            let mut movement_cache = self.ride_cache.chair_movement_cache.write().await;
+            match status {
+                RideStatusEnum::Matching => {}
+                RideStatusEnum::Enroute => {
+                    movement_cache.insert(c.clone(), Arc::clone(&ride));
                 }
+                RideStatusEnum::Pickup => {
+                    movement_cache.remove(&c).unwrap();
+                }
+                RideStatusEnum::Carrying => {
+                    movement_cache.insert(c.clone(), Arc::clone(&ride));
+                }
+                RideStatusEnum::Arrived => {
+                    movement_cache.remove(&c).unwrap();
+                }
+                RideStatusEnum::Completed => {}
+                RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
             }
         }
 
         if status == RideStatusEnum::Matching {
-            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
+            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await; // DEADLOCK HERE
             waiting_rides.push_back(Arc::clone(&ride));
         }
 

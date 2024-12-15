@@ -1,5 +1,5 @@
+use crate::repo::dl::DlRwLock as RwLock;
 use std::{collections::HashMap, sync::Arc};
-use tokio::sync::RwLock;
 
 use chrono::{DateTime, Utc};
 

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
-use tokio::sync::RwLock;
+use crate::repo::dl::DlRwLock as RwLock;
 
 use crate::models::{Id, Owner};
 
