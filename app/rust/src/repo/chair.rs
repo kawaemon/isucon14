@@ -282,7 +282,7 @@ impl Repository {
 
             if active {
                 self.ride_cache.on_chair_status_change(id, false).await;
-                self.ride_cache.push_free_chair(id).await;
+                self.push_free_chair(id).await;
             }
         }
 

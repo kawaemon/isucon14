@@ -299,6 +299,22 @@ impl Repository {
     }
 }
 
+impl Repository {
+    pub async fn push_free_chair(&self, id: &Id<Chair>) {
+        let len = {
+            let mut cache = self.ride_cache.free_chairs_lv2.lock().await;
+            cache.push(id.clone());
+            cache.len()
+        };
+        if len >= 10 {
+            let me = self.clone();
+            tokio::spawn(async move {
+                me.do_matching().await;
+            });
+        }
+    }
+}
+
 impl RideCacheInner {
     pub async fn on_user_add(&self, id: &Id<User>) {
         self.user_notification
@@ -311,9 +327,6 @@ impl RideCacheInner {
             .write()
             .await
             .insert(id.clone(), NotificationQueue::new());
-    }
-    pub async fn push_free_chair(&self, id: &Id<Chair>) {
-        self.free_chairs_lv2.lock().await.push(id.clone());
     }
     pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
         let mut cache = self.free_chairs_lv1.lock().await;
