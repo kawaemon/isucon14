@@ -1,9 +1,12 @@
-mod deferred;
+pub mod deferred;
+use chrono::Utc;
+pub use deferred::Deferred;
+use deferred::{NotifiedType, RideStatusInsert, RideStatusUpdate};
 
 use std::sync::Arc;
 
 use crate::models::{Id, Ride, RideStatus, RideStatusEnum};
-use crate::repo::{maybe_tx, Repository, Result, Tx};
+use crate::repo::{Repository, Result, Tx};
 
 use super::NotificationBody;
 
@@ -24,18 +27,21 @@ impl Repository {
 
     pub async fn ride_status_update(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
+        _tx: impl Into<Option<&mut Tx>>,
         ride_id: &Id<Ride>,
         status: RideStatusEnum,
     ) -> Result<()> {
-        let mut tx = tx.into();
         let status_id = Id::<RideStatus>::new();
-        let q = sqlx::query("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)")
-            .bind(&status_id)
-            .bind(ride_id)
-            .bind(status);
 
-        maybe_tx!(self, tx, q.execute)?;
+        self.ride_cache
+            .deferred
+            .insert(RideStatusInsert {
+                id: status_id.clone(),
+                ride_id: ride_id.clone(),
+                status,
+                created_at: Utc::now(),
+            })
+            .await;
 
         let b = NotificationBody {
             ride_id: ride_id.clone(),
@@ -60,8 +66,7 @@ impl Repository {
                     .await
             };
             if mark_sent {
-                self.ride_status_app_notified(tx.as_deref_mut(), &status_id)
-                    .await?;
+                self.ride_status_app_notified(&status_id).await?;
             }
         }
 
@@ -77,7 +82,7 @@ impl Repository {
                     chair.get(&c).unwrap().push(b.clone(), false).await
                 };
                 if mark_sent {
-                    self.ride_status_chair_notified(tx, &status_id).await?;
+                    self.ride_status_chair_notified(&status_id).await?;
                 }
             }
 
@@ -103,39 +108,33 @@ impl Repository {
 
         if status == RideStatusEnum::Matching {
             let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
-            waiting_rides.push_back(Arc::clone(&ride));
+            waiting_rides.push_back((Arc::clone(&ride), status_id));
         }
 
         Ok(())
     }
 
-    pub async fn ride_status_chair_notified(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        status_id: &Id<RideStatus>,
-    ) -> Result<()> {
-        let mut tx = tx.into();
-        let q = sqlx::query(
-            "UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?",
-        )
-        .bind(status_id);
-
-        maybe_tx!(self, tx, q.execute)?;
-
+    pub async fn ride_status_chair_notified(&self, status_id: &Id<RideStatus>) -> Result<()> {
+        self.ride_cache
+            .deferred
+            .update(RideStatusUpdate {
+                ty: NotifiedType::Chair,
+                status_id: status_id.clone(),
+                at: Utc::now(),
+            })
+            .await;
         Ok(())
     }
 
-    pub async fn ride_status_app_notified(
-        &self,
-        tx: impl Into<Option<&mut Tx>>,
-        status_id: &Id<RideStatus>,
-    ) -> Result<()> {
-        let mut tx = tx.into();
-        let q =
-            sqlx::query("UPDATE ride_statuses SET app_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?")
-                .bind(status_id);
-
-        maybe_tx!(self, tx, q.execute)?;
+    pub async fn ride_status_app_notified(&self, status_id: &Id<RideStatus>) -> Result<()> {
+        self.ride_cache
+            .deferred
+            .update(RideStatusUpdate {
+                ty: NotifiedType::App,
+                status_id: status_id.clone(),
+                at: Utc::now(),
+            })
+            .await;
 
         Ok(())
     }

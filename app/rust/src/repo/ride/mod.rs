@@ -2,6 +2,8 @@ use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::repo::dl::DlMutex as Mutex;
 use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
+use sqlx::MySql;
+use sqlx::Pool;
 use std::collections::HashSet;
 use std::{
     collections::{HashMap, VecDeque},
@@ -13,7 +15,7 @@ use crate::{
     Coordinate,
 };
 
-use super::{cache_init::CacheInit, chair::ChairCache, Repository, Result};
+use super::{cache_init::CacheInit, Repository, Result};
 
 #[allow(clippy::module_inception)]
 mod ride;
@@ -25,7 +27,7 @@ pub type RideCache = Arc<RideCacheInner>;
 pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
 
-    waiting_rides: Mutex<VecDeque<Arc<RideEntry>>>,
+    waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
     free_chairs_lv1: Mutex<HashSet<Id<Chair>>>,
     free_chairs_lv2: Mutex<Vec<Id<Chair>>>,
 
@@ -33,12 +35,14 @@ pub struct RideCacheInner {
 
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
+
+    deferred: status::Deferred,
 }
 
 struct RideCacheInit {
     ride_cache: HashMap<Id<Ride>, Arc<RideEntry>>,
 
-    waiting_rides: VecDeque<Arc<RideEntry>>,
+    waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
     free_chairs_lv1: HashSet<Id<Chair>>,
     free_chairs_lv2: Vec<Id<Chair>>,
 
@@ -172,8 +176,11 @@ impl RideCacheInit {
         let mut waiting_rides = VecDeque::new();
         for ride in &init.rides {
             if ride.chair_id.is_none() {
+                let status = statuses.get(&ride.id).unwrap();
+                assert_eq!(status.len(), 1);
+                assert_eq!(status[0].status, RideStatusEnum::Matching);
                 let ride = rides.get(&ride.id).unwrap();
-                waiting_rides.push_back(Arc::clone(ride));
+                waiting_rides.push_back((Arc::clone(ride), status[0].id.clone()));
             }
         }
 
@@ -226,10 +233,7 @@ impl RideCacheInit {
 }
 
 impl Repository {
-    pub(super) async fn init_ride_cache(
-        init: &mut CacheInit,
-        _chair_cache: &ChairCache,
-    ) -> RideCache {
+    pub(super) async fn init_ride_cache(init: &mut CacheInit, pool: &Pool<MySql>) -> RideCache {
         let init = RideCacheInit::from_init(init).await;
         Arc::new(RideCacheInner {
             user_notification: RwLock::new(init.user_notification),
@@ -239,6 +243,7 @@ impl Repository {
             free_chairs_lv1: Mutex::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
+            deferred: status::Deferred::new(pool),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
@@ -252,6 +257,7 @@ impl Repository {
             free_chairs_lv1,
             free_chairs_lv2,
             chair_movement_cache,
+            deferred: _,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
@@ -272,9 +278,7 @@ impl Repository {
     }
 }
 
-// notification の送信後
 impl Repository {
-    /// latest が completed になっていればよい
     pub async fn chair_huifhiubher(
         &self,
         coord: Coordinate,
@@ -307,7 +311,7 @@ impl Repository {
             cache.push(id.clone());
             cache.len()
         };
-        if len == 5 {
+        if len == 20 {
             let me = self.clone();
             tokio::spawn(async move {
                 me.do_matching().await;
@@ -360,7 +364,7 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
-                self.ride_status_chair_notified(None, &next.body.ride_status_id)
+                self.ride_status_chair_notified(&next.body.ride_status_id)
                     .await?;
                 next = queue.get_next().await.unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
@@ -392,7 +396,7 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
-                self.ride_status_app_notified(None, &next.body.ride_status_id)
+                self.ride_status_app_notified(&next.body.ride_status_id)
                     .await?;
                 next = queue.get_next().await.unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
@@ -578,10 +582,11 @@ impl Repository {
             struct Pair {
                 chair_id: Id<Chair>,
                 ride_id: Id<Ride>,
+                status_id: Id<RideStatus>,
             }
             let mut pairs = vec![];
 
-            for ride in waiting_rides.drain(0..matches) {
+            for (ride, status_id) in waiting_rides.drain(0..matches) {
                 let best = free_chairs
                     .iter()
                     .min_by_key(|cid| {
@@ -598,6 +603,7 @@ impl Repository {
                 pairs.push(Pair {
                     chair_id: best,
                     ride_id: ride.id.clone(),
+                    status_id,
                 });
             }
             (pairs, waiting_rides_len, free_chairs_len)
@@ -609,7 +615,7 @@ impl Repository {
         for pair in pairs {
             let me = self.clone();
             let d = tokio::spawn(async move {
-                me.rides_assign(&pair.ride_id, &pair.chair_id)
+                me.rides_assign(&pair.ride_id, &pair.status_id, &pair.chair_id)
                     .await
                     .unwrap();
             });

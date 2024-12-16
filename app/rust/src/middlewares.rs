@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -12,7 +12,6 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
     let uri = req.uri().clone();
     let path = uri.path();
     let method = req.method().clone();
-    let begin = Instant::now();
 
     tokio::pin! {
         let response_fut = next.run(req);
@@ -34,11 +33,6 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
             }
         }
     };
-
-    if path.contains("/owner/sales") {
-        let e = begin.elapsed().as_millis();
-        tracing::info!("sales took {e}ms");
-    }
 
     Ok(res)
 }

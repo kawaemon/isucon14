@@ -95,7 +95,12 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn rides_assign(&self, ride_id: &Id<Ride>, chair_id: &Id<Chair>) -> Result<()> {
+    pub async fn rides_assign(
+        &self,
+        ride_id: &Id<Ride>,
+        status_id: &Id<RideStatus>,
+        chair_id: &Id<Chair>,
+    ) -> Result<()> {
         let now = Utc::now();
         {
             let mut cache = self.ride_cache.ride_cache.write().await;
@@ -111,17 +116,9 @@ impl Repository {
             .bind(ride_id)
             .execute(&self.pool)
             .await?;
-        let statuses: Vec<RideStatus> =
-            sqlx::query_as("select * from ride_statuses where ride_id = ?")
-                .bind(ride_id)
-                .fetch_all(&self.pool)
-                .await?;
-        assert!(statuses.len() == 1, "{statuses:?}");
-        let status = &statuses[0];
-        assert!(status.status == RideStatusEnum::Matching);
         let b = NotificationBody {
             ride_id: ride_id.clone(),
-            ride_status_id: status.id.clone(),
+            ride_status_id: status_id.clone(),
             status: RideStatusEnum::Matching,
         };
         {
@@ -130,9 +127,7 @@ impl Repository {
                 cache.get(chair_id).unwrap().push(b, false).await
             };
             if mark_sent {
-                self.ride_status_chair_notified(None, &status.id)
-                    .await
-                    .unwrap();
+                self.ride_status_chair_notified(status_id).await.unwrap();
             }
         }
         Ok(())

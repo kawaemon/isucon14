@@ -602,8 +602,13 @@ async fn app_get_nearby_chairs(
         longitude: query.longitude,
     };
 
+    let mut chairs = repo.chair_huifhiubher(coordinate, distance).await?;
+    // if chairs.len() > 0 {
+    //     chairs.pop();
+    // }
+
     Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs: repo.chair_huifhiubher(coordinate, distance).await?,
+        chairs,
         retrieved_at: Utc::now().timestamp(),
     }))
 }

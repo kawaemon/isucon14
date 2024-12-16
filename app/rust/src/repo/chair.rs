@@ -65,7 +65,7 @@ impl ChairEntry {
 }
 
 #[derive(Debug, Clone)]
-struct ChairStat {
+pub struct ChairStat {
     total_evaluation: i32,
     total_rides: i32,
     sales: BTreeMap<DateTime<Utc>, i32>,
@@ -88,7 +88,6 @@ impl ChairStat {
     }
     fn get_sales(&self, since: DateTime<Utc>, mut until: DateTime<Utc>) -> i32 {
         until += Duration::microseconds(999);
-        let c = self.sales.range(since..=until).count();
         self.sales.range(since..=until).map(|x| *x.1).sum()
     }
 }

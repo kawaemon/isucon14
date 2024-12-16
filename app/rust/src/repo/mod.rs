@@ -58,7 +58,7 @@ impl Repository {
 
             user_cache: Self::init_user_cache(&mut init),
             owner_cache: Self::init_owner_cache(&mut init),
-            ride_cache: Self::init_ride_cache(&mut init, &chair_cache).await,
+            ride_cache: Self::init_ride_cache(&mut init, pool).await,
             chair_cache,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,

@@ -35,11 +35,6 @@ impl<T> DlMutex<T> {
 }
 
 async fn with_timeout<T>(fut: impl Future<Output = T>) -> T {
-    fut.await
-}
-
-#[cfg(jier)]
-async fn with_timeout<T>(fut: impl Future<Output = T>) -> T {
     let Ok(o) = tokio::time::timeout(Duration::from_millis(1000), fut).await else {
         let bt = backtrace::Backtrace::new();
         let bt = format!("{bt:?}");
