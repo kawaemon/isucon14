@@ -84,7 +84,7 @@ impl RideCacheInit {
                     ride_status_id: status.id.clone(),
                     status: status.status,
                 };
-                let mark_sent = queue.push(b, status.app_sent_at.is_some());
+                let mark_sent = queue.push(b, status.app_sent_at.is_some()).await;
                 assert!(!mark_sent);
             }
         }
@@ -110,7 +110,7 @@ impl RideCacheInit {
                     ride_status_id: status.id.clone(),
                     status: status.status,
                 };
-                let mark_sent = queue.push(b, status.chair_sent_at.is_some());
+                let mark_sent = queue.push(b, status.chair_sent_at.is_some()).await;
                 assert!(!mark_sent);
             }
         }
@@ -184,6 +184,7 @@ impl RideCacheInit {
         let mut free_chairs_lv2 = Vec::new();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
+            let n = n.0.lock().await;
             // active かつ 送信済みかそうでないかに関わらず最後に作成された通知が Completed であればいい
             let mut lv1 = chair.is_active;
             if !n.queue.is_empty() {
@@ -353,7 +354,7 @@ impl Repository {
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
-        let next = queue.get_next();
+        let next = queue.get_next().await;
         tx.send(next.clone().map(|x| x.body)).unwrap();
         let mut send = 1;
 
@@ -361,7 +362,7 @@ impl Repository {
             while !next.sent {
                 self.ride_status_chair_notified(None, &next.body.ride_status_id)
                     .await?;
-                next = queue.get_next().unwrap();
+                next = queue.get_next().await.unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
             }
@@ -369,7 +370,7 @@ impl Repository {
 
         tracing::debug!("chair sse beginning, sent to sync={send}");
 
-        queue.tx = Some(tx);
+        queue.0.lock().await.tx = Some(tx);
 
         Ok(NotificationTransceiver {
             notification_rx: rx,
@@ -385,7 +386,7 @@ impl Repository {
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
-        let next = queue.get_next();
+        let next = queue.get_next().await;
         tx.send(next.clone().map(|x| x.body)).unwrap();
         let mut send = 1;
 
@@ -393,7 +394,7 @@ impl Repository {
             while !next.sent {
                 self.ride_status_app_notified(None, &next.body.ride_status_id)
                     .await?;
-                next = queue.get_next().unwrap();
+                next = queue.get_next().await.unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
             }
@@ -401,7 +402,7 @@ impl Repository {
 
         tracing::debug!("app sse beginning, sent to sync={send}");
 
-        queue.tx = Some(tx);
+        queue.0.lock().await.tx = Some(tx);
 
         Ok(NotificationTransceiver {
             notification_rx: rx,
@@ -409,13 +410,27 @@ impl Repository {
     }
 }
 
-pub struct NotificationQueue {
+#[derive(Debug)]
+pub struct NotificationQueue(Mutex<NotificationQueueInner>);
+impl NotificationQueue {
+    fn new() -> Self {
+        Self(Mutex::new(NotificationQueueInner::new()))
+    }
+    pub async fn push(&self, b: NotificationBody, sent: bool) -> bool {
+        self.0.lock().await.push(b, sent)
+    }
+    pub async fn get_next(&mut self) -> Option<NotificationEntry> {
+        self.0.lock().await.get_next()
+    }
+}
+
+pub struct NotificationQueueInner {
     last_sent: Option<NotificationBody>,
     queue: VecDeque<NotificationBody>,
 
     tx: Option<tokio::sync::broadcast::Sender<Option<NotificationBody>>>,
 }
-impl std::fmt::Debug for NotificationQueue {
+impl std::fmt::Debug for NotificationQueueInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if f.alternate() {
             return f
@@ -434,7 +449,7 @@ impl std::fmt::Debug for NotificationQueue {
     }
 }
 
-impl NotificationQueue {
+impl NotificationQueueInner {
     fn new() -> Self {
         Self {
             last_sent: None,
@@ -588,12 +603,20 @@ impl Repository {
             (pairs, waiting_rides_len, free_chairs_len)
         };
 
+        let mut fut = vec![];
+
         let pairs_len = pairs.len();
         for pair in pairs {
-            self.rides_assign(&pair.ride_id, &pair.chair_id)
-                .await
-                .unwrap();
+            let me = self.clone();
+            let d = tokio::spawn(async move {
+                me.rides_assign(&pair.ride_id, &pair.chair_id)
+                    .await
+                    .unwrap();
+            });
+            fut.push(d);
         }
+
+        futures::future::join_all(fut).await;
 
         tracing::info!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
     }

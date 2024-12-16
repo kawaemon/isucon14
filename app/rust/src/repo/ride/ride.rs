@@ -125,8 +125,10 @@ impl Repository {
             status: RideStatusEnum::Matching,
         };
         {
-            let mut cache = self.ride_cache.chair_notification.write().await;
-            let mark_sent = cache.get_mut(chair_id).unwrap().push(b, false);
+            let mark_sent = {
+                let cache = self.ride_cache.chair_notification.read().await;
+                cache.get(chair_id).unwrap().push(b, false).await
+            };
             if mark_sent {
                 self.ride_status_chair_notified(None, &status.id)
                     .await

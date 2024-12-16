@@ -50,8 +50,13 @@ impl Repository {
         *ride.latest_status.write().await = status;
 
         {
-            let mut user = self.ride_cache.user_notification.write().await;
-            let mark_sent = user.get_mut(&ride.user_id).unwrap().push(b.clone(), false);
+            let mark_sent = {
+                let user = self.ride_cache.user_notification.read().await;
+                user.get(&ride.user_id)
+                    .unwrap()
+                    .push(b.clone(), false)
+                    .await
+            };
             if mark_sent {
                 self.ride_status_app_notified(tx.as_deref_mut(), &status_id)
                     .await?;
@@ -65,15 +70,13 @@ impl Repository {
 
         if let Some(c) = chair_id {
             {
-                let mut chair = self.ride_cache.chair_notification.write().await;
-                let mark_sent = chair.get_mut(&c).unwrap().push(b.clone(), false);
+                let mark_sent = {
+                    let chair = self.ride_cache.chair_notification.read().await;
+                    chair.get(&c).unwrap().push(b.clone(), false).await
+                };
                 if mark_sent {
                     self.ride_status_chair_notified(tx, &status_id).await?;
                 }
-            }
-
-            if status == RideStatusEnum::Completed {
-                self.ride_cache.on_chair_status_change(&c, false).await;
             }
 
             let mut movement_cache = self.ride_cache.chair_movement_cache.write().await;

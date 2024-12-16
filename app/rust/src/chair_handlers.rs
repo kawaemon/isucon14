@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
@@ -188,12 +190,17 @@ async fn chair_get_notification_inner(
     let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
 
     if body.status == RideStatusEnum::Completed {
-        let chair_id = chair_id.clone();
-        let repo = repo.clone();
-        tokio::spawn(async move {
-            repo.push_free_chair(&chair_id).await;
-            // repo.do_matching().await;
-        });
+        {
+            let chair_id = chair_id.clone();
+            let repo = repo.clone();
+            tokio::spawn(async move {
+                repo.ride_cache
+                    .on_chair_status_change(&chair_id, false)
+                    .await;
+                repo.push_free_chair(&chair_id).await;
+                // repo.do_matching().await;
+            });
+        }
     }
 
     Ok(Some(ChairGetNotificationResponseData {

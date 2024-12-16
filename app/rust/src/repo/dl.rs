@@ -44,6 +44,7 @@ async fn with_timeout<T>(fut: impl Future<Output = T>) -> T {
         hasher.update(&bt);
         let result = hasher.finalize();
         let hex = format!("{:x}", result);
+        tokio::fs::create_dir_all("./dl").await.unwrap();
         tokio::fs::write(&format!("./dl/{hex}.txt"), &bt)
             .await
             .unwrap();

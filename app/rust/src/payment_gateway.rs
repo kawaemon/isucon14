@@ -47,8 +47,8 @@ where
     }
 }
 
-const CONCURRENCY: usize = 30;
-const RETRY_LIMIT: usize = 20;
+const CONCURRENCY: usize = 25;
+const RETRY_LIMIT: usize = 50;
 
 #[derive(Debug, Clone)]
 pub struct PaymentGatewayRestricter {
