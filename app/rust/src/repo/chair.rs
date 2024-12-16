@@ -1,7 +1,10 @@
 use crate::repo::dl::DlRwLock as RwLock;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 
 use crate::{
     app_handlers::ChairStats,
@@ -65,17 +68,28 @@ impl ChairEntry {
 struct ChairStat {
     total_evaluation: i32,
     total_rides: i32,
+    sales: BTreeMap<DateTime<Utc>, i32>,
 }
 impl ChairStat {
     fn new() -> Self {
         Self {
             total_evaluation: 0,
             total_rides: 0,
+            sales: BTreeMap::new(),
         }
     }
-    fn update(&mut self, eval: i32) {
+    fn update(&mut self, eval: i32, sales: i32, at: DateTime<Utc>) {
         self.total_evaluation += eval;
         self.total_rides += 1;
+        // 累積和を使えないことはないがライド数が大したことなさそうなのでこのままでいいや
+        // let last = self.sales.last_entry().map(|x| *x.get()).unwrap_or(0);
+        // self.sales.insert(at, last + sales);
+        self.sales.insert(at, sales);
+    }
+    fn get_sales(&self, since: DateTime<Utc>, mut until: DateTime<Utc>) -> i32 {
+        until += Duration::microseconds(999);
+        let c = self.sales.range(since..=until).count();
+        self.sales.range(since..=until).map(|x| *x.1).sum()
     }
 }
 
@@ -84,6 +98,36 @@ pub struct ChairCacheInner {
     by_id: RwLock<HashMap<Id<Chair>, SharedChair>>,
     by_access_token: RwLock<HashMap<String, SharedChair>>,
     by_owner: RwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
+}
+
+pub struct ChairSalesStat {
+    pub id: Id<Chair>,
+    pub name: String,
+    pub model: String,
+    pub sales: i32,
+}
+
+impl Repository {
+    pub async fn chair_sale_stats_by_owner(
+        &self,
+        owner: &Id<Owner>,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+    ) -> Result<Vec<ChairSalesStat>> {
+        let cache = self.chair_cache.by_owner.read().await;
+        let cache = cache.get(owner).unwrap();
+        let mut res = vec![];
+        for c in cache.iter() {
+            let sales = c.stat.read().await.get_sales(since, until);
+            res.push(ChairSalesStat {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                model: c.model.clone(),
+                sales,
+            });
+        }
+        Ok(res)
+    }
 }
 
 impl ChairCacheInner {
@@ -100,9 +144,11 @@ impl ChairCacheInner {
             .push(Arc::clone(&shared));
     }
 
-    pub async fn on_eval(&self, chair_id: &Id<Chair>, eval: i32) {
+    pub async fn on_eval(&self, chair_id: &Id<Chair>, eval: i32, sales: i32, at: DateTime<Utc>) {
         let cache = self.by_id.read().await;
-        cache.get(chair_id).unwrap().stat.write().await.update(eval);
+        let chair = cache.get(chair_id).unwrap();
+        let mut stat = chair.stat.write().await;
+        stat.update(eval, sales, at);
     }
 }
 
@@ -130,7 +176,11 @@ impl ChairCacheInit {
             if let Some(eval) = s.evaluation.as_ref() {
                 let chair_id = s.chair_id.as_ref().unwrap();
                 let chair = bid.get(chair_id).unwrap();
-                chair.stat.write().await.update(*eval);
+                chair
+                    .stat
+                    .write()
+                    .await
+                    .update(*eval, s.calc_sale(), s.updated_at);
             }
         }
 

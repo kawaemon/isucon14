@@ -155,13 +155,14 @@ impl Repository {
 
         maybe_tx!(self, tx, q.execute)?;
 
-        {
+        let sales = {
             let mut cache = self.ride_cache.ride_cache.write().await;
-            let e = cache.get_mut(id).unwrap();
-            e.set_evaluation(eval, now).await;
-        }
+            let ride = cache.get_mut(id).unwrap();
+            ride.set_evaluation(eval, now).await;
+            ride.ride().await.calc_sale()
+        };
 
-        self.chair_cache.on_eval(chair_id, eval).await;
+        self.chair_cache.on_eval(chair_id, eval, sales, now).await;
 
         Ok(now)
     }

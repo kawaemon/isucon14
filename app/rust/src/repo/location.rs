@@ -4,9 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::repo::dl::{DlMutex as Mutex, DlRwLock as RwLock};
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool};
-use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     models::{Chair, ChairLocation, Id},
@@ -31,51 +31,60 @@ struct Deferred {
     on_update: tokio::sync::mpsc::UnboundedSender<()>,
 }
 impl Deferred {
+    async fn work(
+        pool: &Pool<MySql>,
+        queue: &Arc<Mutex<Vec<ChairLocation>>>,
+        rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+    ) {
+        let sleep = tokio::time::sleep(Duration::from_millis(2000));
+        tokio::pin!(sleep);
+        let frx = rx.recv();
+        tokio::pin!(frx);
+
+        let mut this_time = vec![];
+        {
+            tokio::select! {
+                _ = &mut sleep => { }
+                _ = &mut frx => { }
+            }
+            let mut lock = queue.lock().await;
+            let range = 0..lock.len().min(THRESHOLD);
+            this_time.extend(lock.drain(range));
+        }
+
+        if this_time.is_empty() {
+            return;
+        }
+        let mut query = sqlx::QueryBuilder::new(
+            "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
+        );
+        query.push_values(this_time.iter(), |mut b, e: &ChairLocation| {
+            b.push_bind(&e.id)
+                .push_bind(&e.chair_id)
+                .push_bind(e.latitude)
+                .push_bind(e.longitude)
+                .push_bind(e.created_at);
+        });
+
+        let t = Instant::now();
+        query.build().execute(pool).await.unwrap();
+        let e = t.elapsed().as_millis();
+        tracing::debug!("pushed {} locations in {e} ms", this_time.len());
+    }
+
     async fn new(pool: &Pool<MySql>) -> Self {
         let pool = pool.clone();
         let queue = Arc::new(Mutex::new(vec![]));
 
-        let mqueue = Arc::clone(&queue);
-
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            loop {
-                let sleep = tokio::time::sleep(Duration::from_millis(2000));
-                tokio::pin!(sleep);
-                let frx = rx.recv();
-                tokio::pin!(frx);
-
-                let mut thistime = vec![];
-                {
-                    tokio::select! {
-                        _ = &mut sleep => { }
-                        _ = &mut frx => { }
-                    }
-                    let mut lock = mqueue.lock().await;
-                    let range = 0..lock.len().min(THRESHOLD);
-                    thistime.extend(lock.drain(range));
+        {
+            let queue = Arc::clone(&queue);
+            tokio::spawn(async move {
+                loop {
+                    Self::work(&pool, &queue, &mut rx).await;
                 }
-
-                if thistime.is_empty() {
-                    continue;
-                }
-                let mut query = sqlx::QueryBuilder::new(
-                    "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
-                );
-                query.push_values(thistime.iter(), |mut b, e: &ChairLocation| {
-                    b.push_bind(&e.id)
-                        .push_bind(&e.chair_id)
-                        .push_bind(e.latitude)
-                        .push_bind(e.longitude)
-                        .push_bind(e.created_at);
-                });
-
-                let t = Instant::now();
-                query.build().execute(&pool).await.unwrap();
-                let e = t.elapsed().as_millis();
-                tracing::debug!("pushed {} locations in {e} ms", thistime.len());
-            }
-        });
+            });
+        }
 
         Deferred {
             queue,

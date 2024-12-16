@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -12,26 +12,35 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
     let uri = req.uri().clone();
     let path = uri.path();
     let method = req.method().clone();
+    let begin = Instant::now();
 
     tokio::pin! {
         let response_fut = next.run(req);
     }
 
-    for i in 1.. {
+    let mut secs = 0;
+
+    let res = loop {
         tokio::pin! {
             let timeout = tokio::time::sleep(Duration::from_secs(1));
         }
         tokio::select! {
             _ = &mut timeout => {
-                tracing::debug!("{method} {path} is taking {i} seconds and continuing...");
+                secs += 1;
+                tracing::debug!("{method} {path} is taking {secs} seconds and continuing...");
             }
             res = &mut response_fut => {
-                return Ok(res);
+                break res;
             }
         }
+    };
+
+    if path.contains("/owner/sales") {
+        let e = begin.elapsed().as_millis();
+        tracing::info!("sales took {e}ms");
     }
 
-    unreachable!()
+    Ok(res)
 }
 
 pub async fn app_auth_middleware(

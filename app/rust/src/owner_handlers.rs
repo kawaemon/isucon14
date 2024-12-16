@@ -62,10 +62,10 @@ async fn owner_post_owners(
 }
 
 #[derive(Debug, serde::Serialize)]
-struct ChairSales {
-    id: Id<Chair>,
-    name: String,
-    sales: i32,
+pub struct ChairSales {
+    pub id: Id<Chair>,
+    pub name: String,
+    pub sales: i32,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -88,7 +88,7 @@ struct GetOwnerSalesQuery {
 }
 
 async fn owner_get_sales(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
     Query(query): Query<GetOwnerSalesQuery>,
 ) -> Result<axum::Json<OwnerGetSalesResponse>, Error> {
@@ -109,42 +109,25 @@ async fn owner_get_sales(
         )
     };
 
-    let chairs: Vec<Chair> = repo.chair_get_by_owner(&owner.id).await?;
-
     let mut res = OwnerGetSalesResponse {
         total_sales: 0,
-        chairs: Vec::with_capacity(chairs.len()),
+        chairs: Vec::new(),
         models: Vec::new(),
     };
 
     let mut model_sales_by_model = HashMap::new();
 
-    for chair in chairs {
-        let reqs: Vec<Ride> = sqlx::query_as(
-            "SELECT rides.*
-            FROM rides
-            JOIN ride_statuses ON rides.id = ride_statuses.ride_id
-            WHERE
-                chair_id = ?
-            AND status = 'COMPLETED'
-            AND updated_at BETWEEN ? AND ? + INTERVAL 999 MICROSECOND",
-        )
-        .bind(&chair.id)
-        .bind(since)
-        .bind(until)
-        .fetch_all(&pool)
-        .await?;
-
-        let sales = reqs.iter().map(|x| x.calc_sale()).sum();
-        res.total_sales += sales;
-
+    for chair in repo
+        .chair_sale_stats_by_owner(&owner.id, since, until)
+        .await?
+    {
+        res.total_sales += chair.sales;
+        *model_sales_by_model.entry(chair.model).or_insert(0) += chair.sales;
         res.chairs.push(ChairSales {
             id: chair.id,
             name: chair.name,
-            sales,
+            sales: chair.sales,
         });
-
-        *model_sales_by_model.entry(chair.model).or_insert(0) += sales;
     }
 
     for (model, sales) in model_sales_by_model {

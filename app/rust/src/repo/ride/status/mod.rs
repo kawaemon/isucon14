@@ -1,3 +1,5 @@
+mod deferred;
+
 use std::sync::Arc;
 
 use crate::models::{Id, Ride, RideStatus, RideStatusEnum};
@@ -100,7 +102,7 @@ impl Repository {
         }
 
         if status == RideStatusEnum::Matching {
-            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await; // DEADLOCK HERE
+            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
             waiting_rides.push_back(Arc::clone(&ride));
         }
 
