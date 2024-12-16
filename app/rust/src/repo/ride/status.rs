@@ -64,16 +64,16 @@ impl Repository {
         };
 
         if let Some(c) = chair_id {
-            if status == RideStatusEnum::Completed {
-                self.ride_cache.on_chair_status_change(&c, false).await;
-            }
-
             {
                 let mut chair = self.ride_cache.chair_notification.write().await;
                 let mark_sent = chair.get_mut(&c).unwrap().push(b.clone(), false);
                 if mark_sent {
                     self.ride_status_chair_notified(tx, &status_id).await?;
                 }
+            }
+
+            if status == RideStatusEnum::Completed {
+                self.ride_cache.on_chair_status_change(&c, false).await;
             }
 
             let mut movement_cache = self.ride_cache.chair_movement_cache.write().await;
