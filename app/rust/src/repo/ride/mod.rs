@@ -349,8 +349,8 @@ impl Repository {
         &self,
         id: &Id<Chair>,
     ) -> Result<NotificationTransceiver> {
-        let mut cache = self.ride_cache.chair_notification.write().await;
-        let queue = cache.get_mut(id).unwrap();
+        let cache = self.ride_cache.chair_notification.read().await;
+        let queue = cache.get(id).unwrap();
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
@@ -381,8 +381,8 @@ impl Repository {
         &self,
         id: &Id<User>,
     ) -> Result<NotificationTransceiver> {
-        let mut cache = self.ride_cache.user_notification.write().await;
-        let queue = cache.get_mut(id).unwrap();
+        let cache = self.ride_cache.user_notification.read().await;
+        let queue = cache.get(id).unwrap();
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
@@ -419,7 +419,7 @@ impl NotificationQueue {
     pub async fn push(&self, b: NotificationBody, sent: bool) -> bool {
         self.0.lock().await.push(b, sent)
     }
-    pub async fn get_next(&mut self) -> Option<NotificationEntry> {
+    pub async fn get_next(&self) -> Option<NotificationEntry> {
         self.0.lock().await.get_next()
     }
 }
