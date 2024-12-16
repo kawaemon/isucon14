@@ -307,7 +307,7 @@ impl Repository {
             cache.push(id.clone());
             cache.len()
         };
-        if len >= 10 {
+        if len == 5 {
             let me = self.clone();
             tokio::spawn(async move {
                 me.do_matching().await;

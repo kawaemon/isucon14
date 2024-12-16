@@ -199,7 +199,6 @@ async fn chair_get_notification_inner(
                     .on_chair_status_change(&chair_id, false)
                     .await;
                 repo.push_free_chair(&chair_id).await;
-                // repo.do_matching().await;
             });
         }
     }
@@ -228,18 +227,12 @@ struct PostChairRidesRideIDStatusRequest {
 }
 
 async fn chair_post_ride_status(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
 ) -> Result<StatusCode, Error> {
-    let mut tx = pool.begin().await?;
-
-    let Some(ride): Option<Ride> = sqlx::query_as("SELECT * FROM rides WHERE id = ? FOR UPDATE")
-        .bind(&ride_id)
-        .fetch_optional(&mut *tx)
-        .await?
-    else {
+    let Some(ride): Option<Ride> = repo.ride_get(None, &ride_id).await? else {
         return Err(Error::NotFound("rides not found"));
     };
 
@@ -256,7 +249,7 @@ async fn chair_post_ride_status(
         RideStatusEnum::Enroute => RideStatusEnum::Enroute,
         // After Picking up user
         RideStatusEnum::Carrying => {
-            let status = repo.ride_status_latest(&mut tx, &ride.id).await?;
+            let status = repo.ride_status_latest(None, &ride.id).await?;
             if status != RideStatusEnum::Pickup {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
@@ -267,9 +260,7 @@ async fn chair_post_ride_status(
         }
     };
 
-    repo.ride_status_update(&mut tx, &ride_id, next).await?;
-
-    tx.commit().await?;
+    repo.ride_status_update(None, &ride_id, next).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

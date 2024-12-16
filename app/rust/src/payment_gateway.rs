@@ -80,6 +80,8 @@ where
     let _permit = pgw.sema.acquire().await.unwrap();
     tracing::debug!("permit acquired; remain = {}", pgw.sema.available_permits());
 
+    let rides = retrieve_rides_count.call(tx, user_id).await?;
+
     let mut retry = 0;
     loop {
         let result: Result<(), Error> = async {
@@ -106,8 +108,6 @@ where
                 }
                 let payments: Vec<PaymentGatewayGetPaymentsResponseOne> =
                     get_res.json().await.map_err(PaymentGatewayError::Reqwest)?;
-
-                let rides = retrieve_rides_count.call(tx, user_id).await?;
 
                 if rides as usize != payments.len() {
                     return Err(PaymentGatewayError::UnexpectedNumberOfPayments {
