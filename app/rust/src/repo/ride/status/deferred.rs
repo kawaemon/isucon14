@@ -48,7 +48,7 @@ impl Deferred {
             inserts: vec![],
             updates: vec![],
         }));
-        Self::spawn_comitter(&set, pool);
+        Self::spawn_committer(&set, pool);
         Self { set }
     }
     pub async fn insert(&self, i: RideStatusInsert) {
@@ -59,7 +59,7 @@ impl Deferred {
         let mut set = self.set.lock().await;
         set.updates.push(u);
     }
-    fn spawn_comitter(set: &Arc<Mutex<ChangeSet>>, pool: &Pool<MySql>) {
+    fn spawn_committer(set: &Arc<Mutex<ChangeSet>>, pool: &Pool<MySql>) {
         let pool = pool.clone();
         let set = Arc::clone(set);
         tokio::spawn(async move {

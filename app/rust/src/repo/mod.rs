@@ -2,6 +2,7 @@ pub mod cache_init;
 pub mod chair;
 pub mod dl;
 pub mod location;
+pub mod model;
 pub mod owner;
 pub mod payment_token;
 pub mod pgw;

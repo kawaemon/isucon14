@@ -29,7 +29,7 @@ pub struct RideCacheInner {
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
     free_chairs_lv1: Mutex<HashSet<Id<Chair>>>,
-    free_chairs_lv2: Mutex<Vec<Id<Chair>>>,
+    free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
     chair_movement_cache: RwLock<HashMap<Id<Chair>, Arc<RideEntry>>>,
 
@@ -44,7 +44,7 @@ struct RideCacheInit {
 
     waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
     free_chairs_lv1: HashSet<Id<Chair>>,
-    free_chairs_lv2: Vec<Id<Chair>>,
+    free_chairs_lv2: HashSet<Id<Chair>>,
 
     chair_movement_cache: HashMap<Id<Chair>, Arc<RideEntry>>,
 
@@ -188,7 +188,7 @@ impl RideCacheInit {
         // free_chairs
         //
         let mut free_chairs_lv1 = HashSet::new();
-        let mut free_chairs_lv2 = Vec::new();
+        let mut free_chairs_lv2 = HashSet::new();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
             let n = n.0.lock().await;
@@ -216,7 +216,7 @@ impl RideCacheInit {
                     .as_ref()
                     .is_none_or(|x| x.status == RideStatusEnum::Completed);
             if lv2 {
-                free_chairs_lv2.push(chair.id.clone());
+                free_chairs_lv2.insert(chair.id.clone());
             }
         }
 
@@ -308,10 +308,10 @@ impl Repository {
     pub async fn push_free_chair(&self, id: &Id<Chair>) {
         let len = {
             let mut cache = self.ride_cache.free_chairs_lv2.lock().await;
-            cache.push(id.clone());
+            cache.insert(id.clone());
             cache.len()
         };
-        if len == 20 {
+        if len == 5 {
             let me = self.clone();
             tokio::spawn(async move {
                 me.do_matching().await;
@@ -371,6 +371,9 @@ impl Repository {
                 send += 1;
             }
         }
+
+        // 嘘、notification inner がそれを勝手にやっているはず
+        // if queue.last_sent.status == Completed { push_to_v2 }
 
         tracing::debug!("chair sse beginning, sent to sync={send}");
 
@@ -598,8 +601,7 @@ impl Repository {
                     })
                     .unwrap()
                     .clone();
-                let pos = free_chairs.iter().position(|x| x == &best).unwrap();
-                free_chairs.swap_remove(pos);
+                free_chairs.remove(&best);
                 pairs.push(Pair {
                     chair_id: best,
                     ride_id: ride.id.clone(),

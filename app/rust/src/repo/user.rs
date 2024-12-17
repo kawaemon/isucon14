@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
-use chrono::Utc;
 use crate::repo::dl::DlRwLock as RwLock;
+use chrono::Utc;
 
 use crate::models::{Id, User};
 
@@ -69,7 +69,7 @@ impl Repository {
 }
 
 impl Repository {
-    pub async fn user_get_by_acess_token(&self, token: &str) -> Result<Option<User>> {
+    pub async fn user_get_by_access_token(&self, token: &str) -> Result<Option<User>> {
         let cache = self.user_cache.by_token.read().await;
         let Some(entry) = cache.get(token) else {
             return Ok(None);

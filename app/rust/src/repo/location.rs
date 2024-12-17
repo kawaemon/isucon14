@@ -102,13 +102,24 @@ impl Deferred {
 }
 
 #[derive(Debug)]
-struct Entry {
+struct Entry(RwLock<EntryInner>);
+impl Entry {
+    fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
+        Self(RwLock::new(EntryInner::new(coord, at)))
+    }
+    async fn update(&self, coord: Coordinate, at: DateTime<Utc>) {
+        self.0.write().await.update(coord, at);
+    }
+}
+
+#[derive(Debug)]
+struct EntryInner {
     latest_coord: Coordinate,
     updated_at: DateTime<Utc>,
     total: i64,
 }
 
-impl Entry {
+impl EntryInner {
     fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
         Self {
             latest_coord: coord,
@@ -127,13 +138,13 @@ struct ChairLocationCacheInit {
     cache: HashMap<Id<Chair>, Entry>,
 }
 impl ChairLocationCacheInit {
-    fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
+    async fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
         init.locations.sort_unstable_by_key(|x| x.created_at);
 
         let mut res: HashMap<Id<Chair>, Entry> = HashMap::new();
         for loc in &init.locations {
             if let Some(c) = res.get_mut(&loc.chair_id) {
-                c.update(loc.coord(), loc.created_at);
+                c.update(loc.coord(), loc.created_at).await;
             } else {
                 res.insert(
                     loc.chair_id.clone(),
@@ -151,7 +162,7 @@ impl Repository {
         pool: &Pool<MySql>,
         init: &mut CacheInit,
     ) -> ChairLocationCache {
-        let init = ChairLocationCacheInit::from_init(init);
+        let init = ChairLocationCacheInit::from_init(init).await;
 
         Arc::new(ChairLocationCacheInner {
             cache: RwLock::new(init.cache),
@@ -164,7 +175,7 @@ impl Repository {
         _pool: &Pool<MySql>,
         init: &mut CacheInit,
     ) {
-        let init = ChairLocationCacheInit::from_init(init);
+        let init = ChairLocationCacheInit::from_init(init).await;
         *self.chair_location_cache.cache.write().await = init.cache;
     }
 }
@@ -172,7 +183,11 @@ impl Repository {
 impl Repository {
     pub async fn chair_location_get_latest(&self, id: &Id<Chair>) -> Result<Option<Coordinate>> {
         let cache = self.chair_location_cache.cache.read().await;
-        Ok(cache.get(id).map(|x| x.latest_coord))
+        let Some(cache) = cache.get(id) else {
+            return Ok(None);
+        };
+        let cache = cache.0.read().await;
+        Ok(Some(cache.latest_coord))
     }
 
     pub async fn chair_total_distance(
@@ -180,7 +195,11 @@ impl Repository {
         chair_id: &Id<Chair>,
     ) -> Result<Option<(i64, DateTime<Utc>)>> {
         let cache = self.chair_location_cache.cache.read().await;
-        Ok(cache.get(chair_id).map(|x| (x.total, x.updated_at)))
+        let Some(cache) = cache.get(chair_id) else {
+            return Ok(None);
+        };
+        let cache = cache.0.read().await;
+        Ok(Some((cache.total, cache.updated_at)))
     }
 
     pub async fn chair_location_update(
@@ -200,14 +219,17 @@ impl Repository {
         };
 
         self.chair_location_cache.deferred.push(c).await;
+
         {
-            let mut cache = self.chair_location_cache.cache.write().await;
-            if let Some(c) = cache.get_mut(chair_id) {
-                c.update(coord, created_at);
-            } else {
-                cache.insert(chair_id.clone(), Entry::new(coord, created_at));
+            let cache = self.chair_location_cache.cache.read().await;
+            if let Some(c) = cache.get(chair_id) {
+                c.update(coord, created_at).await;
+                return Ok(created_at);
             }
         }
+
+        let mut cache = self.chair_location_cache.cache.write().await;
+        cache.insert(chair_id.clone(), Entry::new(coord, created_at));
 
         Ok(created_at)
     }

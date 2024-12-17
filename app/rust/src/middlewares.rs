@@ -47,7 +47,7 @@ pub async fn app_auth_middleware(
         return Err(Error::Unauthorized("app_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(user): Option<User> = repo.user_get_by_acess_token(access_token).await? else {
+    let Some(user): Option<User> = repo.user_get_by_access_token(access_token).await? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
