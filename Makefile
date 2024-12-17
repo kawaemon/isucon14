@@ -19,10 +19,11 @@ apply: ghpull setconf
 
 	sudo systemctl daemon-reload
 	sudo systemctl restart mysql nginx
-	sudo systemctl restart $(SERVICE_NAME)
+
+	cd $(BUILD_DIR) && bash -c 'set -a && source $(ENV_FILE) && set +a && RUST_LOG=info CONCURRENCY=40 ./target/release/isuride'
 
 ghpull:
-	git pull --force
+	git pull --force --autostash
 
 
 logpermission:
