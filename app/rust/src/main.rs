@@ -134,8 +134,8 @@ async fn post_initialize(
         });
     }
 
-    repo.pgw_set(&req.payment_server).await?;
     repo.reinit().await;
+    repo.pgw_set(&req.payment_server).await?;
 
     Ok(axum::Json(PostInitializeResponse { language: "rust" }))
 }
