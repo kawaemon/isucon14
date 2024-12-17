@@ -12,6 +12,7 @@ pub mod user;
 
 use cache_init::CacheInit;
 use chair::ChairCache;
+use coupon::CouponCache;
 use location::ChairLocationCache;
 use model::ChairModelCache;
 use owner::OwnerCache;
@@ -50,6 +51,7 @@ pub struct Repository {
     pub ride_cache: RideCache,
     pgw_cache: PgwCache,
     pt_cache: PtCache,
+    coupon_cache: CouponCache,
 }
 
 impl Repository {
@@ -68,6 +70,7 @@ impl Repository {
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init),
+            coupon_cache: Self::init_coupon_cache(&mut init).await,
         }
     }
 
@@ -83,5 +86,6 @@ impl Repository {
         self.reinit_chair_model_cache().await;
         self.reinit_pgw_cache(&self.pool).await;
         self.reinit_pt_cache(&mut init).await;
+        self.reinit_coupon_cache(&mut init).await;
     }
 }

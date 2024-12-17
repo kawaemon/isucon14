@@ -114,8 +114,8 @@ async fn app_post_users_inner(
         if !req_invitation_code.is_empty() {
             let inv_prefixed_code = format!("INV_{req_invitation_code}");
             // 招待する側の招待数をチェック
-            let coupons = repo.coupon_get_by_code(&inv_prefixed_code).await?;
-            if coupons.len() >= 3 {
+            let coupons = repo.coupon_get_count_by_code(&inv_prefixed_code).await?;
+            if coupons >= 3 {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             }
 

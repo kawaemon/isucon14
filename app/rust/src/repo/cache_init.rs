@@ -1,6 +1,6 @@
 use sqlx::{MySql, Pool};
 
-use crate::models::{Chair, ChairLocation, Owner, PaymentToken, Ride, RideStatus, User};
+use crate::models::{Chair, ChairLocation, Coupon, Owner, PaymentToken, Ride, RideStatus, User};
 
 pub struct CacheInit {
     pub users: Vec<User>,
@@ -10,6 +10,7 @@ pub struct CacheInit {
     pub ride_statuses: Vec<RideStatus>,
     pub locations: Vec<ChairLocation>,
     pub pt: Vec<PaymentToken>,
+    pub coupon: Vec<Coupon>,
 }
 
 impl CacheInit {
@@ -40,6 +41,10 @@ impl CacheInit {
                 .await
                 .unwrap(),
             pt: sqlx::query_as("select * from payment_tokens")
+                .fetch_all(pool)
+                .await
+                .unwrap(),
+            coupon: sqlx::query_as("select * from coupons")
                 .fetch_all(pool)
                 .await
                 .unwrap(),

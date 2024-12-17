@@ -249,5 +249,5 @@ pub struct Coupon {
     pub code: String,
     pub discount: i32,
     pub created_at: DateTime<Utc>,
-    pub used_by: Option<String>,
+    pub used_by: Option<Id<Ride>>,
 }

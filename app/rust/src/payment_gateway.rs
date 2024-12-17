@@ -1,7 +1,11 @@
+use reqwest::StatusCode;
 use tokio::sync::Semaphore;
 
 use crate::Error;
-use std::sync::Arc;
+use std::{
+    sync::{atomic::AtomicUsize, Arc},
+    time::Duration,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentGatewayError {
@@ -29,6 +33,9 @@ const RETRY_LIMIT: usize = 1000;
 #[derive(Debug, Clone)]
 pub struct PaymentGatewayRestricter {
     sema: Arc<Semaphore>,
+    tries: Arc<AtomicUsize>,
+    success: Arc<AtomicUsize>,
+    failure: Arc<AtomicUsize>,
 }
 impl PaymentGatewayRestricter {
     #[allow(clippy::new_without_default)]
@@ -37,13 +44,57 @@ impl PaymentGatewayRestricter {
             .unwrap_or("30".to_owned())
             .parse()
             .unwrap();
+
+        let tries = Arc::new(AtomicUsize::new(0));
+        let success = Arc::new(AtomicUsize::new(0));
+        let failure = Arc::new(AtomicUsize::new(0));
+
+        {
+            let tries = Arc::clone(&tries);
+            let (success, failure) = (Arc::clone(&success), Arc::clone(&failure));
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(5000)).await;
+                    let success = success.swap(0, std::sync::atomic::Ordering::Relaxed);
+                    let failure = failure.swap(0, std::sync::atomic::Ordering::Relaxed);
+                    let tries = tries.swap(0, std::sync::atomic::Ordering::Relaxed);
+                    let total = success + failure;
+                    let ratio = (success as f64 / total as f64 * 100.0) as usize;
+                    tracing::info!(
+                        "pgw: ok={ratio:3}%, total={total:5}, ok={success:5}, fail={failure:5}"
+                    );
+
+                    let ratio = total as f64 / tries as f64;
+                    tracing::info!("pgw: tries={tries:5}, req/try={ratio:3.2}");
+                }
+            });
+        }
+
         Self {
             sema: Arc::new(Semaphore::new(conc)),
+            success,
+            failure,
+            tries,
         }
+    }
+
+    pub fn on_begin(&self) {
+        self.tries
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn on_req(&self, code: StatusCode) {
+        if code.is_success() {
+            &self.success
+        } else {
+            &self.failure
+        }
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
 async fn get_payment_history(
+    pgw: &PaymentGatewayRestricter,
     client: &reqwest::Client,
     gw: &str,
     token: &str,
@@ -54,7 +105,11 @@ async fn get_payment_history(
         .send()
         .await
         .map_err(PaymentGatewayError::Reqwest)?;
-    if r.status() != reqwest::StatusCode::OK {
+
+    let status = r.status();
+    pgw.on_req(status);
+
+    if status != reqwest::StatusCode::OK {
         return Err(PaymentGatewayError::GetPayment(r.status()).into());
     }
     let r: Vec<PaymentGatewayGetPaymentsResponseOne> =
@@ -76,6 +131,8 @@ pub async fn request_payment_gateway_post_payment(
     let _permit = pgw.sema.acquire().await.unwrap();
     tracing::debug!("permit acquired; remain = {}", pgw.sema.available_permits());
 
+    pgw.on_begin();
+
     let mut retry = 0;
     loop {
         let result: Result<(), Error> = async {
@@ -87,9 +144,13 @@ pub async fn request_payment_gateway_post_payment(
                 .await
                 .map_err(PaymentGatewayError::Reqwest)?;
 
-            if res.status() != reqwest::StatusCode::NO_CONTENT {
+            let status = res.status();
+            pgw.on_req(status);
+
+            if status != reqwest::StatusCode::NO_CONTENT {
                 // エラーが返ってきても成功している場合があるので、社内決済マイクロサービスに問い合わせ
-                let payment_len = get_payment_history(client, payment_gateway_url, token).await?;
+                let payment_len =
+                    get_payment_history(pgw, client, payment_gateway_url, token).await?;
 
                 if desired_ride_count != payment_len {
                     return Err(PaymentGatewayError::UnexpectedNumberOfPayments {
