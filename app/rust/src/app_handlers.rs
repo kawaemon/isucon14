@@ -191,15 +191,10 @@ struct GetAppRidesResponseItemChair {
 }
 
 async fn app_get_rides(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
-    let rides: Vec<Ride> =
-        sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC")
-            .bind(&user.id)
-            .fetch_all(&pool)
-            .await?;
-
+    let rides: Vec<Ride> = repo.rides_by_user(&user.id).await?;
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
         let status = repo.ride_status_latest(None, &ride.id).await?;

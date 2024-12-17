@@ -49,6 +49,15 @@ impl Repository {
         Ok(Some((ride, status)))
     }
 
+    pub async fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
+        let rides: Vec<Ride> =
+            sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC")
+                .bind(id)
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rides)
+    }
+
     pub async fn rides_count_by_user(&self, id: &Id<User>) -> Result<usize> {
         let r: i32 = sqlx::query_scalar("SELECT count(*) FROM rides WHERE user_id = ?")
             .bind(id)
