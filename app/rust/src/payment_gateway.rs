@@ -47,8 +47,7 @@ where
     }
 }
 
-const CONCURRENCY: usize = 25;
-const RETRY_LIMIT: usize = 50;
+const RETRY_LIMIT: usize = 1000;
 
 #[derive(Debug, Clone)]
 pub struct PaymentGatewayRestricter {
@@ -56,8 +55,12 @@ pub struct PaymentGatewayRestricter {
 }
 impl PaymentGatewayRestricter {
     pub fn new() -> Self {
+        let conc = std::env::var("CONCURRENCY")
+            .unwrap_or("30".to_owned())
+            .parse()
+            .unwrap();
         Self {
-            sema: Arc::new(Semaphore::new(CONCURRENCY)),
+            sema: Arc::new(Semaphore::new(conc)),
         }
     }
 }
@@ -128,7 +131,7 @@ where
             }
             retry += 1;
             // tracing::warn!("pgw request failed: retrying [{}/{RETRY_LIMIT}]", retry + 1);
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
             continue;
         }
         break;

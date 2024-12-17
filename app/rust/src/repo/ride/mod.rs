@@ -311,7 +311,7 @@ impl Repository {
             cache.insert(id.clone());
             cache.len()
         };
-        if len == 5 {
+        if len == 10 {
             let me = self.clone();
             tokio::spawn(async move {
                 me.do_matching().await;
@@ -573,11 +573,19 @@ impl Repository {
             let waiting_rides_len = waiting_rides.len();
             let mut free_chairs = self.ride_cache.free_chairs_lv2.lock().await;
             let free_chairs_len = free_chairs.len();
+            let chair_speed_cache = self.chair_model_cache.speed.read().await;
 
+            // stupid
             let mut chair_pos = HashMap::new();
             for chair in free_chairs.iter() {
                 let loc = self.chair_location_get_latest(chair).await.unwrap();
                 chair_pos.insert(chair.clone(), loc);
+            }
+            let mut chair_speed = HashMap::new();
+            for chair in free_chairs.iter() {
+                let c = self.chair_get_by_id(None, chair).await.unwrap().unwrap();
+                let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
+                chair_speed.insert(chair.clone(), speed);
             }
 
             let matches = waiting_rides.len().min(free_chairs.len());
@@ -593,11 +601,13 @@ impl Repository {
                 let best = free_chairs
                     .iter()
                     .min_by_key(|cid| {
-                        chair_pos
-                            .get(cid)
-                            .unwrap()
-                            .map(|x| ride.pickup.distance(x))
-                            .unwrap_or(9999999)
+                        let Some(chair_pos) = chair_pos.get(cid).unwrap() else {
+                            return 99999999;
+                        };
+                        let travel_distance = chair_pos.distance(ride.pickup);
+                        // + ride.pickup.distance(ride.destination);
+                        let speed = chair_speed.get(cid).unwrap();
+                        travel_distance / speed
                     })
                     .unwrap()
                     .clone();

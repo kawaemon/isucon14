@@ -1,14 +1,27 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{http::StatusCode, response::Response};
 use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
+use std::time::Duration;
+use tokio::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
     pub pgw: PaymentGatewayRestricter,
+    pub speed: SpeedStatictics,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpeedStatictics {
+    pub m: Arc<Mutex<HashMap<String, SpeedStaticticsEntry>>>,
+}
+#[derive(Debug, Default)]
+pub struct SpeedStaticticsEntry {
+    pub total_duration: Duration,
+    pub count: i32,
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::Instant;
 
 use axum::extract::{Request, State};
 use axum::middleware::Next;
@@ -8,31 +8,30 @@ use axum_extra::extract::CookieJar;
 use crate::models::{Chair, Owner, User};
 use crate::{AppState, Error};
 
-pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Error> {
+pub async fn log_slow_requests(
+    State(AppState { speed, .. }): State<AppState>,
+    req: Request,
+    next: Next,
+) -> Result<Response, Error> {
     let uri = req.uri().clone();
-    let path = uri.path();
+    let mut path = uri.path();
     let method = req.method().clone();
 
-    tokio::pin! {
-        let response_fut = next.run(req);
+    let begin = Instant::now();
+    let res = next.run(req).await;
+    let e = begin.elapsed();
+
+    if path.starts_with("/api/chair/rides") && path.ends_with("/status") {
+        path = "/api/chair/rides/:id/status";
     }
-
-    let mut secs = 0;
-
-    let res = loop {
-        tokio::pin! {
-            let timeout = tokio::time::sleep(Duration::from_secs(1));
-        }
-        tokio::select! {
-            _ = &mut timeout => {
-                secs += 1;
-                tracing::debug!("{method} {path} is taking {secs} seconds and continuing...");
-            }
-            res = &mut response_fut => {
-                break res;
-            }
-        }
-    };
+    if path.starts_with("/api/app/rides") && path.ends_with("/evaluation") {
+        path = "/api/app/rides/:id/evaluation";
+    }
+    let key = format!("{method} {path}");
+    let mut speed = speed.m.lock().await;
+    let entry = speed.entry(key).or_default();
+    entry.count += 1;
+    entry.total_duration += e;
 
     Ok(res)
 }
