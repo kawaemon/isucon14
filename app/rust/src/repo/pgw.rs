@@ -1,6 +1,6 @@
+use crate::repo::dl::DlRwLock as RwLock;
 use sqlx::{MySql, Pool};
 use std::sync::Arc;
-use crate::repo::dl::DlRwLock as RwLock;
 
 use super::{Repository, Result, Tx};
 
@@ -25,6 +25,10 @@ impl Repository {
 impl Repository {
     pub async fn pgw_set(&self, s: &str) -> Result<()> {
         *self.pgw_cache.write().await = s.to_owned();
+        sqlx::query("UPDATE settings SET value = ? WHERE name = 'payment_gateway_url'")
+            .bind(s)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
