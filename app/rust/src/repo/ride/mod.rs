@@ -4,6 +4,7 @@ use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
 use sqlx::MySql;
 use sqlx::Pool;
+use status::deferred::RideStatusDeferrable;
 use std::collections::HashSet;
 use std::{
     collections::{HashMap, VecDeque},
@@ -15,6 +16,7 @@ use crate::{
     Coordinate,
 };
 
+use super::deferred::Deferred;
 use super::{cache_init::CacheInit, Repository, Result};
 
 #[allow(clippy::module_inception)]
@@ -36,7 +38,7 @@ pub struct RideCacheInner {
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 
-    deferred: status::Deferred,
+    deferred: Deferred<RideStatusDeferrable>,
 }
 
 struct RideCacheInit {
@@ -243,7 +245,7 @@ impl Repository {
             free_chairs_lv1: Mutex::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
-            deferred: status::Deferred::new(pool),
+            deferred: Deferred::new(pool),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {

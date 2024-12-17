@@ -1,7 +1,6 @@
 pub mod deferred;
 use chrono::Utc;
-pub use deferred::Deferred;
-use deferred::{NotifiedType, RideStatusInsert, RideStatusUpdate};
+use deferred::{NotifiedType, RideStatusUpdate};
 
 use std::sync::Arc;
 
@@ -35,11 +34,13 @@ impl Repository {
 
         self.ride_cache
             .deferred
-            .insert(RideStatusInsert {
+            .insert(RideStatus {
                 id: status_id.clone(),
                 ride_id: ride_id.clone(),
                 status,
                 created_at: Utc::now(),
+                app_sent_at: None,
+                chair_sent_at: None,
             })
             .await;
 

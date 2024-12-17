@@ -61,7 +61,7 @@ CREATE TABLE users
   created_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '登録日時',
   updated_at      DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新日時',
   PRIMARY KEY (id),
-  UNIQUE (username),
+  -- UNIQUE (username),
   UNIQUE (access_token),
   UNIQUE (invitation_code)
 )
@@ -117,7 +117,7 @@ CREATE TABLE owners
   created_at           DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '登録日時',
   updated_at           DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '更新日時',
   PRIMARY KEY (id),
-  UNIQUE (name),
+  -- UNIQUE (name),
   UNIQUE (access_token),
   UNIQUE (chair_register_token)
 )
