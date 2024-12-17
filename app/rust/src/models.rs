@@ -177,6 +177,7 @@ pub struct User {
     pub lastname: String,
     pub date_of_birth: String,
     pub access_token: String,
+    pub invitation_code: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

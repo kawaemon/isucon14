@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
@@ -10,6 +12,7 @@ use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, User};
 use crate::repo::ride::NotificationBody;
+use crate::repo::Repository;
 use crate::{AppState, Coordinate, Error};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -84,7 +87,7 @@ async fn app_post_users(
 }
 
 async fn app_post_users_inner(
-    AppState { pool, repo, .. }: &AppState,
+    AppState { repo, .. }: &AppState,
     jar: &mut Option<CookieJar>,
     req: &AppPostUsersRequest,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
@@ -104,49 +107,29 @@ async fn app_post_users_inner(
     .await?;
 
     // 初回登録キャンペーンのクーポンを付与
-    sqlx::query("INSERT INTO coupons (user_id, code, discount) VALUES (?, ?, ?)")
-        .bind(&user_id)
-        .bind("CP_NEW2024")
-        .bind(3000)
-        .execute(pool)
-        .await?;
+    repo.coupon_add(&user_id, "CP_NEW2024", 3000).await?;
 
     // 招待コードを使った登録
     if let Some(req_invitation_code) = req.invitation_code.as_ref() {
         if !req_invitation_code.is_empty() {
+            let inv_prefixed_code = format!("INV_{req_invitation_code}");
             // 招待する側の招待数をチェック
-            let coupons: Vec<Coupon> =
-                sqlx::query_as("SELECT * FROM coupons WHERE code = ? FOR UPDATE")
-                    .bind(format!("INV_{req_invitation_code}"))
-                    .fetch_all(pool)
-                    .await?;
+            let coupons = repo.coupon_get_by_code(&inv_prefixed_code).await?;
             if coupons.len() >= 3 {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             }
 
             // ユーザーチェック
             let Some(inviter): Option<User> =
-                sqlx::query_as("SELECT * FROM users WHERE invitation_code = ?")
-                    .bind(req_invitation_code)
-                    .fetch_optional(pool)
-                    .await?
+                repo.user_get_by_inv_code(req_invitation_code).await?
             else {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             };
 
             // 招待クーポン付与
-            sqlx::query("INSERT INTO coupons (user_id, code, discount) VALUES (?, ?, ?)")
-                .bind(&user_id)
-                .bind(format!("INV_{req_invitation_code}"))
-                .bind(1500)
-                .execute(pool)
-                .await?;
+            repo.coupon_add(&user_id, &inv_prefixed_code, 1500).await?;
             // 招待した人にもRewardを付与
-            sqlx::query("INSERT INTO coupons (user_id, code, discount) VALUES (?, CONCAT(?, '_', FLOOR(UNIX_TIMESTAMP(NOW(3))*1000)), ?)")
-                .bind(inviter.id)
-                .bind(format!("RWD_{req_invitation_code}"))
-                .bind(1000)
-                .execute(pool)
+            repo.coupon_add(&inviter.id, &format!("RWD_{}", Id::<Coupon>::new().0), 1000)
                 .await?;
         }
     }
@@ -225,7 +208,7 @@ async fn app_get_rides(
         }
 
         let fare = calculate_discounted_fare(
-            &pool,
+            &repo,
             &user.id,
             Some(&ride.id),
             ride.pickup_coord(),
@@ -272,7 +255,7 @@ struct AppPostRidesResponse {
 }
 
 async fn app_post_rides(
-    State(AppState { pool, repo, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesRequest>,
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
@@ -291,62 +274,23 @@ async fn app_post_rides(
     )
     .await?;
 
-    let ride_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM rides WHERE user_id = ?")
-        .bind(&user.id)
-        .fetch_one(&pool)
-        .await?;
-
-    if ride_count == 1 {
-        // 初回利用で、初回利用クーポンがあれば必ず使う
-        let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL FOR UPDATE")
-            .bind(&user.id)
-            .fetch_optional(&pool)
+    let mut discount = 0;
+    let unused_coupons = repo.coupon_get_unused_order_by_created_at(&user.id).await?;
+    let coupon_candidate = unused_coupons
+        .iter()
+        .find(|x| x.code == "CP_NEW2024")
+        .or(unused_coupons.first());
+    if let Some(coupon) = coupon_candidate {
+        repo.coupon_set_used(&user.id, &coupon.code, &ride_id)
             .await?;
-        if coupon.is_some() {
-            sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = 'CP_NEW2024'")
-                .bind(&ride_id)
-                .bind(&user.id)
-                .execute(&pool)
-                .await?;
-        } else {
-            // 無ければ他のクーポンを付与された順番に使う
-            let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE")
-                .bind(&user.id)
-                .fetch_optional(&pool)
-                .await?;
-            if let Some(coupon) = coupon {
-                sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
-                    .bind(&ride_id)
-                    .bind(&user.id)
-                    .bind(coupon.code)
-                    .execute(&pool)
-                    .await?;
-            }
-        }
-    } else {
-        // 他のクーポンを付与された順番に使う
-        let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1 FOR UPDATE")
-                .bind(&user.id)
-                .fetch_optional(&pool)
-                .await?;
-        if let Some(coupon) = coupon {
-            sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
-                .bind(&ride_id)
-                .bind(&user.id)
-                .bind(coupon.code)
-                .execute(&pool)
-                .await?;
-        }
+        discount = coupon.discount;
     }
 
-    let fare = calculate_discounted_fare(
-        &pool,
-        &user.id,
-        Some(&ride_id),
-        req.pickup_coordinate,
-        req.destination_coordinate,
-    )
-    .await?;
+    let metered_fare =
+        crate::FARE_PER_DISTANCE * req.pickup_coordinate.distance(req.destination_coordinate);
+    let discounted_metered_fare = std::cmp::max(metered_fare - discount, 0);
+
+    let fare = crate::INITIAL_FARE + discounted_metered_fare;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -367,12 +311,12 @@ struct AppPostRidesEstimatedFareResponse {
 }
 
 async fn app_post_rides_estimated_fare(
-    State(AppState { pool, .. }): State<AppState>,
+    State(AppState { repo, .. }): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesEstimatedFareRequest>,
 ) -> Result<axum::Json<AppPostRidesEstimatedFareResponse>, Error> {
     let discounted = calculate_discounted_fare(
-        &pool,
+        &repo,
         &user.id,
         None,
         req.pickup_coordinate,
@@ -424,7 +368,7 @@ async fn app_post_ride_evaluation(
     };
 
     let fare = calculate_discounted_fare(
-        &pool,
+        &repo,
         &ride.user_id,
         Some(&ride.id),
         ride.pickup_coord(),
@@ -528,7 +472,7 @@ async fn app_get_notification(
 }
 
 async fn app_get_notification_inner(
-    AppState { pool, repo, .. }: &AppState,
+    AppState { repo, .. }: &AppState,
     user_id: &Id<User>,
     body: Option<NotificationBody>,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
@@ -537,7 +481,7 @@ async fn app_get_notification_inner(
     let status = body.status;
 
     let fare = calculate_discounted_fare(
-        pool,
+        &repo,
         user_id,
         Some(&ride.id),
         ride.pickup_coord(),
@@ -602,48 +546,33 @@ async fn app_get_nearby_chairs(
         longitude: query.longitude,
     };
 
-    let mut chairs = repo.chair_huifhiubher(coordinate, distance).await?;
-    // if chairs.len() > 0 {
-    //     chairs.pop();
-    // }
-
     Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs,
+        chairs: repo.chair_huifhiubher(coordinate, distance).await?,
         retrieved_at: Utc::now().timestamp(),
     }))
 }
 
 async fn calculate_discounted_fare(
-    tx: &Pool<MySql>,
+    repo: &Arc<Repository>,
     user_id: &Id<User>,
     ride_id: Option<&Id<Ride>>,
     pickup: Coordinate,
     dest: Coordinate,
-) -> sqlx::Result<i32> {
-    let discount = if let Some(ride_id) = ride_id {
-        // すでにクーポンが紐づいているならそれの割引額を参照
-        let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE used_by = ?")
-            .bind(ride_id)
-            .fetch_optional(tx)
-            .await?;
-        coupon.map(|c| c.discount).unwrap_or(0)
-    } else {
-        // 初回利用クーポンを最優先で使う
-        let coupon: Option<Coupon> = sqlx::query_as(
-            "SELECT * FROM coupons WHERE user_id = ? AND code = 'CP_NEW2024' AND used_by IS NULL",
-        )
-        .bind(user_id)
-        .fetch_optional(tx)
-        .await?;
-        if let Some(coupon) = coupon {
-            coupon.discount
-        } else {
-            // 無いなら他のクーポンを付与された順番に使う
-            let coupon: Option<Coupon> = sqlx::query_as("SELECT * FROM coupons WHERE user_id = ? AND used_by IS NULL ORDER BY created_at LIMIT 1")
-                .bind(user_id)
-                .fetch_optional(tx)
-                .await?;
+) -> Result<i32, Error> {
+    let discount = {
+        if let Some(ride_id) = ride_id {
+            // すでにクーポンが紐づいているならそれの割引額を参照
+            let coupon: Option<Coupon> = repo.coupon_get_by_usedby(ride_id).await?;
             coupon.map(|c| c.discount).unwrap_or(0)
+        } else {
+            // 初回利用クーポンを最優先で使う
+            let unused_coupons = repo.coupon_get_unused_order_by_created_at(user_id).await?;
+            if let Some(coupon) = unused_coupons.iter().find(|x| x.code == "CP_NEW2024") {
+                coupon.discount
+            } else {
+                // 無いなら他のクーポンを付与された順番に使う
+                unused_coupons.first().map(|x| x.discount).unwrap_or(0)
+            }
         }
     };
 

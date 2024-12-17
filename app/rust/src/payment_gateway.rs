@@ -54,6 +54,7 @@ pub struct PaymentGatewayRestricter {
     sema: Arc<Semaphore>,
 }
 impl PaymentGatewayRestricter {
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         let conc = std::env::var("CONCURRENCY")
             .unwrap_or("30".to_owned())

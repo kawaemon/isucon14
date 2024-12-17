@@ -14,6 +14,7 @@ type SharedUser = Arc<User>;
 pub struct UserCacheInner {
     by_id: Arc<RwLock<HashMap<Id<User>, SharedUser>>>,
     by_token: Arc<RwLock<HashMap<String, SharedUser>>>,
+    by_inv_code: Arc<RwLock<HashMap<String, SharedUser>>>,
 }
 
 impl UserCacheInner {
@@ -22,27 +23,33 @@ impl UserCacheInner {
 
         let mut id = self.by_id.write().await;
         let mut t = self.by_token.write().await;
+        let mut inv = self.by_inv_code.write().await;
         id.insert(u.id, Arc::clone(&s));
         t.insert(u.access_token, Arc::clone(&s));
+        inv.insert(u.invitation_code, Arc::clone(&s));
     }
 }
 
 pub struct UserCacheInit {
     by_id: HashMap<Id<User>, SharedUser>,
     by_token: HashMap<String, SharedUser>,
+    by_inv_code: HashMap<String, SharedUser>,
 }
 impl UserCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
         let mut id = HashMap::new();
         let mut t = HashMap::new();
+        let mut inv = HashMap::new();
         for user in &init.users {
             let user = Arc::new(user.clone());
             id.insert(user.id.clone(), Arc::clone(&user));
             t.insert(user.access_token.clone(), Arc::clone(&user));
+            inv.insert(user.invitation_code.clone(), Arc::clone(&user));
         }
         Self {
             by_id: id,
             by_token: t,
+            by_inv_code: inv,
         }
     }
 }
@@ -54,17 +61,24 @@ impl Repository {
         Arc::new(UserCacheInner {
             by_id: Arc::new(RwLock::new(init.by_id)),
             by_token: Arc::new(RwLock::new(init.by_token)),
+            by_inv_code: Arc::new(RwLock::new(init.by_inv_code)),
         })
     }
     pub(super) async fn reinit_user_cache(&self, init: &mut CacheInit) {
         let init = UserCacheInit::from_init(init);
 
-        let UserCacheInner { by_id, by_token } = &*self.user_cache;
+        let UserCacheInner {
+            by_id,
+            by_token,
+            by_inv_code,
+        } = &*self.user_cache;
         let mut id = by_id.write().await;
         let mut t = by_token.write().await;
+        let mut inv = by_inv_code.write().await;
 
         *id = init.by_id;
         *t = init.by_token;
+        *inv = init.by_inv_code;
     }
 }
 
@@ -79,6 +93,13 @@ impl Repository {
     pub async fn user_get_by_id(&self, id: &Id<User>) -> Result<Option<User>> {
         let cache = self.user_cache.by_id.read().await;
         let Some(entry) = cache.get(id) else {
+            return Ok(None);
+        };
+        Ok(Some(User::clone(entry)))
+    }
+    pub async fn user_get_by_inv_code(&self, code: &str) -> Result<Option<User>> {
+        let cache = self.user_cache.by_inv_code.read().await;
+        let Some(entry) = cache.get(code) else {
             return Ok(None);
         };
         Ok(Some(User::clone(entry)))
@@ -104,6 +125,7 @@ impl Repository {
             lastname: last.to_owned(),
             date_of_birth: dob.to_owned(),
             access_token: token.to_owned(),
+            invitation_code: inv_code.to_owned(),
             created_at: now,
             updated_at: now,
         };

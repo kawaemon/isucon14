@@ -1,5 +1,6 @@
 pub mod cache_init;
 pub mod chair;
+pub mod coupon;
 pub mod dl;
 pub mod location;
 pub mod model;
