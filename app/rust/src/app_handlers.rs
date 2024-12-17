@@ -74,7 +74,8 @@ async fn app_post_users(
     for retry in 1.. {
         match app_post_users_inner(&state, &mut jar, &req).await {
             Ok(t) => return Ok(t),
-            Err(Error::Sqlx(sqlx::Error::Database(e))) if matches!(e.code(), Some(s) if s == "40001") =>
+            Err(Error::Sqlx(sqlx::Error::Database(e)))
+                if e.code().is_some_and(|x| x == "40001") =>
             {
                 tracing::warn!("user post deadlock; retrying {retry}");
                 continue;
@@ -475,7 +476,7 @@ async fn app_get_notification_inner(
     let status = body.status;
 
     let fare = calculate_discounted_fare(
-        &repo,
+        repo,
         user_id,
         Some(&ride.id),
         ride.pickup_coord(),

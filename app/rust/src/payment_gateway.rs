@@ -1,8 +1,7 @@
-use reqwest::Client;
 use tokio::sync::Semaphore;
 
 use crate::Error;
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentGatewayError {
