@@ -49,6 +49,14 @@ impl Repository {
         Ok(Some((ride, status)))
     }
 
+    pub async fn rides_count_by_user(&self, id: &Id<User>) -> Result<usize> {
+        let r: i32 = sqlx::query_scalar("SELECT count(*) FROM rides WHERE user_id = ?")
+            .bind(id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(r as usize)
+    }
+
     // writes
 
     pub async fn rides_new_and_set_matching(

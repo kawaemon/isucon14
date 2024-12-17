@@ -12,6 +12,7 @@ pub struct AppState {
     pub repo: Arc<Repository>,
     pub pgw: PaymentGatewayRestricter,
     pub speed: SpeedStatictics,
+    pub client: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]

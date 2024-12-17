@@ -76,11 +76,17 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
+    let client = reqwest::Client::builder()
+        .tcp_keepalive(Duration::from_secs(10))
+        .build()
+        .unwrap();
+
     let app_state = AppState {
         pool,
         repo,
         pgw,
         speed,
+        client,
     };
 
     spawn_matching_thread(app_state.clone());

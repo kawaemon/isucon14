@@ -7,7 +7,6 @@ use axum::response::Sse;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use futures::Stream;
-use sqlx::{MySql, Pool};
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, User};
@@ -344,7 +343,11 @@ struct AppPostRideEvaluationResponse {
 
 async fn app_post_ride_evaluation(
     State(AppState {
-        pool, repo, pgw, ..
+        pool,
+        repo,
+        pgw,
+        client,
+        ..
     }): State<AppState>,
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
@@ -378,22 +381,13 @@ async fn app_post_ride_evaluation(
 
     let payment_gateway_url: String = repo.pgw_get(None).await?;
 
-    async fn get_ride_count(tx: &Pool<MySql>, user_id: &Id<User>) -> Result<i32, Error> {
-        sqlx::query_scalar("SELECT count(*) FROM rides WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_one(tx)
-            .await
-            .map_err(Error::Sqlx)
-    }
-
     crate::payment_gateway::request_payment_gateway_post_payment(
+        &client,
         &pgw,
         &payment_gateway_url,
         &payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
-        &pool,
-        &ride.user_id,
-        get_ride_count,
+        repo.rides_count_by_user(&ride.user_id).await?,
     )
     .await?;
 

@@ -1,11 +1,8 @@
-use sqlx::{MySql, Pool};
+use reqwest::Client;
 use tokio::sync::Semaphore;
 
-use crate::models::{Id, User};
 use crate::Error;
-use std::future::Future;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentGatewayError {
@@ -26,26 +23,7 @@ pub struct PaymentGatewayPostPaymentRequest {
 }
 
 #[derive(Debug, serde::Deserialize)]
-struct PaymentGatewayGetPaymentsResponseOne {
-    amount: i32,
-    status: String,
-}
-
-pub trait PostPaymentCallback<'a> {
-    type Output: Future<Output = Result<i32, Error>>;
-
-    fn call(&self, tx: &'a Pool<MySql>, user_id: &'a Id<User>) -> Self::Output;
-}
-impl<'a, F, Fut> PostPaymentCallback<'a> for F
-where
-    F: Fn(&'a Pool<MySql>, &'a Id<User>) -> Fut,
-    Fut: Future<Output = Result<i32, Error>>,
-{
-    type Output = Fut;
-    fn call(&self, tx: &'a Pool<MySql>, user_id: &'a Id<User>) -> Fut {
-        self(tx, user_id)
-    }
-}
+struct PaymentGatewayGetPaymentsResponseOne {}
 
 const RETRY_LIMIT: usize = 1000;
 
@@ -66,30 +44,43 @@ impl PaymentGatewayRestricter {
     }
 }
 
-pub async fn request_payment_gateway_post_payment<F>(
+async fn get_payment_history(
+    client: &reqwest::Client,
+    gw: &str,
+    token: &str,
+) -> Result<usize, Error> {
+    let r = client
+        .get(format!("{gw}/payments"))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(PaymentGatewayError::Reqwest)?;
+    if r.status() != reqwest::StatusCode::OK {
+        return Err(PaymentGatewayError::GetPayment(r.status()).into());
+    }
+    let r: Vec<PaymentGatewayGetPaymentsResponseOne> =
+        r.json().await.map_err(PaymentGatewayError::Reqwest)?;
+    Ok(r.len())
+}
+
+pub async fn request_payment_gateway_post_payment(
+    client: &reqwest::Client,
     pgw: &PaymentGatewayRestricter,
     payment_gateway_url: &str,
     token: &str,
     param: &PaymentGatewayPostPaymentRequest,
-    tx: &Pool<MySql>,
-    user_id: &Id<User>,
-    retrieve_rides_count: F,
-) -> Result<(), Error>
-where
-    F: for<'a> PostPaymentCallback<'a>,
-{
+    desired_ride_count: usize,
+) -> Result<(), Error> {
     // 失敗したらとりあえずリトライ
     // FIXME: 社内決済マイクロサービスのインフラに異常が発生していて、同時にたくさんリクエストすると変なことになる可能性あり
 
     let _permit = pgw.sema.acquire().await.unwrap();
     tracing::debug!("permit acquired; remain = {}", pgw.sema.available_permits());
 
-    let rides = retrieve_rides_count.call(tx, user_id).await?;
-
     let mut retry = 0;
     loop {
         let result: Result<(), Error> = async {
-            let res = reqwest::Client::new()
+            let res = client
                 .post(format!("{payment_gateway_url}/payments"))
                 .bearer_auth(token)
                 .json(param)
@@ -99,28 +90,17 @@ where
 
             if res.status() != reqwest::StatusCode::NO_CONTENT {
                 // エラーが返ってきても成功している場合があるので、社内決済マイクロサービスに問い合わせ
-                let get_res = reqwest::Client::new()
-                    .get(format!("{payment_gateway_url}/payments"))
-                    .bearer_auth(token)
-                    .send()
-                    .await
-                    .map_err(PaymentGatewayError::Reqwest)?;
+                let payment_len = get_payment_history(client, payment_gateway_url, token).await?;
 
-                // GET /payments は障害と関係なく200が返るので、200以外は回復不能なエラーとする
-                if get_res.status() != reqwest::StatusCode::OK {
-                    return Err(PaymentGatewayError::GetPayment(get_res.status()).into());
-                }
-                let payments: Vec<PaymentGatewayGetPaymentsResponseOne> =
-                    get_res.json().await.map_err(PaymentGatewayError::Reqwest)?;
-
-                if rides as usize != payments.len() {
+                if desired_ride_count != payment_len {
                     return Err(PaymentGatewayError::UnexpectedNumberOfPayments {
-                        ride_count: rides as usize,
-                        payment_count: payments.len(),
+                        ride_count: desired_ride_count,
+                        payment_count: payment_len,
                     }
                     .into());
                 }
             }
+
             Ok(())
         }
         .await;
@@ -132,7 +112,7 @@ where
             }
             retry += 1;
             // tracing::warn!("pgw request failed: retrying [{}/{RETRY_LIMIT}]", retry + 1);
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            // tokio::time::sleep(Duration::from_millis(5)).await;
             continue;
         }
         break;
