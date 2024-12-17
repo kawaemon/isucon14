@@ -1,15 +1,13 @@
 use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::repo::dl::DlMutex as Mutex;
 use crate::repo::dl::DlRwLock as RwLock;
+use crate::FxHashMap as HashMap;
+use crate::FxHashSet as HashSet;
 use chrono::{DateTime, Utc};
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
-use std::collections::HashSet;
-use std::{
-    collections::{HashMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
     models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User},
@@ -58,7 +56,7 @@ impl RideCacheInit {
         init.rides.sort_unstable_by_key(|x| x.created_at);
         init.ride_statuses.sort_unstable_by_key(|x| x.created_at);
 
-        let mut statuses = HashMap::new();
+        let mut statuses = HashMap::default();
         for status in &init.ride_statuses {
             statuses
                 .entry(status.ride_id.clone())
@@ -69,7 +67,7 @@ impl RideCacheInit {
         //
         // status cache
         //
-        let mut latest_ride_stat = HashMap::new();
+        let mut latest_ride_stat = HashMap::default();
         for stat in &init.ride_statuses {
             latest_ride_stat.insert(stat.ride_id.clone(), stat.status);
         }
@@ -77,7 +75,7 @@ impl RideCacheInit {
         //
         // user_notification
         //
-        let mut user_notification = HashMap::new();
+        let mut user_notification = HashMap::default();
         for user in &init.users {
             user_notification.insert(user.id.clone(), NotificationQueue::new());
         }
@@ -98,7 +96,7 @@ impl RideCacheInit {
         //
         // chair_notification
         //
-        let mut chair_notification = HashMap::new();
+        let mut chair_notification = HashMap::default();
         for chair in &init.chairs {
             chair_notification.insert(chair.id.clone(), NotificationQueue::new());
         }
@@ -124,7 +122,7 @@ impl RideCacheInit {
         //
         // rides
         //
-        let mut rides = HashMap::new();
+        let mut rides = HashMap::default();
         for ride in &init.rides {
             rides.insert(
                 ride.id.clone(),
@@ -145,7 +143,7 @@ impl RideCacheInit {
         //
         // chair_movement_cache
         //
-        let mut chair_movement_cache = HashMap::new();
+        let mut chair_movement_cache = HashMap::default();
         for ride in &init.rides {
             let Some(chair_id) = ride.chair_id.as_ref() else {
                 continue;
@@ -189,8 +187,8 @@ impl RideCacheInit {
         //
         // free_chairs
         //
-        let mut free_chairs_lv1 = HashSet::new();
-        let mut free_chairs_lv2 = HashSet::new();
+        let mut free_chairs_lv1 = HashSet::default();
+        let mut free_chairs_lv2 = HashSet::default();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
             let n = n.0.lock().await;
@@ -578,12 +576,12 @@ impl Repository {
             let chair_speed_cache = self.chair_model_cache.speed.read().await;
 
             // stupid
-            let mut chair_pos = HashMap::new();
+            let mut chair_pos = HashMap::default();
             for chair in free_chairs.iter() {
                 let loc = self.chair_location_get_latest(chair).await.unwrap();
                 chair_pos.insert(chair.clone(), loc);
             }
-            let mut chair_speed = HashMap::new();
+            let mut chair_speed = HashMap::default();
             for chair in free_chairs.iter() {
                 let c = self.chair_get_by_id(None, chair).await.unwrap().unwrap();
                 let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();

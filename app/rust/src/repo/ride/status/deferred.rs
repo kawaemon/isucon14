@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::FxHashMap as HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, QueryBuilder};
@@ -45,7 +45,7 @@ impl Deferrable for RideStatusDeferrable {
             .iter_mut()
             .map(|x| (x.id.clone(), x))
             .collect::<HashMap<_, _>>();
-        let mut actual_updates: HashMap<Id<RideStatus>, UpdateQuery> = HashMap::new();
+        let mut actual_updates: HashMap<Id<RideStatus>, UpdateQuery> = HashMap::default();
         for u in updates {
             let Some(i) = inserts.get_mut(&u.status_id) else {
                 let r = actual_updates

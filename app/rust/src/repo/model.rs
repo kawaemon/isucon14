@@ -1,4 +1,5 @@
-use std::{collections::HashMap, sync::Arc};
+use crate::FxHashMap as HashMap;
+use std::sync::Arc;
 
 use sqlx::{MySql, Pool};
 

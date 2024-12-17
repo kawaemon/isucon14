@@ -1,5 +1,6 @@
 use crate::repo::dl::DlRwLock as RwLock;
-use std::{collections::HashMap, sync::Arc};
+use crate::FxHashMap as HashMap;
+use std::sync::Arc;
 
 use crate::models::{Id, User};
 
@@ -9,7 +10,7 @@ pub type PtCache = Arc<RwLock<HashMap<Id<User>, String>>>;
 pub type PtCacheInit = HashMap<Id<User>, String>;
 
 fn init(init: &mut CacheInit) -> PtCacheInit {
-    let mut res = HashMap::new();
+    let mut res = HashMap::default();
     for t in &init.pt {
         res.insert(t.user_id.clone(), t.token.clone());
     }

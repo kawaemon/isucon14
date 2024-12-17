@@ -1,4 +1,5 @@
-use std::{collections::HashMap, sync::Arc};
+use crate::FxHashMap as HashMap;
+use std::sync::Arc;
 
 use crate::repo::dl::DlRwLock as RwLock;
 use chrono::Utc;
@@ -37,9 +38,9 @@ pub struct UserCacheInit {
 }
 impl UserCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
-        let mut id = HashMap::new();
-        let mut t = HashMap::new();
-        let mut inv = HashMap::new();
+        let mut id = HashMap::default();
+        let mut t = HashMap::default();
+        let mut inv = HashMap::default();
         for user in &init.users {
             let user = Arc::new(user.clone());
             id.insert(user.id.clone(), Arc::clone(&user));

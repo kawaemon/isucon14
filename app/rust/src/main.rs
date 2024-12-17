@@ -1,10 +1,10 @@
 use axum::extract::State;
 use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
+use isuride::FxHashMap as HashMap;
 use isuride::SpeedStatictics;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
 use std::cmp::Reverse;
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let repo = Arc::new(Repository::new(&pool).await);
     let pgw = PaymentGatewayRestricter::new();
     let speed = SpeedStatictics {
-        m: Arc::new(Mutex::new(HashMap::new())),
+        m: Arc::new(Mutex::new(HashMap::default())),
     };
     {
         let speed = speed.clone();

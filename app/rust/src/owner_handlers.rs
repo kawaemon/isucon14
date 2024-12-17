@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use crate::FxHashMap as HashMap;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -115,7 +115,7 @@ async fn owner_get_sales(
         models: Vec::new(),
     };
 
-    let mut model_sales_by_model = HashMap::new();
+    let mut model_sales_by_model = HashMap::default();
 
     for chair in repo
         .chair_sale_stats_by_owner(&owner.id, since, until)

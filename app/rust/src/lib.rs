@@ -1,10 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use axum::{http::StatusCode, response::Response};
 use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
 use std::time::Duration;
 use tokio::sync::Mutex;
+
+pub type FxHashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;
+pub type FxHashSet<K> = std::collections::HashSet<K, fxhash::FxBuildHasher>;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -17,7 +20,7 @@ pub struct AppState {
 
 #[derive(Debug, Clone)]
 pub struct SpeedStatictics {
-    pub m: Arc<Mutex<HashMap<String, SpeedStaticticsEntry>>>,
+    pub m: Arc<Mutex<FxHashMap<String, SpeedStaticticsEntry>>>,
 }
 #[derive(Debug, Default)]
 pub struct SpeedStaticticsEntry {

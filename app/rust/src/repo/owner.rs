@@ -1,7 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use crate::FxHashMap as HashMap;
+use std::sync::Arc;
 
-use chrono::Utc;
 use crate::repo::dl::DlRwLock as RwLock;
+use chrono::Utc;
 
 use crate::models::{Id, Owner};
 
@@ -37,9 +38,9 @@ struct OwnerCacheInit {
 }
 impl OwnerCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
-        let mut id = HashMap::new();
-        let mut t = HashMap::new();
-        let mut crt = HashMap::new();
+        let mut id = HashMap::default();
+        let mut t = HashMap::default();
+        let mut crt = HashMap::default();
         for owner in &init.owners {
             let owner = Arc::new(owner.clone());
             id.insert(owner.id.clone(), Arc::clone(&owner));

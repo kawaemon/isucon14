@@ -1,8 +1,6 @@
 use crate::repo::dl::DlRwLock as RwLock;
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use crate::FxHashMap as HashMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -158,9 +156,9 @@ struct ChairCacheInit {
 }
 impl ChairCacheInit {
     async fn from_init(init: &mut CacheInit) -> Self {
-        let mut bid = HashMap::new();
-        let mut ac = HashMap::new();
-        let mut owner = HashMap::new();
+        let mut bid = HashMap::default();
+        let mut ac = HashMap::default();
+        let mut owner = HashMap::default();
         for chair in &init.chairs {
             let c = Arc::new(ChairEntry::new(chair.clone()));
             bid.insert(chair.id.clone(), Arc::clone(&c));

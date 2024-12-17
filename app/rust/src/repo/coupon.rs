@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 
 use crate::repo::dl::DlRwLock as RwLock;
-use std::{collections::HashMap, sync::Arc};
+use crate::FxHashMap as HashMap;
+use std::sync::Arc;
 
 use crate::models::{Coupon, Id, Ride, User};
 
@@ -58,9 +59,9 @@ impl Init {
     async fn from_init(init: &mut CacheInit) -> Self {
         init.coupon.sort_unstable_by_key(|x| x.created_at);
 
-        let mut all = HashMap::new();
-        let mut code = HashMap::new();
-        let mut usedby = HashMap::new();
+        let mut all = HashMap::default();
+        let mut code = HashMap::default();
+        let mut usedby = HashMap::default();
 
         for coupon in &init.coupon {
             let e = Arc::new(CouponEntry::new(coupon));
@@ -80,7 +81,7 @@ impl Init {
             }
         }
 
-        let mut user_queue = HashMap::new();
+        let mut user_queue = HashMap::default();
         for coupon in &init.coupon {
             if coupon.used_by.is_some() {
                 continue;

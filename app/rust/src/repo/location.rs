@@ -1,5 +1,5 @@
+use crate::FxHashMap as HashMap;
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -141,7 +141,7 @@ impl ChairLocationCacheInit {
     async fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
         init.locations.sort_unstable_by_key(|x| x.created_at);
 
-        let mut res: HashMap<Id<Chair>, Entry> = HashMap::new();
+        let mut res: HashMap<Id<Chair>, Entry> = HashMap::default();
         for loc in &init.locations {
             if let Some(c) = res.get_mut(&loc.chair_id) {
                 c.update(loc.coord(), loc.created_at).await;
