@@ -1,7 +1,6 @@
-use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
+use crate::models::{Chair, Coordinate, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::dl::DlRwLock as RwLock;
 use crate::repo::{Repository, Result};
-use crate::Coordinate;
 use chrono::{DateTime, Utc};
 use shared::deferred::DeferrableMayUpdated;
 use shared::FxHashMap as HashMap;

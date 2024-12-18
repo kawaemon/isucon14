@@ -1,10 +1,58 @@
 use std::{marker::PhantomData, str::FromStr};
 
+use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
-use crate::Coordinate;
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("SQLx error: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    #[error("failed to initialize: stdout={stdout} stderr={stderr}")]
+    Initialize { stdout: String, stderr: String },
+    #[error("{0}")]
+    BadRequest(&'static str),
+    #[error("{0}")]
+    Unauthorized(&'static str),
+    #[error("{0}")]
+    NotFound(&'static str),
+    #[error("{0}")]
+    Conflict(&'static str),
+}
+impl axum::response::IntoResponse for Error {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Conflict(_) => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+
+        #[derive(Debug, serde::Serialize)]
+        struct ErrorBody {
+            message: String,
+        }
+        let message = self.to_string();
+        tracing::error!("{message}");
+
+        (status, axum::Json(ErrorBody { message })).into_response()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, serde::Serialize, serde::Deserialize)]
+pub struct Coordinate {
+    pub latitude: i32,
+    pub longitude: i32,
+}
+impl Coordinate {
+    pub fn distance(&self, other: Coordinate) -> i32 {
+        (self.latitude.abs_diff(other.latitude) + self.longitude.abs_diff(other.longitude)) as i32
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -189,6 +237,13 @@ pub struct PaymentToken {
     pub created_at: DateTime<Utc>,
 }
 
+pub const INITIAL_FARE: i32 = 500;
+pub const FARE_PER_DISTANCE: i32 = 100;
+pub fn calc_sale(pickup: Coordinate, dest: Coordinate) -> i32 {
+    let metered_fare = FARE_PER_DISTANCE * pickup.distance(dest);
+    INITIAL_FARE + metered_fare
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct Ride {
     pub id: Id<Ride>,
@@ -203,8 +258,20 @@ pub struct Ride {
     pub updated_at: DateTime<Utc>,
 }
 impl Ride {
+    pub fn pickup(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.pickup_latitude,
+            longitude: self.pickup_longitude,
+        }
+    }
+    pub fn destination(&self) -> Coordinate {
+        Coordinate {
+            latitude: self.destination_latitude,
+            longitude: self.destination_longitude,
+        }
+    }
     pub fn calc_sale(&self) -> i32 {
-        crate::calculate_fare(self.pickup_coord(), self.destination_coord())
+        calc_sale(self.pickup(), self.destination())
     }
 }
 

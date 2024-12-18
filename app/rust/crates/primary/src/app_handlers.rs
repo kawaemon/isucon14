@@ -7,12 +7,14 @@ use axum::response::Sse;
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use futures::Stream;
+use shared::models::{calc_sale, FARE_PER_DISTANCE, INITIAL_FARE};
+use shared::ws::pgw::PgwRequest;
 use tokio_stream::StreamExt;
 
-use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, User};
+use crate::models::{Chair, Coordinate, Coupon, Id, Owner, Ride, RideStatusEnum, User};
 use crate::repo::ride::NotificationBody;
 use crate::repo::Repository;
-use crate::{AppState, Coordinate, Error};
+use crate::{AppState, Error};
 
 pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
@@ -281,10 +283,10 @@ async fn app_post_rides(
     }
 
     let metered_fare =
-        crate::FARE_PER_DISTANCE * req.pickup_coordinate.distance(req.destination_coordinate);
+        FARE_PER_DISTANCE * req.pickup_coordinate.distance(req.destination_coordinate);
     let discounted_metered_fare = std::cmp::max(metered_fare - discount, 0);
 
-    let fare = crate::INITIAL_FARE + discounted_metered_fare;
+    let fare = INITIAL_FARE + discounted_metered_fare;
 
     Ok((
         StatusCode::ACCEPTED,
@@ -320,8 +322,7 @@ async fn app_post_rides_estimated_fare(
 
     Ok(axum::Json(AppPostRidesEstimatedFareResponse {
         fare: discounted,
-        discount: crate::calculate_fare(req.pickup_coordinate, req.destination_coordinate)
-            - discounted,
+        discount: calc_sale(req.pickup_coordinate, req.destination_coordinate) - discounted,
     }))
 }
 
@@ -369,12 +370,12 @@ async fn app_post_ride_evaluation(
 
     let payment_gateway_url: String = repo.pgw_get().await?;
 
-    pgw.enqueue(
-        &payment_gateway_url,
-        &payment_token,
-        fare,
-        repo.rides_count_by_user(&ride.user_id).await?,
-    )
+    pgw.enqueue(PgwRequest {
+        url: payment_gateway_url,
+        token: payment_token,
+        amount: fare,
+        desired_count: repo.rides_count_by_user(&ride.user_id).await?,
+    })
     .await;
 
     let chair_id = ride.chair_id.as_ref().unwrap();
@@ -552,8 +553,8 @@ async fn calculate_discounted_fare(
         }
     };
 
-    let metered_fare = crate::FARE_PER_DISTANCE * pickup.distance(dest);
+    let metered_fare = FARE_PER_DISTANCE * pickup.distance(dest);
     let discounted_metered_fare = std::cmp::max(metered_fare - discount, 0);
 
-    Ok(crate::INITIAL_FARE + discounted_metered_fare)
+    Ok(INITIAL_FARE + discounted_metered_fare)
 }

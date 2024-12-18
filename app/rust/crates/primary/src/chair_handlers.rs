@@ -9,9 +9,9 @@ use axum_extra::extract::CookieJar;
 use futures::Stream;
 use tokio_stream::StreamExt;
 
-use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, User};
+use crate::models::{Chair, Coordinate, Id, Owner, Ride, RideStatusEnum, User};
 use crate::repo::ride::NotificationBody;
-use crate::{AppState, Coordinate, Error};
+use crate::{AppState, Error};
 
 pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
     let routes =
@@ -21,10 +21,6 @@ pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
         .route(
             "/api/chair/activity",
             axum::routing::post(chair_post_activity),
-        )
-        .route(
-            "/api/chair/coordinate",
-            axum::routing::post(chair_post_coordinate),
         )
         .route(
             "/api/chair/notification",
@@ -107,35 +103,6 @@ async fn chair_post_activity(
     repo.chair_update_is_active(&chair.id, req.is_active)
         .await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-#[derive(Debug, serde::Serialize)]
-struct ChairPostCoordinateResponse {
-    recorded_at: i64,
-}
-
-async fn chair_post_coordinate(
-    State(AppState { repo, .. }): State<AppState>,
-    axum::Extension(chair): axum::Extension<Chair>,
-    axum::Json(req): axum::Json<Coordinate>,
-) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
-    let created_at = repo.chair_location_update(&chair.id, req).await?;
-
-    if let Some((ride, status)) = repo.rides_get_assigned(&chair.id).await? {
-        if req == ride.pickup_coord() && status == RideStatusEnum::Enroute {
-            repo.ride_status_update(&ride.id, RideStatusEnum::Pickup)
-                .await?;
-        }
-
-        if req == ride.destination_coord() && status == RideStatusEnum::Carrying {
-            repo.ride_status_update(&ride.id, RideStatusEnum::Arrived)
-                .await?;
-        }
-    }
-
-    Ok(axum::Json(ChairPostCoordinateResponse {
-        recorded_at: created_at.timestamp_millis(),
-    }))
 }
 
 #[derive(Debug, serde::Serialize)]

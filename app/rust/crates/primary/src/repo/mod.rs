@@ -35,7 +35,7 @@ pub struct Repository {
     owner_cache: OwnerCache,
     chair_cache: ChairCache,
     chair_model_cache: ChairModelCache,
-    chair_location_cache: ChairLocationCache,
+    // chair_location_cache: ChairLocationCache,
     pub ride_cache: RideCache,
     pgw_cache: PgwCache,
     pt_cache: PtCache,
@@ -55,7 +55,7 @@ impl Repository {
             ride_cache: Self::init_ride_cache(&mut init, pool).await,
             chair_model_cache: Self::init_chair_model_cache(pool).await,
             chair_cache,
-            chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
+            // chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init, pool),
             coupon_cache: Self::init_coupon_cache(pool, &mut init).await,
@@ -69,8 +69,8 @@ impl Repository {
         self.reinit_owner_cache(&mut init).await;
         self.reinit_chair_cache(&mut init).await;
         self.reinit_ride_cache(&mut init).await;
-        self.reinit_chair_location_cache(&self.pool, &mut init)
-            .await;
+        // self.reinit_chair_location_cache(&self.pool, &mut init)
+        //     .await;
         self.reinit_chair_model_cache().await;
         self.reinit_pgw_cache(&self.pool).await;
         self.reinit_pt_cache(&mut init).await;

@@ -10,10 +10,7 @@ use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
 use std::{collections::VecDeque, sync::Arc};
 
-use crate::{
-    models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User},
-    Coordinate,
-};
+use crate::models::{Chair, Coordinate, Id, Ride, RideStatus, RideStatusEnum, User};
 
 use super::{cache_init::CacheInit, Repository, Result};
 use shared::deferred::UpdatableDeferred;

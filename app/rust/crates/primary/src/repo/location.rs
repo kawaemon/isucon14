@@ -5,10 +5,7 @@ use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool};
 
-use crate::{
-    models::{Chair, ChairLocation, Id},
-    Coordinate,
-};
+use crate::models::{Chair, ChairLocation, Coordinate, Id};
 
 use super::{cache_init::CacheInit, Repository, Result};
 use shared::deferred::{DeferrableSimple, SimpleDeferred};
