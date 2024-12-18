@@ -71,7 +71,7 @@ impl Repository {
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init),
-            coupon_cache: Self::init_coupon_cache(&mut init).await,
+            coupon_cache: Self::init_coupon_cache(pool, &mut init).await,
         }
     }
 

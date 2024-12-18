@@ -33,7 +33,7 @@ impl Repository {
         let status_id = Id::<RideStatus>::new();
 
         self.ride_cache
-            .deferred
+            .ride_status_deferred
             .insert(RideStatus {
                 id: status_id.clone(),
                 ride_id: ride_id.clone(),
@@ -117,7 +117,7 @@ impl Repository {
 
     pub async fn ride_status_chair_notified(&self, status_id: &Id<RideStatus>) -> Result<()> {
         self.ride_cache
-            .deferred
+            .ride_status_deferred
             .update(RideStatusUpdate {
                 ty: NotifiedType::Chair,
                 status_id: status_id.clone(),
@@ -129,7 +129,7 @@ impl Repository {
 
     pub async fn ride_status_app_notified(&self, status_id: &Id<RideStatus>) -> Result<()> {
         self.ride_cache
-            .deferred
+            .ride_status_deferred
             .update(RideStatusUpdate {
                 ty: NotifiedType::App,
                 status_id: status_id.clone(),

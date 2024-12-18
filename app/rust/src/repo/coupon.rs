@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::repo::dl::DlRwLock as RwLock;
 use crate::FxHashMap as HashMap;
@@ -6,7 +7,11 @@ use std::sync::Arc;
 
 use crate::models::{Coupon, Id, Ride, User};
 
-use super::{cache_init::CacheInit, Repository, Result};
+use super::{
+    cache_init::CacheInit,
+    deferred::{Deferrable, Deferred},
+    Repository, Result,
+};
 
 pub type CouponCache = Arc<CouponCacheInner>;
 
@@ -47,6 +52,7 @@ pub struct CouponCacheInner {
     by_usedby: RwLock<HashMap<Id<Ride>, SharedCoupon>>,
 
     user_queue: RwLock<HashMap<Id<User>, RwLock<Vec<SharedCoupon>>>>,
+    deferred: Deferred<DeferrableCoupons>,
 }
 
 struct Init {
@@ -106,12 +112,13 @@ impl Init {
 }
 
 impl Repository {
-    pub(super) async fn init_coupon_cache(init: &mut CacheInit) -> CouponCache {
+    pub(super) async fn init_coupon_cache(pool: &Pool<MySql>, init: &mut CacheInit) -> CouponCache {
         let init = Init::from_init(init).await;
         let cache = CouponCacheInner {
             by_code: RwLock::new(init.by_code),
             by_usedby: RwLock::new(init.by_usedby),
             user_queue: RwLock::new(init.user_queue),
+            deferred: Deferred::new(pool),
         };
         Arc::new(cache)
     }
@@ -122,6 +129,7 @@ impl Repository {
             by_code,
             by_usedby,
             user_queue,
+            deferred: _,
         } = &*self.coupon_cache;
         let mut c = by_code.write().await;
         let mut u = by_usedby.write().await;
@@ -192,15 +200,7 @@ impl Repository {
                 .push(Arc::clone(&e));
         }
 
-        sqlx::query(
-            "INSERT INTO coupons (user_id, code, discount, created_at) VALUES (?, ?, ?, ?)",
-        )
-        .bind(&c.user_id)
-        .bind(&c.code)
-        .bind(c.discount)
-        .bind(c.created_at)
-        .execute(&self.pool)
-        .await?;
+        self.coupon_cache.deferred.insert(c).await;
         Ok(())
     }
 
@@ -222,12 +222,83 @@ impl Repository {
             assert!(res.is_none());
         }
 
-        sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
-            .bind(ride)
-            .bind(user)
-            .bind(code)
-            .execute(&self.pool)
-            .await?;
+        self.coupon_cache
+            .deferred
+            .update(CouponUpdate {
+                user_id: user.clone(),
+                code: code.to_owned(),
+                used_by: ride.clone(),
+            })
+            .await;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CouponUpdate {
+    user_id: Id<User>,
+    code: String,
+    used_by: Id<Ride>,
+}
+
+struct DeferrableCoupons;
+impl Deferrable for DeferrableCoupons {
+    const NAME: &str = "coupons";
+
+    type Insert = Coupon;
+    type Update = CouponUpdate;
+    type UpdateQuery = CouponUpdate;
+
+    fn summarize(
+        inserts: &mut [Self::Insert],
+        updates: Vec<Self::Update>,
+    ) -> Vec<Self::UpdateQuery> {
+        let mut inserts = inserts
+            .iter_mut()
+            .map(|x| ((x.user_id.clone(), x.code.clone()), x))
+            .collect::<HashMap<_, _>>();
+        let mut new_updates: Vec<CouponUpdate> = vec![];
+
+        for u in updates {
+            let Some(i) = inserts.get_mut(&(u.user_id.clone(), u.code.clone())) else {
+                new_updates.push(u);
+                continue;
+            };
+            assert!(i.used_by.is_none());
+            i.used_by = Some(u.used_by);
+        }
+
+        new_updates
+    }
+
+    async fn exec_insert(
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        inserts: &[Self::Insert],
+    ) {
+        let mut builder =
+            QueryBuilder::new("insert into coupons(user_id, code, discount, created_at, used_by) ");
+
+        builder.push_values(inserts, |mut b, i| {
+            b.push_bind(&i.user_id)
+                .push_bind(&i.code)
+                .push_bind(i.discount)
+                .push_bind(i.created_at)
+                .push_bind(&i.user_id);
+        });
+
+        builder.build().execute(&mut **tx).await.unwrap();
+    }
+
+    async fn exec_update(
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        update: &Self::UpdateQuery,
+    ) {
+        sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
+            .bind(&update.user_id)
+            .bind(&update.user_id)
+            .bind(&update.code)
+            .execute(&mut **tx)
+            .await
+            .unwrap();
     }
 }

@@ -1,8 +1,11 @@
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
+use crate::repo::deferred::Deferrable;
 use crate::repo::dl::DlRwLock as RwLock;
-use crate::repo::{maybe_tx, Repository, Result, Tx};
+use crate::repo::{Repository, Result, Tx};
 use crate::Coordinate;
+use crate::FxHashMap as HashMap;
 use chrono::{DateTime, Utc};
+use sqlx::QueryBuilder;
 use std::sync::Arc;
 
 use super::{NotificationBody, RideEntry};
@@ -76,19 +79,23 @@ impl Repository {
         pickup: Coordinate,
         dest: Coordinate,
     ) -> Result<()> {
-        let mut tx = tx.into();
         let now = Utc::now();
 
-        let q = sqlx::query("INSERT INTO rides (id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(id)
-            .bind(user)
-            .bind(pickup.latitude)
-            .bind(pickup.longitude)
-            .bind(dest.latitude)
-            .bind(dest.longitude)
-            .bind(now)
-            .bind(now);
-        maybe_tx!(self, tx, q.execute)?;
+        self.ride_cache
+            .ride_deferred
+            .insert(Ride {
+                id: id.clone(),
+                user_id: user.clone(),
+                chair_id: None,
+                pickup_latitude: pickup.latitude,
+                pickup_longitude: pickup.longitude,
+                destination_latitude: dest.latitude,
+                destination_longitude: dest.longitude,
+                evaluation: None,
+                created_at: now,
+                updated_at: now,
+            })
+            .await;
 
         {
             let r = Arc::new(RideEntry {
@@ -127,12 +134,18 @@ impl Repository {
         {
             self.ride_cache.on_chair_status_change(chair_id, true).await;
         }
-        sqlx::query("update rides set chair_id = ?, updated_at = ? where id = ?")
-            .bind(chair_id)
-            .bind(now)
-            .bind(ride_id)
-            .execute(&self.pool)
-            .await?;
+
+        self.ride_cache
+            .ride_deferred
+            .update(RideUpdate {
+                id: ride_id.clone(),
+                updated_at: now,
+                content: RideUpdateContent::Assign {
+                    chair_id: chair_id.clone(),
+                },
+            })
+            .await;
+
         let b = NotificationBody {
             ride_id: ride_id.clone(),
             ride_status_id: status_id.clone(),
@@ -152,20 +165,21 @@ impl Repository {
 
     pub async fn rides_set_evaluation(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
+        _tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
         chair_id: &Id<Chair>,
         eval: i32,
     ) -> Result<DateTime<Utc>> {
         let now = Utc::now();
-        let mut tx = tx.into();
 
-        let q = sqlx::query("UPDATE rides SET evaluation = ?, updated_at = ? WHERE id = ?")
-            .bind(eval)
-            .bind(now)
-            .bind(id);
-
-        maybe_tx!(self, tx, q.execute)?;
+        self.ride_cache
+            .ride_deferred
+            .update(RideUpdate {
+                id: id.clone(),
+                updated_at: now,
+                content: RideUpdateContent::Eval { eval },
+            })
+            .await;
 
         let sales = {
             let mut cache = self.ride_cache.ride_cache.write().await;
@@ -177,5 +191,122 @@ impl Repository {
         self.chair_cache.on_eval(chair_id, eval, sales, now).await;
 
         Ok(now)
+    }
+}
+
+#[derive(Debug)]
+pub struct RideUpdate {
+    id: Id<Ride>,
+    updated_at: DateTime<Utc>,
+    content: RideUpdateContent,
+}
+#[derive(Debug)]
+pub enum RideUpdateContent {
+    Assign { chair_id: Id<Chair> },
+    Eval { eval: i32 },
+}
+
+#[derive(Debug)]
+pub struct RideUpdateQuery {
+    id: Id<Ride>,
+    chair_id: Option<Id<Chair>>,
+    eval: Option<i32>,
+    updated_at: DateTime<Utc>,
+}
+
+pub struct RideDeferred;
+impl Deferrable for RideDeferred {
+    const NAME: &str = "rides";
+
+    type Insert = Ride;
+    type Update = RideUpdate;
+    type UpdateQuery = RideUpdateQuery;
+
+    fn summarize(
+        inserts: &mut [Self::Insert],
+        updates: Vec<Self::Update>,
+    ) -> Vec<Self::UpdateQuery> {
+        let mut inserts = inserts
+            .iter_mut()
+            .map(|x| (x.id.clone(), x))
+            .collect::<HashMap<_, _>>();
+        let mut new_updates = HashMap::default();
+
+        for u in updates {
+            let Some(i) = inserts.get_mut(&u.id) else {
+                let r = new_updates
+                    .entry(u.id.clone())
+                    .or_insert_with(|| RideUpdateQuery {
+                        id: u.id.clone(),
+                        chair_id: None,
+                        eval: None,
+                        updated_at: u.updated_at,
+                    });
+                r.updated_at = u.updated_at;
+                match u.content {
+                    RideUpdateContent::Assign { chair_id } => r.chair_id = Some(chair_id),
+                    RideUpdateContent::Eval { eval } => r.eval = Some(eval),
+                }
+                continue;
+            };
+
+            i.updated_at = u.updated_at;
+            match u.content {
+                RideUpdateContent::Assign { chair_id } => i.chair_id = Some(chair_id),
+                RideUpdateContent::Eval { eval } => i.evaluation = Some(eval),
+            }
+        }
+
+        new_updates.into_values().collect()
+    }
+
+    async fn exec_insert(
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        inserts: &[Self::Insert],
+    ) {
+        let mut builder = QueryBuilder::new("
+            INSERT INTO rides (
+                id, user_id, pickup_latitude, pickup_longitude, destination_latitude, destination_longitude, created_at,
+                updated_at, chair_id, evaluation
+            )");
+        builder.push_values(inserts, |mut b, i| {
+            b.push_bind(&i.id)
+                .push_bind(&i.user_id)
+                .push_bind(i.pickup_latitude)
+                .push_bind(i.pickup_longitude)
+                .push_bind(i.destination_latitude)
+                .push_bind(i.destination_longitude)
+                .push_bind(i.created_at)
+                .push_bind(i.updated_at)
+                .push_bind(&i.chair_id)
+                .push_bind(i.evaluation);
+        });
+        builder.build().execute(&mut **tx).await.unwrap();
+    }
+
+    async fn exec_update(
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        update: &Self::UpdateQuery,
+    ) {
+        let mut builder = QueryBuilder::new("update rides set updated_at = ");
+        builder.push_bind(update.updated_at);
+        builder.push(", ");
+
+        let mut need_comma = false;
+        if let Some(c) = update.chair_id.as_ref() {
+            builder.push("chair_id = ");
+            builder.push_bind(c);
+            need_comma = true
+        }
+        if let Some(e) = update.eval.as_ref() {
+            if need_comma {
+                builder.push(", ");
+            }
+            builder.push("evaluation = ");
+            builder.push_bind(e);
+        }
+        builder.push(" where id = ");
+        builder.push_bind(&update.id);
+        builder.build().execute(&mut **tx).await.unwrap();
     }
 }

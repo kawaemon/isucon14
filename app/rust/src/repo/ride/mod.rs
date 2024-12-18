@@ -4,6 +4,7 @@ use crate::repo::dl::DlRwLock as RwLock;
 use crate::FxHashMap as HashMap;
 use crate::FxHashSet as HashSet;
 use chrono::{DateTime, Utc};
+use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
@@ -36,7 +37,8 @@ pub struct RideCacheInner {
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 
-    deferred: Deferred<RideStatusDeferrable>,
+    ride_deferred: Deferred<RideDeferred>,
+    ride_status_deferred: Deferred<RideStatusDeferrable>,
 }
 
 struct RideCacheInit {
@@ -243,7 +245,8 @@ impl Repository {
             free_chairs_lv1: Mutex::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
-            deferred: Deferred::new(pool),
+            ride_deferred: Deferred::new(pool),
+            ride_status_deferred: Deferred::new(pool),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
@@ -257,7 +260,8 @@ impl Repository {
             free_chairs_lv1,
             free_chairs_lv2,
             chair_movement_cache,
-            deferred: _,
+            ride_deferred: _,
+            ride_status_deferred: _,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
