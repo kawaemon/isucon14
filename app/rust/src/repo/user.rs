@@ -3,10 +3,15 @@ use std::sync::Arc;
 
 use crate::repo::dl::DlRwLock as RwLock;
 use chrono::Utc;
+use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::models::{Id, User};
 
-use super::{cache_init::CacheInit, Repository, Result};
+use super::{
+    cache_init::CacheInit,
+    deferred::{DeferrableSimple, SimpleDeferred},
+    Repository, Result,
+};
 
 pub type UserCache = Arc<UserCacheInner>;
 type SharedUser = Arc<User>;
@@ -16,6 +21,7 @@ pub struct UserCacheInner {
     by_id: Arc<RwLock<HashMap<Id<User>, SharedUser>>>,
     by_token: Arc<RwLock<HashMap<String, SharedUser>>>,
     by_inv_code: Arc<RwLock<HashMap<String, SharedUser>>>,
+    deferred: SimpleDeferred<UserDeferrable>,
 }
 
 impl UserCacheInner {
@@ -56,13 +62,14 @@ impl UserCacheInit {
 }
 
 impl Repository {
-    pub(super) fn init_user_cache(init: &mut CacheInit) -> UserCache {
+    pub(super) fn init_user_cache(init: &mut CacheInit, pool: &Pool<MySql>) -> UserCache {
         let init = UserCacheInit::from_init(init);
 
         Arc::new(UserCacheInner {
             by_id: Arc::new(RwLock::new(init.by_id)),
             by_token: Arc::new(RwLock::new(init.by_token)),
             by_inv_code: Arc::new(RwLock::new(init.by_inv_code)),
+            deferred: SimpleDeferred::new(pool),
         })
     }
     pub(super) async fn reinit_user_cache(&self, init: &mut CacheInit) {
@@ -72,6 +79,7 @@ impl Repository {
             by_id,
             by_token,
             by_inv_code,
+            deferred: _,
         } = &*self.user_cache;
         let mut id = by_id.write().await;
         let mut t = by_token.write().await;
@@ -130,20 +138,35 @@ impl Repository {
             created_at: now,
             updated_at: now,
         };
-        self.user_cache.push(u).await;
+        self.user_cache.push(u.clone()).await;
+        self.user_cache.deferred.insert(u).await;
         self.ride_cache.on_user_add(id).await;
-
-        sqlx::query("INSERT INTO users (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(id)
-            .bind(username)
-            .bind(first)
-            .bind(last)
-            .bind(dob)
-            .bind(token)
-            .bind(inv_code)
-            .bind(now)
-            .bind(now)
-            .execute(&self.pool).await?;
         Ok(())
+    }
+}
+
+struct UserDeferrable;
+impl DeferrableSimple for UserDeferrable {
+    const NAME: &str = "users";
+
+    type Insert = User;
+
+    async fn exec_insert(tx: &sqlx::Pool<sqlx::MySql>, inserts: &[Self::Insert]) {
+        let mut builder = QueryBuilder::new("
+            INSERT INTO users
+                (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at)
+        ");
+        builder.push_values(inserts, |mut b, i| {
+            b.push_bind(&i.id)
+                .push_bind(&i.username)
+                .push_bind(&i.firstname)
+                .push_bind(&i.lastname)
+                .push_bind(&i.date_of_birth)
+                .push_bind(&i.access_token)
+                .push_bind(&i.invitation_code)
+                .push_bind(i.created_at)
+                .push_bind(i.updated_at);
+        });
+        builder.build().execute(tx).await.unwrap();
     }
 }

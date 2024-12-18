@@ -9,7 +9,7 @@ use crate::models::{Coupon, Id, Ride, User};
 
 use super::{
     cache_init::CacheInit,
-    deferred::{Deferrable, Deferred},
+    deferred::{DeferrableMayUpdated, UpdatableDeferred},
     Repository, Result,
 };
 
@@ -52,7 +52,7 @@ pub struct CouponCacheInner {
     by_usedby: RwLock<HashMap<Id<Ride>, SharedCoupon>>,
 
     user_queue: RwLock<HashMap<Id<User>, RwLock<Vec<SharedCoupon>>>>,
-    deferred: Deferred<DeferrableCoupons>,
+    deferred: UpdatableDeferred<DeferrableCoupons>,
 }
 
 struct Init {
@@ -118,7 +118,7 @@ impl Repository {
             by_code: RwLock::new(init.by_code),
             by_usedby: RwLock::new(init.by_usedby),
             user_queue: RwLock::new(init.user_queue),
-            deferred: Deferred::new(pool),
+            deferred: UpdatableDeferred::new(pool),
         };
         Arc::new(cache)
     }
@@ -242,7 +242,7 @@ struct CouponUpdate {
 }
 
 struct DeferrableCoupons;
-impl Deferrable for DeferrableCoupons {
+impl DeferrableMayUpdated for DeferrableCoupons {
     const NAME: &str = "coupons";
 
     type Insert = Coupon;

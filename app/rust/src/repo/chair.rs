@@ -3,13 +3,18 @@ use crate::FxHashMap as HashMap;
 use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
+use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::{
     app_handlers::ChairStats,
     models::{Chair, Id, Owner},
 };
 
-use super::{cache_init::CacheInit, Repository, Result, Tx};
+use super::{
+    cache_init::CacheInit,
+    deferred::{DeferrableMayUpdated, UpdatableDeferred},
+    Repository, Result, Tx,
+};
 
 pub type ChairCache = Arc<ChairCacheInner>;
 
@@ -95,6 +100,8 @@ pub struct ChairCacheInner {
     by_id: RwLock<HashMap<Id<Chair>, SharedChair>>,
     by_access_token: RwLock<HashMap<String, SharedChair>>,
     by_owner: RwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
+
+    deferred: UpdatableDeferred<ChairDeferrable>,
 }
 
 pub struct ChairSalesStat {
@@ -190,13 +197,14 @@ impl ChairCacheInit {
 }
 
 impl Repository {
-    pub(super) async fn init_chair_cache(init: &mut CacheInit) -> ChairCache {
+    pub(super) async fn init_chair_cache(pool: &Pool<MySql>, init: &mut CacheInit) -> ChairCache {
         let init = ChairCacheInit::from_init(init).await;
 
         ChairCache::new(ChairCacheInner {
             by_id: RwLock::new(init.by_id),
             by_access_token: RwLock::new(init.by_access_token),
             by_owner: RwLock::new(init.by_owner),
+            deferred: UpdatableDeferred::new(pool),
         })
     }
     pub(super) async fn reinit_chair_cache(&self, init: &mut CacheInit) {
@@ -206,6 +214,7 @@ impl Repository {
             by_id,
             by_access_token,
             by_owner,
+            deferred: _,
         } = &*self.chair_cache;
         let mut id = by_id.write().await;
         let mut ac = by_access_token.write().await;
@@ -290,32 +299,19 @@ impl Repository {
         access_token: &str,
     ) -> Result<()> {
         let at = Utc::now();
-
-        self.chair_cache
-            .push_chair(Chair {
-                id: id.clone(),
-                owner_id: owner.clone(),
-                name: name.to_owned(),
-                access_token: access_token.to_owned(),
-                model: model.to_owned(),
-                is_active,
-                created_at: at,
-                updated_at: at,
-            })
-            .await;
+        let c = Chair {
+            id: id.clone(),
+            owner_id: owner.clone(),
+            name: name.to_owned(),
+            access_token: access_token.to_owned(),
+            model: model.to_owned(),
+            is_active,
+            created_at: at,
+            updated_at: at,
+        };
+        self.chair_cache.push_chair(c.clone()).await;
+        self.chair_cache.deferred.insert(c).await;
         self.ride_cache.on_chair_add(id).await;
-
-        sqlx::query("INSERT INTO chairs (id, owner_id, name, model, is_active, access_token, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-            .bind(id)
-            .bind(owner)
-            .bind(name)
-            .bind(model)
-            .bind(is_active)
-            .bind(access_token)
-            .bind(at)
-            .bind(at)
-            .execute(&self.pool)
-            .await?;
 
         Ok(())
     }
@@ -333,12 +329,95 @@ impl Repository {
             }
         }
 
-        sqlx::query("UPDATE chairs SET is_active = ?, updated_at = ? WHERE id = ?")
-            .bind(active)
-            .bind(now)
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        self.chair_cache
+            .deferred
+            .update(ChairUpdate {
+                id: id.clone(),
+                active,
+                at: now,
+            })
+            .await;
+
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ChairUpdate {
+    id: Id<Chair>,
+    active: bool,
+    at: DateTime<Utc>,
+}
+
+struct ChairDeferrable;
+impl DeferrableMayUpdated for ChairDeferrable {
+    const NAME: &str = "chairs";
+
+    type Insert = Chair;
+    type Update = ChairUpdate;
+    type UpdateQuery = ChairUpdate;
+
+    fn summarize(
+        inserts: &mut [Self::Insert],
+        updates: Vec<Self::Update>,
+    ) -> Vec<Self::UpdateQuery> {
+        let mut inserts = inserts
+            .iter_mut()
+            .map(|x| (x.id.clone(), x))
+            .collect::<HashMap<_, _>>();
+        let mut new_updates = HashMap::default();
+
+        for u in updates {
+            let Some(i) = inserts.get_mut(&u.id) else {
+                let n = new_updates
+                    .entry(u.id.clone())
+                    .or_insert_with(|| ChairUpdate {
+                        id: u.id.clone(),
+                        active: u.active,
+                        at: u.at,
+                    });
+                n.active = u.active;
+                n.at = u.at;
+                continue;
+            };
+            i.is_active = u.active;
+            i.updated_at = u.at;
+        }
+
+        new_updates.into_values().collect()
+    }
+
+    async fn exec_insert(
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        inserts: &[Self::Insert],
+    ) {
+        let mut builder = QueryBuilder::new(
+            "insert into chairs
+                (id, owner_id, name, model, is_active, access_token, created_at, updated_at) ",
+        );
+        builder.push_values(inserts, |mut b, i| {
+            b.push_bind(&i.id)
+                .push_bind(&i.owner_id)
+                .push_bind(&i.name)
+                .push_bind(&i.model)
+                .push_bind(i.is_active)
+                .push_bind(&i.access_token)
+                .push_bind(i.created_at)
+                .push_bind(i.updated_at);
+        });
+        builder.build().execute(&mut **tx).await.unwrap();
+    }
+
+    async fn exec_update(
+        tx: &mut sqlx::Transaction<'static, sqlx::MySql>,
+        update: &Self::UpdateQuery,
+    ) {
+        sqlx::query("UPDATE chairs SET is_active = ?, updated_at = ? WHERE id = ?")
+            .bind(update.active)
+            .bind(update.at)
+            .bind(&update.id)
+            .execute(&mut **tx)
+            .await
+            .unwrap();
     }
 }

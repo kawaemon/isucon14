@@ -1,10 +1,7 @@
 use crate::FxHashMap as HashMap;
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
-use crate::repo::dl::{DlMutex as Mutex, DlRwLock as RwLock};
+use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool};
 
@@ -13,91 +10,38 @@ use crate::{
     Coordinate,
 };
 
-use super::{cache_init::CacheInit, Repository, Result, Tx};
+use super::{
+    cache_init::CacheInit,
+    deferred::{DeferrableSimple, SimpleDeferred},
+    Repository, Result, Tx,
+};
 
 pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
 
 #[derive(Debug)]
 pub struct ChairLocationCacheInner {
     cache: RwLock<HashMap<Id<Chair>, Entry>>,
-    deferred: Deferred,
+    deferred: SimpleDeferred<ChairLocationDeferrable>,
 }
 
-const THRESHOLD: usize = 500;
+struct ChairLocationDeferrable;
+impl DeferrableSimple for ChairLocationDeferrable {
+    const NAME: &str = "chair_locations";
 
-#[derive(Debug)]
-struct Deferred {
-    queue: Arc<Mutex<Vec<ChairLocation>>>,
-    on_update: tokio::sync::mpsc::UnboundedSender<()>,
-}
-impl Deferred {
-    async fn work(
-        pool: &Pool<MySql>,
-        queue: &Arc<Mutex<Vec<ChairLocation>>>,
-        rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
-    ) {
-        let sleep = tokio::time::sleep(Duration::from_millis(2000));
-        tokio::pin!(sleep);
-        let frx = rx.recv();
-        tokio::pin!(frx);
+    type Insert = ChairLocation;
 
-        let mut this_time = vec![];
-        {
-            tokio::select! {
-                _ = &mut sleep => { }
-                _ = &mut frx => { }
-            }
-            let mut lock = queue.lock().await;
-            let range = 0..lock.len().min(THRESHOLD);
-            this_time.extend(lock.drain(range));
-        }
-
-        if this_time.is_empty() {
-            return;
-        }
+    async fn exec_insert(tx: &Pool<MySql>, inserts: &[Self::Insert]) {
         let mut query = sqlx::QueryBuilder::new(
             "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
         );
-        query.push_values(this_time.iter(), |mut b, e: &ChairLocation| {
+        query.push_values(inserts, |mut b, e: &ChairLocation| {
             b.push_bind(&e.id)
                 .push_bind(&e.chair_id)
                 .push_bind(e.latitude)
                 .push_bind(e.longitude)
                 .push_bind(e.created_at);
         });
-
-        let t = Instant::now();
-        query.build().execute(pool).await.unwrap();
-        let e = t.elapsed().as_millis();
-        tracing::debug!("pushed {} locations in {e} ms", this_time.len());
-    }
-
-    async fn new(pool: &Pool<MySql>) -> Self {
-        let pool = pool.clone();
-        let queue = Arc::new(Mutex::new(vec![]));
-
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        {
-            let queue = Arc::clone(&queue);
-            tokio::spawn(async move {
-                loop {
-                    Self::work(&pool, &queue, &mut rx).await;
-                }
-            });
-        }
-
-        Deferred {
-            queue,
-            on_update: tx,
-        }
-    }
-
-    async fn push(&self, c: ChairLocation) {
-        let mut queue = self.queue.lock().await;
-        queue.push(c);
-        if queue.len() == THRESHOLD {
-            self.on_update.send(()).unwrap();
-        }
+        query.build().execute(tx).await.unwrap();
     }
 }
 
@@ -166,7 +110,7 @@ impl Repository {
 
         Arc::new(ChairLocationCacheInner {
             cache: RwLock::new(init.cache),
-            deferred: Deferred::new(pool).await,
+            deferred: SimpleDeferred::new(pool),
         })
     }
 
@@ -218,7 +162,7 @@ impl Repository {
             created_at,
         };
 
-        self.chair_location_cache.deferred.push(c).await;
+        self.chair_location_cache.deferred.insert(c).await;
 
         {
             let cache = self.chair_location_cache.cache.read().await;

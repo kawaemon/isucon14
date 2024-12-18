@@ -8,7 +8,7 @@ use derivative::Derivative;
 use sqlx::{MySql, Pool, Transaction};
 use tokio::sync::Mutex;
 
-pub trait Deferrable: 'static {
+pub trait DeferrableMayUpdated: 'static {
     const NAME: &str;
 
     type Insert: std::fmt::Debug + Send + 'static;
@@ -32,18 +32,18 @@ pub trait Deferrable: 'static {
 
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""))]
-struct ChangeSet<D: Deferrable> {
+struct ChangeSet<D: DeferrableMayUpdated> {
     inserts: Vec<D::Insert>,
     updates: Vec<D::Update>,
 }
 
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""), Clone(bound = ""))]
-pub struct Deferred<D: Deferrable> {
+pub struct UpdatableDeferred<D: DeferrableMayUpdated> {
     set: Arc<Mutex<ChangeSet<D>>>,
 }
 
-impl<D: Deferrable> Deferred<D> {
+impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
     pub fn new(pool: &Pool<MySql>) -> Self {
         let set = Arc::new(Mutex::new(ChangeSet {
             inserts: vec![],
@@ -112,10 +112,10 @@ impl<D: Deferrable> Deferred<D> {
         tx.commit().await.unwrap();
         let commit_took = begin.elapsed().as_millis();
 
-        tracing::info!(
-            "{}: {inserts_len} inserts and {updates_count_old}=>{updates_count_new} updates",
-            D::NAME
+        let name = D::NAME;
+        tracing::debug!(
+            "{name}: {inserts_len} inserts and {updates_count_old}=>{updates_count_new} updates",
         );
-        tracing::info!("{}: prep={summarize_took}ms, inserts={inserts_took}ms, updates={updates_took}ms, commit={commit_took}ms", D::NAME);
+        tracing::info!("{name}: prep={summarize_took}ms, inserts={inserts_took}ms, updates={updates_took}ms, commit={commit_took}ms");
     }
 }

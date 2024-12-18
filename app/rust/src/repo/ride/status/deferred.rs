@@ -5,7 +5,7 @@ use sqlx::{MySql, QueryBuilder};
 
 use crate::{
     models::{Id, RideStatus},
-    repo::deferred::Deferrable,
+    repo::deferred::DeferrableMayUpdated,
 };
 
 #[derive(Debug)]
@@ -29,7 +29,7 @@ pub struct UpdateQuery {
 }
 
 pub struct RideStatusDeferrable;
-impl Deferrable for RideStatusDeferrable {
+impl DeferrableMayUpdated for RideStatusDeferrable {
     const NAME: &str = "ride_statuses";
 
     type Insert = RideStatus;

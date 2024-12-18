@@ -15,7 +15,7 @@ use crate::{
     Coordinate,
 };
 
-use super::deferred::Deferred;
+use super::deferred::UpdatableDeferred;
 use super::{cache_init::CacheInit, Repository, Result};
 
 #[allow(clippy::module_inception)]
@@ -27,6 +27,7 @@ pub type RideCache = Arc<RideCacheInner>;
 #[derive(Debug)]
 pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
+    #[allow(clippy::type_complexity)]
     user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
@@ -38,8 +39,8 @@ pub struct RideCacheInner {
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 
-    ride_deferred: Deferred<RideDeferred>,
-    ride_status_deferred: Deferred<RideStatusDeferrable>,
+    ride_deferred: UpdatableDeferred<RideDeferred>,
+    ride_status_deferred: UpdatableDeferred<RideStatusDeferrable>,
 }
 
 struct RideCacheInit {
@@ -262,8 +263,8 @@ impl Repository {
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
             user_rides: RwLock::new(init.user_rides),
-            ride_deferred: Deferred::new(pool),
-            ride_status_deferred: Deferred::new(pool),
+            ride_deferred: UpdatableDeferred::new(pool),
+            ride_status_deferred: UpdatableDeferred::new(pool),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
@@ -664,6 +665,6 @@ impl Repository {
 
         futures::future::join_all(fut).await;
 
-        tracing::info!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
+        tracing::debug!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
     }
 }

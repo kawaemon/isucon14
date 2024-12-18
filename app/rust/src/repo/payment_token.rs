@@ -1,12 +1,25 @@
+use sqlx::{MySql, Pool, QueryBuilder};
+
 use crate::repo::dl::DlRwLock as RwLock;
 use crate::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use crate::models::{Id, User};
 
-use super::{cache_init::CacheInit, Repository, Result, Tx};
+use super::{
+    cache_init::CacheInit,
+    deferred::{DeferrableSimple, SimpleDeferred},
+    Repository, Result, Tx,
+};
 
-pub type PtCache = Arc<RwLock<HashMap<Id<User>, String>>>;
+pub type PtCache = Arc<PtCacheInner>;
+
+#[derive(Debug)]
+pub struct PtCacheInner {
+    cache: RwLock<HashMap<Id<User>, String>>,
+    deferred: SimpleDeferred<PaymentTokenDeferrable>,
+}
+
 pub type PtCacheInit = HashMap<Id<User>, String>;
 
 fn init(init: &mut CacheInit) -> PtCacheInit {
@@ -18,11 +31,14 @@ fn init(init: &mut CacheInit) -> PtCacheInit {
 }
 
 impl Repository {
-    pub fn init_pt_cache(i: &mut CacheInit) -> PtCache {
-        Arc::new(RwLock::new(init(i)))
+    pub fn init_pt_cache(i: &mut CacheInit, pool: &Pool<MySql>) -> PtCache {
+        Arc::new(PtCacheInner {
+            cache: RwLock::new(init(i)),
+            deferred: SimpleDeferred::new(pool),
+        })
     }
     pub async fn reinit_pt_cache(&self, i: &mut CacheInit) {
-        *self.pt_cache.write().await = init(i);
+        *self.pt_cache.cache.write().await = init(i);
     }
 }
 
@@ -32,20 +48,44 @@ impl Repository {
         _tx: impl Into<Option<&mut Tx>>,
         user: &Id<User>,
     ) -> Result<Option<String>> {
-        let cache = self.pt_cache.read().await;
+        let cache = self.pt_cache.cache.read().await;
         Ok(cache.get(user).cloned())
     }
 
     pub async fn payment_token_add(&self, user: &Id<User>, token: &str) -> Result<()> {
         self.pt_cache
+            .cache
             .write()
             .await
             .insert(user.clone(), token.to_owned());
-        sqlx::query("INSERT INTO payment_tokens (user_id, token) VALUES (?, ?)")
-            .bind(user)
-            .bind(token)
-            .execute(&self.pool)
-            .await?;
+        self.pt_cache
+            .deferred
+            .insert(TokenInsert {
+                id: user.clone(),
+                token: token.to_owned(),
+            })
+            .await;
         Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct TokenInsert {
+    id: Id<User>,
+    token: String,
+}
+
+pub struct PaymentTokenDeferrable;
+impl DeferrableSimple for PaymentTokenDeferrable {
+    const NAME: &str = "payment_tokens";
+
+    type Insert = TokenInsert;
+
+    async fn exec_insert(tx: &Pool<MySql>, inserts: &[Self::Insert]) {
+        let mut builder = QueryBuilder::new("INSERT INTO payment_tokens (user_id, token) ");
+        builder.push_values(inserts, |mut b, i| {
+            b.push_bind(&i.id).push_bind(&i.token);
+        });
+        builder.build().execute(tx).await.unwrap();
     }
 }

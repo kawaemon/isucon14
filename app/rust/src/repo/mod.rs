@@ -25,18 +25,6 @@ use user::UserCache;
 
 use crate::Error;
 
-macro_rules! maybe_tx {
-    ($self:expr, $tx:expr, $query:ident.$method:ident) => {{
-        if let Some(tx) = $tx.as_mut() {
-            let tx: &mut Tx = *tx;
-            $query.$method(&mut **tx).await
-        } else {
-            $query.$method(&$self.pool).await
-        }
-    }};
-}
-use maybe_tx;
-
 pub type Tx = Transaction<'static, MySql>;
 type Result<T> = std::result::Result<T, Error>;
 
@@ -59,18 +47,18 @@ impl Repository {
     pub async fn new(pool: &Pool<MySql>) -> Self {
         let mut init = CacheInit::load(pool).await;
 
-        let chair_cache = Self::init_chair_cache(&mut init).await;
+        let chair_cache = Self::init_chair_cache(pool, &mut init).await;
         Self {
             pool: pool.clone(),
 
-            user_cache: Self::init_user_cache(&mut init),
+            user_cache: Self::init_user_cache(&mut init, pool),
             owner_cache: Self::init_owner_cache(&mut init),
             ride_cache: Self::init_ride_cache(&mut init, pool).await,
             chair_model_cache: Self::init_chair_model_cache(pool).await,
             chair_cache,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init).await,
             pgw_cache: Self::init_pgw_cache(pool).await,
-            pt_cache: Self::init_pt_cache(&mut init),
+            pt_cache: Self::init_pt_cache(&mut init, pool),
             coupon_cache: Self::init_coupon_cache(pool, &mut init).await,
         }
     }
