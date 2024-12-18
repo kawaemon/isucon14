@@ -377,15 +377,13 @@ async fn app_post_ride_evaluation(
 
     let payment_gateway_url: String = repo.pgw_get(None).await?;
 
-    crate::payment_gateway::request_payment_gateway_post_payment(
-        &client,
-        &pgw,
+    pgw.enqueue(
         &payment_gateway_url,
         &payment_token,
-        &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
+        fare,
         repo.rides_count_by_user(&ride.user_id).await?,
     )
-    .await?;
+    .await;
 
     let mut tx = pool.begin().await?;
 

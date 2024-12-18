@@ -1,10 +1,24 @@
-use std::sync::Arc;
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicUsize, Arc},
+};
 
 use axum::{http::StatusCode, response::Response};
-use payment_gateway::PaymentGatewayRestricter;
+use futures::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
+use models::Id;
 use repo::Repository;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::{
+    net::TcpStream,
+    sync::{oneshot, Mutex},
+};
+use tokio_tungstenite::{
+    tungstenite::{Message, Utf8Bytes},
+    MaybeTlsStream, WebSocketStream,
+};
 
 pub type FxHashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;
 pub type FxHashSet<K> = std::collections::HashSet<K, fxhash::FxBuildHasher>;
@@ -13,19 +27,133 @@ pub type FxHashSet<K> = std::collections::HashSet<K, fxhash::FxBuildHasher>;
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
-    pub pgw: PaymentGatewayRestricter,
-    pub speed: SpeedStatictics,
+    pub pgw: PaymentGateway,
+    pub speed: SpeedStatistics,
     pub client: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
-pub struct SpeedStatictics {
-    pub m: Arc<Mutex<FxHashMap<String, SpeedStaticticsEntry>>>,
+pub struct SpeedStatistics {
+    pub m: Arc<Mutex<FxHashMap<String, SpeedStatisticsEntry>>>,
 }
 #[derive(Debug, Default)]
-pub struct SpeedStaticticsEntry {
+pub struct SpeedStatisticsEntry {
     pub total_duration: Duration,
     pub count: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PaymentGateway {
+    #[allow(clippy::type_complexity)]
+    conns: Arc<Vec<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>>>>,
+    jobs: Arc<Mutex<HashMap<Id<PaymentGateway>, oneshot::Sender<()>>>>,
+    count: Arc<AtomicUsize>,
+}
+
+impl PaymentGateway {
+    async fn recv_routine(
+        mut rx: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+        url: &str,
+        jobs: Arc<Mutex<HashMap<Id<PaymentGateway>, oneshot::Sender<()>>>>,
+    ) {
+        while let Some(Ok(msg)) = rx.next().await {
+            let msg = match msg {
+                Message::Text(msg) => msg,
+                Message::Binary(_)
+                | Message::Ping(_)
+                | Message::Pong(_)
+                | Message::Close(_)
+                | Message::Frame(_) => continue,
+            };
+
+            #[derive(serde::Deserialize)]
+            struct Res {
+                work_id: Id<PaymentGateway>,
+            }
+            let res: Res = match serde_json::from_str(&msg) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("unknown message received from {url}: {e:?}");
+                    continue;
+                }
+            };
+            jobs.lock()
+                .await
+                .remove(&res.work_id)
+                .unwrap()
+                .send(())
+                .unwrap();
+        }
+        tracing::error!("connection for {url} ended");
+    }
+
+    pub async fn new(urls: &[impl AsRef<str>]) -> Self {
+        let jobs = Arc::new(Mutex::new(HashMap::new()));
+
+        let mut txs = vec![];
+        for url in urls.iter() {
+            let (socket, _res) = tokio_tungstenite::connect_async(url.as_ref())
+                .await
+                .unwrap();
+            let (tx, rx) = socket.split();
+            txs.push(Mutex::new(tx));
+
+            let jobs = Arc::clone(&jobs);
+            let url = url.as_ref().to_owned();
+            tokio::spawn(async move {
+                Self::recv_routine(rx, &url, jobs).await;
+            });
+        }
+
+        Self {
+            conns: Arc::new(txs),
+            jobs,
+            count: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub async fn enqueue(&self, url: &str, token: &str, amount: i32, desired_payment_count: usize) {
+        #[derive(serde::Serialize)]
+        struct Req<'a> {
+            work_id: Id<PaymentGateway>,
+            url: &'a str,
+            token: &'a str,
+            amount: i32,
+            desired_count: usize,
+        }
+
+        let r = Req {
+            work_id: Id::new(),
+            url,
+            token,
+            amount,
+            desired_count: desired_payment_count,
+        };
+
+        let (tx, rx) = oneshot::channel();
+
+        {
+            self.jobs.lock().await.insert(r.work_id.clone(), tx);
+        }
+
+        let c = self
+            .count
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let target = c % self.conns.len();
+
+        let msg = serde_json::to_string(&r).unwrap();
+
+        {
+            self.conns[target]
+                .lock()
+                .await
+                .send(Message::Text(Utf8Bytes::from(msg)))
+                .await
+                .unwrap();
+        }
+
+        rx.await.unwrap();
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

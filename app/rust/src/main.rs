@@ -1,8 +1,8 @@
 use axum::extract::State;
-use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
 use isuride::FxHashMap as HashMap;
-use isuride::SpeedStatictics;
+use isuride::PaymentGateway;
+use isuride::SpeedStatistics;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
 use std::cmp::Reverse;
 use std::net::SocketAddr;
@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(3306);
     let user = std::env::var("ISUCON_DB_USER").unwrap_or_else(|_| "isucon".to_owned());
     let password = std::env::var("ISUCON_DB_PASSWORD").unwrap_or_else(|_| "isucon".to_owned());
-    let dbname = std::env::var("ISUCON_DB_NAME").unwrap_or_else(|_| "isuride".to_owned());
+    let db_name = std::env::var("ISUCON_DB_NAME").unwrap_or_else(|_| "isuride".to_owned());
 
     let pool = sqlx::mysql::MySqlPoolOptions::new()
         .max_connections(128)
@@ -48,13 +48,13 @@ async fn main() -> anyhow::Result<()> {
                 .port(port)
                 .username(&user)
                 .password(&password)
-                .database(&dbname),
+                .database(&db_name),
         )
         .await?;
 
     let repo = Arc::new(Repository::new(&pool).await);
-    let pgw = PaymentGatewayRestricter::new();
-    let speed = SpeedStatictics {
+    let pgw = PaymentGateway::new(&["ws://localhost:4444/ws"]).await;
+    let speed = SpeedStatistics {
         m: Arc::new(Mutex::new(HashMap::default())),
     };
     {
