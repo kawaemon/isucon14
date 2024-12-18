@@ -53,20 +53,20 @@ impl Repository {
     }
 
     pub async fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
-        let rides: Vec<Ride> =
-            sqlx::query_as("SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC")
-                .bind(id)
-                .fetch_all(&self.pool)
-                .await?;
-        Ok(rides)
+        let mut res = vec![];
+        let cache = self.ride_cache.user_rides.read().await;
+        let cache = cache.get(id).unwrap().read().await;
+        for c in cache.iter() {
+            res.push(c.ride().await);
+        }
+        res.reverse();
+        Ok(res)
     }
 
     pub async fn rides_count_by_user(&self, id: &Id<User>) -> Result<usize> {
-        let r: i32 = sqlx::query_scalar("SELECT count(*) FROM rides WHERE user_id = ?")
-            .bind(id)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(r as usize)
+        let cache = self.ride_cache.user_rides.read().await;
+        let len = cache.get(id).unwrap().read().await.len();
+        Ok(len)
     }
 
     // writes
@@ -111,6 +111,9 @@ impl Repository {
             });
             let mut cache = self.ride_cache.ride_cache.write().await;
             cache.insert(id.clone(), Arc::clone(&r));
+            let cache = self.ride_cache.user_rides.read().await;
+            let mut cache = cache.get(user).unwrap().write().await;
+            cache.push(Arc::clone(&r));
         }
 
         self.ride_status_update(tx, id, RideStatusEnum::Matching)

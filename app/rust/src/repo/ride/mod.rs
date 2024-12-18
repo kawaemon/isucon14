@@ -27,6 +27,7 @@ pub type RideCache = Arc<RideCacheInner>;
 #[derive(Debug)]
 pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
+    user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
     free_chairs_lv1: Mutex<HashSet<Id<Chair>>>,
@@ -43,6 +44,7 @@ pub struct RideCacheInner {
 
 struct RideCacheInit {
     ride_cache: HashMap<Id<Ride>, Arc<RideEntry>>,
+    user_rides: HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>,
 
     waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
     free_chairs_lv1: HashSet<Id<Chair>>,
@@ -222,6 +224,19 @@ impl RideCacheInit {
             }
         }
 
+        //
+        // user_rides
+        //
+        let mut user_rides = HashMap::default();
+        for user in &init.users {
+            user_rides.insert(user.id.clone(), RwLock::new(Vec::new()));
+        }
+        for ride in &init.rides {
+            let r = Arc::clone(rides.get(&ride.id).unwrap());
+            let c = user_rides.get(&ride.user_id).unwrap();
+            c.write().await.push(r);
+        }
+
         Self {
             ride_cache: rides,
             user_notification,
@@ -230,6 +245,7 @@ impl RideCacheInit {
             free_chairs_lv1,
             free_chairs_lv2,
             chair_movement_cache,
+            user_rides,
         }
     }
 }
@@ -245,6 +261,7 @@ impl Repository {
             free_chairs_lv1: Mutex::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
+            user_rides: RwLock::new(init.user_rides),
             ride_deferred: Deferred::new(pool),
             ride_status_deferred: Deferred::new(pool),
         })
@@ -254,6 +271,7 @@ impl Repository {
 
         let RideCacheInner {
             ride_cache,
+            user_rides,
             user_notification,
             chair_notification,
             waiting_rides,
@@ -271,6 +289,7 @@ impl Repository {
         let mut f2 = free_chairs_lv2.lock().await;
         let mut w = waiting_rides.lock().await;
         let mut cm = chair_movement_cache.write().await;
+        let mut ur = user_rides.write().await;
 
         *r = init.ride_cache;
         *u = init.user_notification;
@@ -279,6 +298,7 @@ impl Repository {
         *f2 = init.free_chairs_lv2;
         *w = init.waiting_rides;
         *cm = init.chair_movement_cache;
+        *ur = init.user_rides;
     }
 }
 
@@ -330,6 +350,10 @@ impl RideCacheInner {
             .write()
             .await
             .insert(id.clone(), NotificationQueue::new());
+        self.user_rides
+            .write()
+            .await
+            .insert(id.clone(), RwLock::new(vec![]));
     }
     pub async fn on_chair_add(&self, id: &Id<Chair>) {
         self.chair_notification
