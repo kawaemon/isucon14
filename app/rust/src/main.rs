@@ -53,7 +53,12 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let repo = Arc::new(Repository::new(&pool).await);
-    let pgw = PaymentGateway::new(&["ws://localhost:4444/ws"]).await;
+    let pgws = std::env::var("PGW_EPS")
+        .unwrap_or("ws://localhost:4444/ws".to_owned())
+        .split(",")
+        .map(|x| x.to_owned())
+        .collect::<Vec<String>>();
+    let pgw = PaymentGateway::new(&pgws).await;
     let speed = SpeedStatistics {
         m: Arc::new(Mutex::new(HashMap::default())),
     };
