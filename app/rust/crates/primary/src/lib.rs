@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use axum::{http::StatusCode, response::Response};
 use futures::{
@@ -10,6 +7,7 @@ use futures::{
 };
 use models::Id;
 use repo::Repository;
+use shared::FxHashMap as HashMap;
 use std::time::Duration;
 use tokio::{
     net::TcpStream,
@@ -19,9 +17,6 @@ use tokio_tungstenite::{
     tungstenite::{Message, Utf8Bytes},
     MaybeTlsStream, WebSocketStream,
 };
-
-pub type FxHashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;
-pub type FxHashSet<K> = std::collections::HashSet<K, fxhash::FxBuildHasher>;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -34,7 +29,7 @@ pub struct AppState {
 
 #[derive(Debug, Clone)]
 pub struct SpeedStatistics {
-    pub m: Arc<Mutex<FxHashMap<String, SpeedStatisticsEntry>>>,
+    pub m: Arc<Mutex<HashMap<String, SpeedStatisticsEntry>>>,
 }
 #[derive(Debug, Default)]
 pub struct SpeedStatisticsEntry {
@@ -88,7 +83,7 @@ impl PaymentGateway {
     }
 
     pub async fn new(urls: &[impl AsRef<str>]) -> Self {
-        let jobs = Arc::new(Mutex::new(HashMap::new()));
+        let jobs = Arc::new(Mutex::new(HashMap::default()));
 
         let mut txs = vec![];
         for url in urls.iter() {

@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use crate::repo::dl::DlRwLock as RwLock;
@@ -10,11 +10,8 @@ use crate::{
     Coordinate,
 };
 
-use super::{
-    cache_init::CacheInit,
-    deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result,
-};
+use super::{cache_init::CacheInit, Repository, Result};
+use shared::deferred::{DeferrableSimple, SimpleDeferred};
 
 pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
 

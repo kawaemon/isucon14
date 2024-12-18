@@ -1,12 +1,10 @@
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, QueryBuilder};
 
-use crate::{
-    models::{Id, RideStatus},
-    repo::deferred::DeferrableMayUpdated,
-};
+use crate::models::{Id, RideStatus};
+use shared::deferred::DeferrableMayUpdated;
 
 #[derive(Debug)]
 pub enum NotifiedType {

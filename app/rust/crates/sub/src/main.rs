@@ -1,3 +1,5 @@
+mod coordinate;
+
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};

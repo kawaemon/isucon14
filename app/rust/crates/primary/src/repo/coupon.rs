@@ -2,16 +2,13 @@ use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::repo::dl::DlRwLock as RwLock;
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use crate::models::{Coupon, Id, Ride, User};
 
-use super::{
-    cache_init::CacheInit,
-    deferred::{DeferrableMayUpdated, UpdatableDeferred},
-    Repository, Result,
-};
+use super::{cache_init::CacheInit, Repository, Result};
+use shared::deferred::{DeferrableMayUpdated, UpdatableDeferred};
 
 pub type CouponCache = Arc<CouponCacheInner>;
 

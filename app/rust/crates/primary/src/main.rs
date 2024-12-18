@@ -1,9 +1,9 @@
 use axum::extract::State;
 use isuride::repo::Repository;
-use isuride::FxHashMap as HashMap;
 use isuride::PaymentGateway;
 use isuride::SpeedStatistics;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
+use shared::FxHashMap as HashMap;
 use std::cmp::Reverse;
 use std::net::SocketAddr;
 use std::process::Stdio;
@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
 
     let repo = Arc::new(Repository::new(&pool).await);
     let pgws = std::env::var("PGW_EPS")
-        .unwrap_or("ws://localhost:4444/ws".to_owned())
+        .unwrap_or("ws://localhost:4444/pgw".to_owned())
         .split(",")
         .map(|x| x.to_owned())
         .collect::<Vec<String>>();

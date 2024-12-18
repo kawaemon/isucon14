@@ -1,10 +1,10 @@
 use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::repo::dl::DlMutex as Mutex;
 use crate::repo::dl::DlRwLock as RwLock;
-use crate::FxHashMap as HashMap;
-use crate::FxHashSet as HashSet;
 use chrono::{DateTime, Utc};
 use ride::RideDeferred;
+use shared::FxHashMap as HashMap;
+use shared::FxHashSet as HashSet;
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
@@ -15,8 +15,8 @@ use crate::{
     Coordinate,
 };
 
-use super::deferred::UpdatableDeferred;
 use super::{cache_init::CacheInit, Repository, Result};
+use shared::deferred::UpdatableDeferred;
 
 #[allow(clippy::module_inception)]
 mod ride;

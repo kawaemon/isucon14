@@ -1,5 +1,5 @@
 use crate::repo::dl::DlRwLock as RwLock;
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
@@ -10,11 +10,8 @@ use crate::{
     models::{Chair, Id, Owner},
 };
 
-use super::{
-    cache_init::CacheInit,
-    deferred::{DeferrableMayUpdated, UpdatableDeferred},
-    Repository, Result,
-};
+use super::{cache_init::CacheInit, Repository, Result};
+use shared::deferred::{DeferrableMayUpdated, UpdatableDeferred};
 
 pub type ChairCache = Arc<ChairCacheInner>;
 

@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use sqlx::{MySql, Pool};

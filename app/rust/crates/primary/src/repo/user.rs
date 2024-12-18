@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 use std::sync::Arc;
 
 use crate::repo::dl::DlRwLock as RwLock;
@@ -7,11 +7,8 @@ use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::models::{Id, User};
 
-use super::{
-    cache_init::CacheInit,
-    deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result,
-};
+use super::{cache_init::CacheInit, Repository, Result};
+use shared::deferred::{DeferrableSimple, SimpleDeferred};
 
 pub type UserCache = Arc<UserCacheInner>;
 type SharedUser = Arc<User>;

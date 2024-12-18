@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use shared::FxHashMap as HashMap;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
