@@ -1,7 +1,7 @@
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::deferred::DeferrableMayUpdated;
 use crate::repo::dl::DlRwLock as RwLock;
-use crate::repo::{Repository, Result, Tx};
+use crate::repo::{Repository, Result};
 use crate::Coordinate;
 use crate::FxHashMap as HashMap;
 use chrono::{DateTime, Utc};
@@ -12,11 +12,7 @@ use super::{NotificationBody, RideEntry};
 
 // rides
 impl Repository {
-    pub async fn ride_get(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Ride>,
-    ) -> Result<Option<Ride>> {
+    pub async fn ride_get(&self, id: &Id<Ride>) -> Result<Option<Ride>> {
         let cache = self.ride_cache.ride_cache.read().await;
         let Some(e) = cache.get(id) else {
             return Ok(None);
@@ -40,7 +36,6 @@ impl Repository {
 
     pub async fn rides_get_assigned(
         &self,
-        _tx: impl Into<Option<&mut Tx>>,
         chair_id: &Id<Chair>,
     ) -> Result<Option<(Ride, RideStatusEnum)>> {
         let cache = self.ride_cache.chair_movement_cache.read().await;
@@ -73,7 +68,6 @@ impl Repository {
 
     pub async fn rides_new_and_set_matching(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
         user: &Id<User>,
         pickup: Coordinate,
@@ -116,7 +110,7 @@ impl Repository {
             cache.push(Arc::clone(&r));
         }
 
-        self.ride_status_update(tx, id, RideStatusEnum::Matching)
+        self.ride_status_update(id, RideStatusEnum::Matching)
             .await?;
 
         Ok(())
@@ -168,7 +162,6 @@ impl Repository {
 
     pub async fn rides_set_evaluation(
         &self,
-        _tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
         chair_id: &Id<Chair>,
         eval: i32,

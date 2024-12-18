@@ -13,7 +13,7 @@ use crate::{
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result, Tx,
+    Repository, Result,
 };
 
 pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
@@ -148,7 +148,6 @@ impl Repository {
 
     pub async fn chair_location_update(
         &self,
-        _tx: impl Into<Option<&mut Tx>>,
         chair_id: &Id<Chair>,
         coord: Coordinate,
     ) -> Result<DateTime<Utc>> {

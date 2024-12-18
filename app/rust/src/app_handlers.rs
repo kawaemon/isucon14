@@ -197,7 +197,7 @@ async fn app_get_rides(
     let rides: Vec<Ride> = repo.rides_by_user(&user.id).await?;
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = repo.ride_status_latest(None, &ride.id).await?;
+        let status = repo.ride_status_latest(&ride.id).await?;
         if status != RideStatusEnum::Completed {
             continue;
         }
@@ -212,10 +212,10 @@ async fn app_get_rides(
         .await?;
 
         let chair: Chair = repo
-            .chair_get_by_id(None, ride.chair_id.as_ref().unwrap())
+            .chair_get_by_id(ride.chair_id.as_ref().unwrap())
             .await?
             .unwrap();
-        let owner: Owner = repo.owner_get_by_id(None, &chair.owner_id).await?.unwrap();
+        let owner: Owner = repo.owner_get_by_id(&chair.owner_id).await?.unwrap();
 
         items.push(GetAppRidesResponseItem {
             pickup_coordinate: ride.pickup_coord(),
@@ -261,7 +261,6 @@ async fn app_post_rides(
     }
 
     repo.rides_new_and_set_matching(
-        None,
         &ride_id,
         &user.id,
         req.pickup_coordinate,
@@ -338,13 +337,7 @@ struct AppPostRideEvaluationResponse {
 }
 
 async fn app_post_ride_evaluation(
-    State(AppState {
-        pool,
-        repo,
-        pgw,
-        client,
-        ..
-    }): State<AppState>,
+    State(AppState { repo, pgw, .. }): State<AppState>,
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
 ) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
@@ -352,17 +345,16 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("evaluation must be between 1 and 5"));
     }
 
-    let Some(ride): Option<Ride> = repo.ride_get(None, &ride_id).await? else {
+    let Some(ride): Option<Ride> = repo.ride_get(&ride_id).await? else {
         return Err(Error::NotFound("ride not found"));
     };
 
-    let status = repo.ride_status_latest(None, &ride.id).await?;
+    let status = repo.ride_status_latest(&ride.id).await?;
     if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let Some(payment_token): Option<String> = repo.payment_token_get(None, &ride.user_id).await?
-    else {
+    let Some(payment_token): Option<String> = repo.payment_token_get(&ride.user_id).await? else {
         return Err(Error::BadRequest("payment token not registered"));
     };
 
@@ -375,7 +367,7 @@ async fn app_post_ride_evaluation(
     )
     .await?;
 
-    let payment_gateway_url: String = repo.pgw_get(None).await?;
+    let payment_gateway_url: String = repo.pgw_get().await?;
 
     pgw.enqueue(
         &payment_gateway_url,
@@ -385,16 +377,12 @@ async fn app_post_ride_evaluation(
     )
     .await;
 
-    let mut tx = pool.begin().await?;
-
     let chair_id = ride.chair_id.as_ref().unwrap();
     let updated_at = repo
-        .rides_set_evaluation(&mut tx, &ride_id, chair_id, req.evaluation)
+        .rides_set_evaluation(&ride_id, chair_id, req.evaluation)
         .await?;
-    repo.ride_status_update(&mut tx, &ride_id, RideStatusEnum::Completed)
+    repo.ride_status_update(&ride_id, RideStatusEnum::Completed)
         .await?;
-
-    tx.commit().await?;
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
         fare,
@@ -465,7 +453,7 @@ async fn app_get_notification_inner(
     body: Option<NotificationBody>,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let Some(body) = body else { return Ok(None) };
-    let ride = repo.ride_get(None, &body.ride_id).await?.unwrap();
+    let ride = repo.ride_get(&body.ride_id).await?.unwrap();
     let status = body.status;
 
     let fare = calculate_discounted_fare(
@@ -489,8 +477,8 @@ async fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair: Chair = repo.chair_get_by_id(None, &chair_id).await?.unwrap();
-        let stats = repo.chair_get_stats(None, &chair.id).await?;
+        let chair: Chair = repo.chair_get_by_id(&chair_id).await?.unwrap();
+        let stats = repo.chair_get_stats(&chair.id).await?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,

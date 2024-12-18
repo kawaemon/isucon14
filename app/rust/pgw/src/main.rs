@@ -11,6 +11,7 @@ use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 
 #[tokio::main]
 async fn main() {
@@ -34,7 +35,15 @@ async fn run() {
         });
     }
 
+    let c = std::env::var("CONCURRENCY")
+        .unwrap_or("30".to_owned())
+        .parse()
+        .unwrap();
+
+    tracing::info!("concurrency = {c}");
+
     let state = AppState {
+        semaphore: Arc::new(Semaphore::new(c)),
         client: Client::new(),
         stats: Arc::clone(&stats),
     };
@@ -100,6 +109,7 @@ impl Stats {
 
 #[derive(Debug, Clone)]
 struct AppState {
+    semaphore: Arc<Semaphore>,
     client: Client,
     stats: Arc<Stats>,
 }
@@ -158,6 +168,7 @@ struct Work {
 
 impl Work {
     async fn doit(&self, state: AppState) {
+        let _ = state.semaphore.acquire().await.unwrap();
         let begin = Instant::now();
         let url = &self.url;
 

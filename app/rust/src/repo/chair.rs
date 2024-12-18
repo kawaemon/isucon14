@@ -13,7 +13,7 @@ use crate::{
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableMayUpdated, UpdatableDeferred},
-    Repository, Result, Tx,
+    Repository, Result,
 };
 
 pub type ChairCache = Arc<ChairCacheInner>;
@@ -228,11 +228,7 @@ impl Repository {
 
 // chairs
 impl Repository {
-    pub async fn chair_get_by_id(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Chair>,
-    ) -> Result<Option<Chair>> {
+    pub async fn chair_get_by_id(&self, id: &Id<Chair>) -> Result<Option<Chair>> {
         let cache = self.chair_cache.by_id.read().await;
         let Some(entry) = cache.get(id) else {
             return Ok(None);
@@ -261,11 +257,7 @@ impl Repository {
     }
 
     // COMPLETED なものを集める(1)
-    pub async fn chair_get_stats(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Chair>,
-    ) -> Result<ChairStats> {
+    pub async fn chair_get_stats(&self, id: &Id<Chair>) -> Result<ChairStats> {
         let stat: ChairStat = {
             let cache = self.chair_cache.by_id.read().await;
             let chair = cache.get(id).unwrap();

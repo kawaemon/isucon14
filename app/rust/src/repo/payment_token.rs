@@ -9,7 +9,7 @@ use crate::models::{Id, User};
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result, Tx,
+    Repository, Result
 };
 
 pub type PtCache = Arc<PtCacheInner>;
@@ -43,11 +43,7 @@ impl Repository {
 }
 
 impl Repository {
-    pub async fn payment_token_get(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        user: &Id<User>,
-    ) -> Result<Option<String>> {
+    pub async fn payment_token_get(&self, user: &Id<User>) -> Result<Option<String>> {
         let cache = self.pt_cache.cache.read().await;
         Ok(cache.get(user).cloned())
     }

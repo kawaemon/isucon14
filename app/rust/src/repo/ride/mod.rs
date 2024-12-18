@@ -316,7 +316,7 @@ impl Repository {
                 continue;
             };
             if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id(None, chair).await?.unwrap();
+                let chair = self.chair_get_by_id(chair).await?.unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -612,7 +612,7 @@ impl Repository {
             }
             let mut chair_speed = HashMap::default();
             for chair in free_chairs.iter() {
-                let c = self.chair_get_by_id(None, chair).await.unwrap().unwrap();
+                let c = self.chair_get_by_id(chair).await.unwrap().unwrap();
                 let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
                 chair_speed.insert(chair.clone(), speed);
             }
@@ -665,6 +665,6 @@ impl Repository {
 
         futures::future::join_all(fut).await;
 
-        tracing::debug!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
+        tracing::info!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
     }
 }

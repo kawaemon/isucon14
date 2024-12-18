@@ -2,7 +2,7 @@ use crate::repo::dl::DlRwLock as RwLock;
 use sqlx::{MySql, Pool};
 use std::sync::Arc;
 
-use super::{Repository, Result, Tx};
+use super::{Repository, Result};
 
 pub type PgwCache = Arc<RwLock<String>>;
 
@@ -32,7 +32,7 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn pgw_get(&self, _tx: impl Into<Option<&mut Tx>>) -> Result<String> {
+    pub async fn pgw_get(&self) -> Result<String> {
         Ok(self.pgw_cache.read().await.clone())
     }
 }

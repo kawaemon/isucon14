@@ -61,7 +61,7 @@ async fn chair_post_chairs(
     axum::Json(req): axum::Json<ChairPostChairsRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
     let Some(owner): Option<Owner> = repo
-        .owner_get_by_chair_register_token(None, &req.chair_register_token)
+        .owner_get_by_chair_register_token(&req.chair_register_token)
         .await?
     else {
         return Err(Error::Unauthorized("invalid chair_register_token"));
@@ -119,16 +119,16 @@ async fn chair_post_coordinate(
     axum::Extension(chair): axum::Extension<Chair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
-    let created_at = repo.chair_location_update(None, &chair.id, req).await?;
+    let created_at = repo.chair_location_update(&chair.id, req).await?;
 
-    if let Some((ride, status)) = repo.rides_get_assigned(None, &chair.id).await? {
+    if let Some((ride, status)) = repo.rides_get_assigned(&chair.id).await? {
         if req == ride.pickup_coord() && status == RideStatusEnum::Enroute {
-            repo.ride_status_update(None, &ride.id, RideStatusEnum::Pickup)
+            repo.ride_status_update(&ride.id, RideStatusEnum::Pickup)
                 .await?;
         }
 
         if req == ride.destination_coord() && status == RideStatusEnum::Carrying {
-            repo.ride_status_update(None, &ride.id, RideStatusEnum::Arrived)
+            repo.ride_status_update(&ride.id, RideStatusEnum::Arrived)
                 .await?;
         }
     }
@@ -186,7 +186,7 @@ async fn chair_get_notification_inner(
     let Some(body) = body else {
         return Ok(None);
     };
-    let ride = repo.ride_get(None, &body.ride_id).await?.unwrap();
+    let ride = repo.ride_get(&body.ride_id).await?.unwrap();
     let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
 
     if body.status == RideStatusEnum::Completed {
@@ -232,7 +232,7 @@ async fn chair_post_ride_status(
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
 ) -> Result<StatusCode, Error> {
-    let Some(ride): Option<Ride> = repo.ride_get(None, &ride_id).await? else {
+    let Some(ride): Option<Ride> = repo.ride_get(&ride_id).await? else {
         return Err(Error::NotFound("rides not found"));
     };
 
@@ -249,7 +249,7 @@ async fn chair_post_ride_status(
         RideStatusEnum::Enroute => RideStatusEnum::Enroute,
         // After Picking up user
         RideStatusEnum::Carrying => {
-            let status = repo.ride_status_latest(None, &ride.id).await?;
+            let status = repo.ride_status_latest(&ride.id).await?;
             if status != RideStatusEnum::Pickup {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
@@ -260,7 +260,7 @@ async fn chair_post_ride_status(
         }
     };
 
-    repo.ride_status_update(None, &ride_id, next).await?;
+    repo.ride_status_update(&ride_id, next).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
