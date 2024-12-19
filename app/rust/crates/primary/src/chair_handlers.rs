@@ -3,7 +3,7 @@ use std::time::Duration;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
-use axum::response::Sse;
+use axum::response::{IntoResponse, Sse};
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use futures::Stream;
@@ -123,7 +123,7 @@ struct ChairGetNotificationResponseData {
 async fn chair_get_notification(
     State(state): State<AppState>,
     axum::Extension(chair): axum::Extension<Chair>,
-) -> Sse<impl Stream<Item = Result<Event, Error>>> {
+) -> impl IntoResponse {
     let ts = state
         .repo
         .chair_get_next_notification_sse(&chair.id)
@@ -138,15 +138,18 @@ async fn chair_get_notification(
             async move {
                 let s = chair_get_notification_inner(&state, &chair.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
-                Ok(Event::default().data(s))
+                Result::<_, Error>::Ok(Event::default().data(s))
             }
         });
 
-    Sse::new(stream)
+    let mut resp = Sse::new(stream).into_response();
+    resp.headers_mut()
+        .insert("X-Accel-Buffering", "no".parse().unwrap());
+    resp
 }
 
 async fn chair_get_notification_inner(
-    AppState { repo, .. }: &AppState,
+    AppState { repo, config, .. }: &AppState,
     chair_id: &Id<Chair>,
     body: Option<NotificationBody>,
 ) -> Result<Option<ChairGetNotificationResponseData>, Error> {
@@ -155,19 +158,22 @@ async fn chair_get_notification_inner(
     };
     let ride = repo.ride_get(&body.ride_id).await?.unwrap();
     let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
+    let (name, model) = repo
+        .chair_get_name_and_model_by_id(chair_id)
+        .await?
+        .unwrap();
 
     if body.status == RideStatusEnum::Completed {
-        {
-            let chair_id = chair_id.clone();
-            let repo = repo.clone();
-            tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                repo.ride_cache
-                    .on_chair_status_change(&chair_id, false)
-                    .await;
-                repo.push_free_chair(&chair_id).await;
-            });
-        }
+        let config = config.clone();
+        let chair_id = chair_id.clone();
+        let repo = repo.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(config.chair_notification_delay as _)).await;
+            repo.ride_cache
+                .on_chair_became_free(&chair_id, &name, &model)
+                .await;
+            repo.push_free_chair(&chair_id).await;
+        });
     }
 
     Ok(Some(ChairGetNotificationResponseData {

@@ -5,7 +5,7 @@ use repo::Repository;
 use shared::{
     ws::{
         pgw::{PgwRequest, PgwResponse},
-         WsSystem, WsSystemHandler,
+        WsSystem, WsSystemHandler,
     },
     FxHashMap as HashMap,
 };
@@ -19,6 +19,25 @@ pub struct AppState {
     pub pgw: WsSystem<PgwSystemHandler>,
     pub speed: SpeedStatistics,
     pub client: reqwest::Client,
+    pub config: Config,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    chair_notification_delay: usize,
+}
+impl Config {
+    pub fn new() -> Self {
+        let c = std::env::var("CHAIR_NOTIFICATION_DELAY")
+            .unwrap_or("50".to_owned())
+            .parse()
+            .unwrap();
+        let s = Self {
+            chair_notification_delay: c,
+        };
+        tracing::info!("{s:#?}");
+        s
+    }
 }
 
 #[derive(Debug, Clone)]

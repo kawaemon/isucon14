@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::Event;
-use axum::response::Sse;
+use axum::response::{IntoResponse, Sse};
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
 use futures::Stream;
@@ -421,7 +421,7 @@ pub struct ChairStats {
 async fn app_get_notification(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
-) -> Sse<impl Stream<Item = Result<Event, Error>>> {
+) -> impl IntoResponse {
     let ts = state
         .repo
         .user_get_next_notification_sse(&user.id)
@@ -441,11 +441,14 @@ async fn app_get_notification(
             async move {
                 let s = app_get_notification_inner(&state, &user.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
-                Ok(Event::default().data(s))
+                Ok::<_, Error>(Event::default().data(s))
             }
         });
 
-    Sse::new(stream)
+    let mut resp = Sse::new(stream).into_response();
+    resp.headers_mut()
+        .insert("X-Accel-Buffering", "no".parse().unwrap());
+    resp
 }
 
 async fn app_get_notification_inner(

@@ -232,7 +232,16 @@ impl Repository {
         };
         Ok(Some(entry.chair().await))
     }
-
+    pub async fn chair_get_name_and_model_by_id(
+        &self,
+        id: &Id<Chair>,
+    ) -> Result<Option<(String, String)>> {
+        let cache = self.chair_cache.by_id.read().await;
+        let Some(entry) = cache.get(id) else {
+            return Ok(None);
+        };
+        Ok(Some((entry.name.clone(), entry.model.clone())))
+    }
     pub async fn chair_get_by_access_token(&self, token: &str) -> Result<Option<Chair>> {
         let cache = self.chair_cache.by_access_token.read().await;
         let Some(entry) = cache.get(token) else {
@@ -308,14 +317,17 @@ impl Repository {
 
     pub async fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
         let now = Utc::now();
-        {
+        let (name, model) = {
             let cache = self.chair_cache.by_id.read().await;
             let entry = cache.get(id).unwrap();
             entry.set_active(active, now).await;
-        }
+            (entry.name.clone(), entry.model.clone())
+        };
 
         if active {
-            self.ride_cache.on_chair_status_change(id, false).await;
+            self.ride_cache
+                .on_chair_became_free(id, &name, &model)
+                .await;
             self.push_free_chair(id).await;
         }
 

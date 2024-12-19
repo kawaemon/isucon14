@@ -1,8 +1,8 @@
 use crate::models::{Chair, Coordinate, Id, Ride, RideStatus, RideStatusEnum, User};
-use shared::DlRwLock as RwLock;
 use crate::repo::{Repository, Result};
 use chrono::{DateTime, Utc};
 use shared::deferred::DeferrableMayUpdated;
+use shared::DlRwLock as RwLock;
 use shared::FxHashMap as HashMap;
 use sqlx::QueryBuilder;
 use std::sync::Arc;
@@ -128,7 +128,7 @@ impl Repository {
             e.set_chair_id(chair_id, now).await;
         }
         {
-            self.ride_cache.on_chair_status_change(chair_id, true).await;
+            self.ride_cache.on_chair_assigned(chair_id).await;
         }
 
         self.ride_cache

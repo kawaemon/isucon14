@@ -2,7 +2,7 @@ use axum::extract::State;
 use futures::StreamExt;
 use isuride::repo::Repository;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
-use isuride::{PgwSystemHandler, SpeedStatistics};
+use isuride::{Config, PgwSystemHandler, SpeedStatistics};
 use shared::pool::get_pool;
 use shared::ws::WsSystem;
 use shared::FxHashMap as HashMap;
@@ -73,6 +73,7 @@ async fn main() -> anyhow::Result<()> {
         pgw,
         speed,
         client,
+        config: Config::new(),
     };
 
     spawn_matching_thread(app_state.clone());
