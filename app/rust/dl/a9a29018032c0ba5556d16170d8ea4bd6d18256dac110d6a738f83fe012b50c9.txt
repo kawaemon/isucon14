@@ -1,0 +1,129 @@
+   0: shared::dl::with_timeout::{{closure}}
+             at /home/kawak/repo/github.com/kawaemon/isucon14/app/rust/crates/shared/src/dl.rs:68:18
+   1: shared::dl::DlMutex<T>::lock::{{closure}}
+             at /home/kawak/repo/github.com/kawaemon/isucon14/app/rust/crates/shared/src/dl.rs:62:37
+   2: isuride::repo::ride::<impl isuride::repo::Repository>::do_matching::{{closure}}
+             at /home/kawak/repo/github.com/kawaemon/isucon14/app/rust/crates/primary/src/repo/ride/mod.rs:599:74
+   3: isuride::internal_handlers::spawn_matching_thread::{{closure}}
+             at /home/kawak/repo/github.com/kawaemon/isucon14/app/rust/crates/primary/src/internal_handlers.rs:14:38
+   4: tokio::runtime::task::core::Core<T,S>::poll::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/core.rs:331:17
+   5: tokio::loom::std::unsafe_cell::UnsafeCell<T>::with_mut
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/loom/std/unsafe_cell.rs:16:9
+      tokio::runtime::task::core::Core<T,S>::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/core.rs:320:13
+   6: tokio::runtime::task::harness::poll_future::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:499:19
+   7: <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:272:9
+   8: std::panicking::try::do_call
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:557:40
+   9: __rust_try
+  10: std::panicking::try
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:520:19
+      std::panic::catch_unwind
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:358:14
+  11: tokio::runtime::task::harness::poll_future
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:487:18
+  12: tokio::runtime::task::harness::Harness<T,S>::poll_inner
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:209:27
+  13: tokio::runtime::task::harness::Harness<T,S>::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:154:15
+  14: tokio::runtime::task::raw::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/raw.rs:271:5
+  15: tokio::runtime::task::raw::RawTask::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/raw.rs:201:18
+  16: tokio::runtime::task::LocalNotified<S>::run
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/mod.rs:435:9
+  17: tokio::runtime::scheduler::multi_thread::worker::Context::run_task::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:596:13
+  18: tokio::runtime::coop::with_budget
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/coop.rs:107:5
+      tokio::runtime::coop::budget
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/coop.rs:73:5
+      tokio::runtime::scheduler::multi_thread::worker::Context::run_task
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:595:9
+  19: tokio::runtime::scheduler::multi_thread::worker::Context::run
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:546:24
+  20: tokio::runtime::scheduler::multi_thread::worker::run::{{closure}}::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:511:21
+  21: tokio::runtime::context::scoped::Scoped<T>::set
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/context/scoped.rs:40:9
+  22: tokio::runtime::context::set_scheduler::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/context.rs:180:26
+  23: std::thread::local::LocalKey<T>::try_with
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/local.rs:283:12
+  24: std::thread::local::LocalKey<T>::with
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/local.rs:260:9
+  25: tokio::runtime::context::set_scheduler
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/context.rs:180:9
+  26: tokio::runtime::scheduler::multi_thread::worker::run::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:506:9
+  27: tokio::runtime::context::runtime::enter_runtime
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/context/runtime.rs:65:16
+  28: tokio::runtime::scheduler::multi_thread::worker::run
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:498:5
+  29: tokio::runtime::scheduler::multi_thread::worker::Launch::launch::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/scheduler/multi_thread/worker.rs:464:45
+  30: <tokio::runtime::blocking::task::BlockingTask<T> as core::future::future::Future>::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/blocking/task.rs:42:21
+  31: tokio::runtime::task::core::Core<T,S>::poll::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/core.rs:331:17
+  32: tokio::loom::std::unsafe_cell::UnsafeCell<T>::with_mut
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/loom/std/unsafe_cell.rs:16:9
+      tokio::runtime::task::core::Core<T,S>::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/core.rs:320:13
+  33: tokio::runtime::task::harness::poll_future::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:499:19
+  34: <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:272:9
+  35: std::panicking::try::do_call
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:557:40
+  36: __rust_try
+  37: std::panicking::try
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:520:19
+      std::panic::catch_unwind
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:358:14
+  38: tokio::runtime::task::harness::poll_future
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:487:18
+  39: tokio::runtime::task::harness::Harness<T,S>::poll_inner
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:209:27
+  40: tokio::runtime::task::harness::Harness<T,S>::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/harness.rs:154:15
+  41: tokio::runtime::task::raw::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/raw.rs:271:5
+  42: tokio::runtime::task::raw::RawTask::poll
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/raw.rs:201:18
+  43: tokio::runtime::task::UnownedTask<S>::run
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/task/mod.rs:472:9
+  44: tokio::runtime::blocking::pool::Task::run
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/blocking/pool.rs:161:9
+  45: tokio::runtime::blocking::pool::Inner::run
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/blocking/pool.rs:511:17
+  46: tokio::runtime::blocking::pool::Spawner::spawn_thread::{{closure}}
+             at /home/kawak/.cargo/registry/src/index.crates.io-6f17d22bba15001f/tokio-1.42.0/src/runtime/blocking/pool.rs:469:13
+  47: std::sys::backtrace::__rust_begin_short_backtrace
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/sys/backtrace.rs:154:18
+  48: std::thread::Builder::spawn_unchecked_::{{closure}}::{{closure}}
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/mod.rs:538:17
+  49: <core::panic::unwind_safe::AssertUnwindSafe<F> as core::ops::function::FnOnce<()>>::call_once
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/panic/unwind_safe.rs:272:9
+  50: std::panicking::try::do_call
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:557:40
+  51: __rust_try
+  52: std::panicking::try
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panicking.rs:520:19
+      std::panic::catch_unwind
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/panic.rs:358:14
+      std::thread::Builder::spawn_unchecked_::{{closure}}
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/std/src/thread/mod.rs:537:30
+  53: core::ops::function::FnOnce::call_once{{vtable.shim}}
+             at /home/kawak/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ops/function.rs:250:5
+  54: <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once
+             at /rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/alloc/src/boxed.rs:2454:9
+      <alloc::boxed::Box<F,A> as core::ops::function::FnOnce<Args>>::call_once
+             at /rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/alloc/src/boxed.rs:2454:9
+      std::sys::pal::unix::thread::Thread::new::thread_start
+             at /rustc/90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf/library/std/src/sys/pal/unix/thread.rs:105:17
+  55: <unknown>
+  56: <unknown>

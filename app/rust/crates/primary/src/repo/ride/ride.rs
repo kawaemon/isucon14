@@ -1,5 +1,5 @@
 use crate::models::{Chair, Coordinate, Id, Ride, RideStatus, RideStatusEnum, User};
-use crate::repo::dl::DlRwLock as RwLock;
+use shared::DlRwLock as RwLock;
 use crate::repo::{Repository, Result};
 use chrono::{DateTime, Utc};
 use shared::deferred::DeferrableMayUpdated;

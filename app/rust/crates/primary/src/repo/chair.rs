@@ -1,4 +1,4 @@
-use crate::repo::dl::DlRwLock as RwLock;
+use shared::DlRwLock as RwLock;
 use shared::FxHashMap as HashMap;
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -298,6 +298,7 @@ impl Repository {
             created_at: at,
             updated_at: at,
         };
+        self.chair_add_to_gw(&c.id, &c.access_token).await;
         self.chair_cache.push_chair(c.clone()).await;
         self.chair_cache.deferred.insert(c).await;
         self.ride_cache.on_chair_add(id).await;
@@ -311,11 +312,11 @@ impl Repository {
             let cache = self.chair_cache.by_id.read().await;
             let entry = cache.get(id).unwrap();
             entry.set_active(active, now).await;
+        }
 
-            if active {
-                self.ride_cache.on_chair_status_change(id, false).await;
-                self.push_free_chair(id).await;
-            }
+        if active {
+            self.ride_cache.on_chair_status_change(id, false).await;
+            self.push_free_chair(id).await;
         }
 
         self.chair_cache

@@ -1,6 +1,6 @@
 use sqlx::{MySql, Pool, QueryBuilder};
 
-use crate::repo::dl::DlRwLock as RwLock;
+use shared::DlRwLock as RwLock;
 use shared::FxHashMap as HashMap;
 use std::sync::Arc;
 

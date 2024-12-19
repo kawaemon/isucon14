@@ -1,7 +1,7 @@
 use shared::FxHashMap as HashMap;
 use std::sync::Arc;
 
-use crate::repo::dl::DlRwLock as RwLock;
+use shared::DlRwLock as RwLock;
 use chrono::Utc;
 use sqlx::{MySql, Pool, QueryBuilder};
 

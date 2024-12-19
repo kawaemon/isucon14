@@ -1,8 +1,8 @@
 use crate::app_handlers::AppGetNearbyChairsResponseChair;
-use crate::repo::dl::DlMutex as Mutex;
-use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
 use ride::RideDeferred;
+use shared::DlMutex as Mutex;
+use shared::DlRwLock as RwLock;
 use shared::FxHashMap as HashMap;
 use shared::FxHashSet as HashSet;
 use sqlx::MySql;
@@ -306,14 +306,15 @@ impl Repository {
         coord: Coordinate,
         dist: i32,
     ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
-        let cache = self.ride_cache.free_chairs_lv1.lock().await;
+        let ls = {
+            let cache = self.ride_cache.free_chairs_lv1.lock().await;
+            cache.iter().cloned().collect::<Vec<_>>()
+        };
         let mut res = vec![];
-        for chair in cache.iter() {
-            let Some(chair_coord) = self.chair_location_get_latest(chair).await? else {
-                continue;
-            };
+        let coords = self.chair_location_get_latest(&ls).await.unwrap();
+        for (chair, chair_coord) in coords.into_iter() {
             if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id(chair).await?.unwrap();
+                let chair = self.chair_get_by_id(&chair).await?.unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -360,7 +361,7 @@ impl RideCacheInner {
             .insert(id.clone(), NotificationQueue::new());
     }
     pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
-        let mut cache = self.free_chairs_lv1.lock().await;
+        let mut cache = self.free_chairs_lv1.lock().await; // FIXME:
         if on_duty {
             cache.remove(id);
         } else {
@@ -602,11 +603,10 @@ impl Repository {
             let chair_speed_cache = self.chair_model_cache.speed.read().await;
 
             // stupid
-            let mut chair_pos = HashMap::default();
-            for chair in free_chairs.iter() {
-                let loc = self.chair_location_get_latest(chair).await.unwrap();
-                chair_pos.insert(chair.clone(), loc);
-            }
+            let chair_pos = {
+                let ls = free_chairs.iter().cloned().collect::<Vec<_>>();
+                self.chair_location_get_latest(&ls).await.unwrap()
+            };
             let mut chair_speed = HashMap::default();
             for chair in free_chairs.iter() {
                 let c = self.chair_get_by_id(chair).await.unwrap().unwrap();
@@ -627,7 +627,7 @@ impl Repository {
                 let best = free_chairs
                     .iter()
                     .min_by_key(|cid| {
-                        let Some(chair_pos) = chair_pos.get(cid).unwrap() else {
+                        let Some(chair_pos) = chair_pos.get(cid) else {
                             return 99999999;
                         };
                         let travel_distance = chair_pos.distance(ride.pickup);

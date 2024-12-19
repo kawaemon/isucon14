@@ -7,6 +7,7 @@ use axum::{
 };
 use axum_extra::extract::CookieJar;
 use futures_util::StreamExt;
+use shared::DlRwLock as RwLock;
 use shared::{
     models::{Chair, Coordinate, Error, Id},
     ws::{
@@ -15,18 +16,18 @@ use shared::{
     },
 };
 use sqlx::{MySql, Pool};
-use tokio::sync::RwLock;
 
 use crate::AppState;
 
 pub fn coordinate_routes(state: &AppState) -> axum::Router<AppState> {
-    axum::Router::new()
-        .route("/public/coordinate", axum::routing::get(pub_coordinate))
-        .route("/private/coordinate", axum::routing::get(ws_endpoint))
+    let public = axum::Router::new()
+        .route("/public/coordinate", axum::routing::post(pub_coordinate))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             chair_auth_middleware,
-        ))
+        ));
+    let private = axum::Router::new().route("/private/coordinate", axum::routing::get(ws_endpoint));
+    public.merge(private)
 }
 
 pub async fn chair_auth_middleware(
@@ -73,7 +74,8 @@ async fn pub_coordinate(
             chair: chair.clone(),
             status,
         };
-        tx.enqueue(n).await;
+        let res = tx.enqueue(n).await;
+        assert!(matches!(res, CoordNotificationResponse::AtDestination));
     }
 
     Ok(axum::Json(ChairPostCoordinateResponse {

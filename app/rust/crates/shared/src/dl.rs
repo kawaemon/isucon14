@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     ops::{Deref, DerefMut},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use sha2::Sha256;
@@ -15,10 +15,39 @@ impl<T> DlRwLock<T> {
         Self(RwLock::new(v))
     }
     pub async fn read(&self) -> impl Deref<Target = T> + '_ {
-        with_timeout(self.0.read()).await
+        ReadTracked::new(with_timeout(self.0.read()).await)
     }
     pub async fn write(&self) -> impl DerefMut<Target = T> + '_ {
         with_timeout(self.0.write()).await
+    }
+}
+
+struct ReadTracked<D> {
+    inner: D,
+    at: Instant,
+}
+impl<T, D: Deref<Target = T>> Deref for ReadTracked<D> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+impl<T> ReadTracked<T> {
+    fn new(i: T) -> Self {
+        Self {
+            inner: i,
+            at: Instant::now(),
+        }
+    }
+}
+impl<T> Drop for ReadTracked<T> {
+    fn drop(&mut self) {
+        let elap = self.at.elapsed();
+        if elap.as_millis() > 500 {
+            let bt = backtrace::Backtrace::new();
+            let bt = format!("{bt:?}");
+            tracing::warn!("lock held {}ms at\n{bt}", elap.as_millis());
+        }
     }
 }
 

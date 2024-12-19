@@ -5,7 +5,8 @@ cd $(dirname "$0")
 
 MYSQL="mysql"
 if [ "${ENV:-}" == "local-dev" ]; then
-	MYSQL="docker exec -i isuride-mysql mysql"
+	unset DOCKER_HOST
+	MYSQL="sudo docker exec -i isuride-mysql mysql"
 fi
 
 if test -f /home/isucon/env.sh; then

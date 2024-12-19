@@ -1,5 +1,5 @@
 use crate::FxHashMap as HashMap;
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use derivative::Derivative;
 use futures::{stream::SplitSink, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
@@ -141,6 +141,8 @@ impl<H: WsSystemHandler> WsSystem<H> {
                 PacketType::Response => {
                     let packet: Packet<H::Response> = serde_json::from_str(&msg).unwrap();
 
+                    // tracing::info!("got response({:?}): {:?}", packet.id, packet.param);
+
                     jobs.lock()
                         .await
                         .remove(&packet.id)
@@ -154,6 +156,8 @@ impl<H: WsSystemHandler> WsSystem<H> {
                     let handler = handler.clone();
                     let tx = tx.clone();
 
+                    // tracing::info!("incoming request({:?}): {:?}", packet.id, packet.param);
+
                     tokio::spawn(async move {
                         let res = handler.handle(packet.param).await;
                         let packet = Packet {
@@ -161,6 +165,7 @@ impl<H: WsSystemHandler> WsSystem<H> {
                             ty: PacketType::Response,
                             param: res,
                         };
+                        // tracing::info!("replying response({:?}): {:?}", packet.id, packet.param);
                         let msg = serde_json::to_string(&packet).unwrap();
                         let msg = Message::text(msg);
                         tx.send(msg).unwrap();
@@ -173,7 +178,7 @@ impl<H: WsSystemHandler> WsSystem<H> {
 
     pub async fn enqueue(&self, req: H::Request) -> H::Response {
         let id = Id::<()>::new();
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
 
         {
             self.jobs.lock().await.insert(id.clone(), tx);
@@ -184,13 +189,24 @@ impl<H: WsSystemHandler> WsSystem<H> {
             ty: PacketType::Request,
             param: req,
         };
+        // tracing::info!("sending request({:?}): {:?}", packet.id, packet.param);
         let msg = serde_json::to_string(&packet).unwrap();
 
         {
-            self.tx.send(Message::text(msg)).unwrap();
+            self.tx.send(Message::text(&msg)).unwrap();
         }
 
-        rx.await.unwrap()
+        loop {
+            let sleep = tokio::time::sleep(Duration::from_millis(500));
+            tokio::select! {
+                _ = sleep => {
+                    tracing::warn!("no ws response for 500ms: {msg}");
+                }
+                msg = &mut rx => {
+                    return msg.unwrap();
+                }
+            }
+        }
     }
 }
 

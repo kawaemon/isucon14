@@ -1,173 +1,155 @@
-use shared::FxHashMap as HashMap;
+use futures::StreamExt;
+use shared::{
+    models::RideStatusEnum,
+    ws::{
+        coordinate::{CoordNotification, CoordNotificationResponse, CoordRequest, CoordResponse},
+        WsSystem, WsSystemHandler,
+    },
+    FxHashMap as HashMap,
+};
 use std::sync::Arc;
 
-use crate::repo::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
+use shared::DlRwLock as RwLock;
 use sqlx::{MySql, Pool};
 
-use crate::models::{Chair, ChairLocation, Coordinate, Id};
+use crate::models::{Chair, Coordinate, Id};
 
 use super::{cache_init::CacheInit, Repository, Result};
-use shared::deferred::{DeferrableSimple, SimpleDeferred};
 
 pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
 
-#[derive(Debug)]
-pub struct ChairLocationCacheInner {
-    cache: RwLock<HashMap<Id<Chair>, Entry>>,
-    deferred: SimpleDeferred<ChairLocationDeferrable>,
+#[derive(Debug, Clone)]
+struct Handler {
+    repo: Arc<RwLock<Option<Repository>>>, // 相互依存 T T
 }
 
-struct ChairLocationDeferrable;
-impl DeferrableSimple for ChairLocationDeferrable {
-    const NAME: &str = "chair_locations";
+impl WsSystemHandler for Handler {
+    type Request = CoordRequest;
+    type Response = CoordResponse;
+    type Notification = CoordNotification;
+    type NotificationResponse = CoordNotificationResponse;
 
-    type Insert = ChairLocation;
-
-    async fn exec_insert(tx: &Pool<MySql>, inserts: &[Self::Insert]) {
-        let mut query = sqlx::QueryBuilder::new(
-            "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
-        );
-        query.push_values(inserts, |mut b, e: &ChairLocation| {
-            b.push_bind(&e.id)
-                .push_bind(&e.chair_id)
-                .push_bind(e.latitude)
-                .push_bind(e.longitude)
-                .push_bind(e.created_at);
-        });
-        query.build().execute(tx).await.unwrap();
-    }
-}
-
-#[derive(Debug)]
-struct Entry(RwLock<EntryInner>);
-impl Entry {
-    fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
-        Self(RwLock::new(EntryInner::new(coord, at)))
-    }
-    async fn update(&self, coord: Coordinate, at: DateTime<Utc>) {
-        self.0.write().await.update(coord, at);
-    }
-}
-
-#[derive(Debug)]
-struct EntryInner {
-    latest_coord: Coordinate,
-    updated_at: DateTime<Utc>,
-    total: i64,
-}
-
-impl EntryInner {
-    fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
-        Self {
-            latest_coord: coord,
-            updated_at: at,
-            total: 0,
-        }
-    }
-    fn update(&mut self, coord: Coordinate, at: DateTime<Utc>) {
-        self.total += self.latest_coord.distance(coord) as i64;
-        self.latest_coord = coord;
-        self.updated_at = at;
-    }
-}
-
-struct ChairLocationCacheInit {
-    cache: HashMap<Id<Chair>, Entry>,
-}
-impl ChairLocationCacheInit {
-    async fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
-        init.locations.sort_unstable_by_key(|x| x.created_at);
-
-        let mut res: HashMap<Id<Chair>, Entry> = HashMap::default();
-        for loc in &init.locations {
-            if let Some(c) = res.get_mut(&loc.chair_id) {
-                c.update(loc.coord(), loc.created_at).await;
-            } else {
-                res.insert(
-                    loc.chair_id.clone(),
-                    Entry::new(loc.coord(), loc.created_at),
-                );
+    async fn handle(&self, req: CoordNotification) -> Self::NotificationResponse {
+        match req {
+            CoordNotification::AtDestination { chair, status } => {
+                let repo = self.repo.read().await;
+                let Some(s) = repo.as_ref() else {
+                    panic!("repository post init not called");
+                };
+                // 向こうから送ってもらうようにすればもっと楽になる
+                let (ride, _) = s.rides_get_assigned(&chair).await.unwrap().unwrap();
+                s.ride_status_update(&ride.id, status).await.unwrap();
+                CoordNotificationResponse::AtDestination
             }
         }
-
-        ChairLocationCacheInit { cache: res }
     }
+}
+
+#[derive(Debug)]
+pub struct ChairLocationCacheInner {
+    reporef: Arc<RwLock<Option<Repository>>>,
+    ws: WsSystem<Handler>,
 }
 
 impl Repository {
-    pub(super) async fn init_chair_location_cache(
-        pool: &Pool<MySql>,
-        init: &mut CacheInit,
-    ) -> ChairLocationCache {
-        let init = ChairLocationCacheInit::from_init(init).await;
+    pub(super) async fn init_chair_location_cache(path: &str) -> ChairLocationCache {
+        let (stream, _res) = tokio_tungstenite::connect_async(path).await.unwrap();
+        let (tx, rx) = stream.split();
 
-        Arc::new(ChairLocationCacheInner {
-            cache: RwLock::new(init.cache),
-            deferred: SimpleDeferred::new(pool),
-        })
+        let reporef = Arc::new(RwLock::new(None));
+        let h = Handler {
+            repo: Arc::clone(&reporef),
+        };
+        let ws = WsSystem::new(h, tx, rx);
+
+        Arc::new(ChairLocationCacheInner { reporef, ws })
+    }
+
+    pub(super) async fn chair_location_post_init(&self) {
+        *self.chair_location_cache.reporef.write().await = Some(self.clone());
     }
 
     pub(super) async fn reinit_chair_location_cache(
         &self,
         _pool: &Pool<MySql>,
-        init: &mut CacheInit,
+        _init: &mut CacheInit,
     ) {
-        let init = ChairLocationCacheInit::from_init(init).await;
-        *self.chair_location_cache.cache.write().await = init.cache;
+        let res = self
+            .chair_location_cache
+            .ws
+            .enqueue(CoordRequest::ReInit)
+            .await;
+        assert!(matches!(res, CoordResponse::Reinit));
     }
 }
 
 impl Repository {
-    pub async fn chair_location_get_latest(&self, id: &Id<Chair>) -> Result<Option<Coordinate>> {
-        let cache = self.chair_location_cache.cache.read().await;
-        let Some(cache) = cache.get(id) else {
-            return Ok(None);
-        };
-        let cache = cache.0.read().await;
-        Ok(Some(cache.latest_coord))
+    pub async fn chair_add_to_gw(&self, chair: &Id<Chair>, token: &str) {
+        let res = self
+            .chair_location_cache
+            .ws
+            .enqueue(CoordRequest::NewChair {
+                id: chair.clone(),
+                token: token.to_owned(),
+            })
+            .await;
+        assert!(matches!(res, CoordResponse::NewChair));
+    }
+    pub async fn chair_movement_register(
+        &self,
+        chair: &Id<Chair>,
+        target: Coordinate,
+        next: RideStatusEnum,
+    ) {
+        let res = self
+            .chair_location_cache
+            .ws
+            .enqueue(CoordRequest::ChairMovement {
+                chair: chair.clone(),
+                dest: target,
+                new_state: next,
+            })
+            .await;
+        assert!(matches!(res, CoordResponse::ChairMovement));
+    }
+
+    pub async fn chair_location_get_latest(
+        &self,
+        id: &[Id<Chair>],
+    ) -> Result<HashMap<Id<Chair>, Coordinate>> {
+        let res = self
+            .chair_location_cache
+            .ws
+            .enqueue(CoordRequest::Get(id.to_vec()))
+            .await;
+        match res {
+            CoordResponse::Get(r) => {
+                let r = r.into_iter().map(|(k, v)| (k, v.latest)).collect();
+                Ok(r)
+            }
+            _ => panic!("unknown response"),
+        }
     }
 
     pub async fn chair_total_distance(
         &self,
-        chair_id: &Id<Chair>,
-    ) -> Result<Option<(i64, DateTime<Utc>)>> {
-        let cache = self.chair_location_cache.cache.read().await;
-        let Some(cache) = cache.get(chair_id) else {
-            return Ok(None);
-        };
-        let cache = cache.0.read().await;
-        Ok(Some((cache.total, cache.updated_at)))
-    }
-
-    pub async fn chair_location_update(
-        &self,
-        chair_id: &Id<Chair>,
-        coord: Coordinate,
-    ) -> Result<DateTime<Utc>> {
-        let created_at = Utc::now();
-
-        let c = ChairLocation {
-            id: Id::new(),
-            chair_id: chair_id.clone(),
-            latitude: coord.latitude,
-            longitude: coord.longitude,
-            created_at,
-        };
-
-        self.chair_location_cache.deferred.insert(c).await;
-
-        {
-            let cache = self.chair_location_cache.cache.read().await;
-            if let Some(c) = cache.get(chair_id) {
-                c.update(coord, created_at).await;
-                return Ok(created_at);
+        id: &[Id<Chair>],
+    ) -> Result<HashMap<Id<Chair>, (i64, DateTime<Utc>)>> {
+        let res = self
+            .chair_location_cache
+            .ws
+            .enqueue(CoordRequest::Get(id.to_vec()))
+            .await;
+        match res {
+            CoordResponse::Get(r) => {
+                let r = r
+                    .into_iter()
+                    .map(|(k, v)| (k, (v.total_distance, v.latest_updated_at)))
+                    .collect();
+                Ok(r)
             }
+            _ => panic!("unknown response"),
         }
-
-        let mut cache = self.chair_location_cache.cache.write().await;
-        cache.insert(chair_id.clone(), Entry::new(coord, created_at));
-
-        Ok(created_at)
     }
 }

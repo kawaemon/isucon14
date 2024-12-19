@@ -1,9 +1,10 @@
 use axum::extract::State;
+use futures::StreamExt;
 use isuride::repo::Repository;
-use isuride::PaymentGateway;
-use isuride::SpeedStatistics;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
+use isuride::{PgwSystemHandler, SpeedStatistics};
 use shared::pool::get_pool;
+use shared::ws::WsSystem;
 use shared::FxHashMap as HashMap;
 use std::cmp::Reverse;
 use std::net::SocketAddr;
@@ -30,13 +31,15 @@ async fn main() -> anyhow::Result<()> {
 
     let pool = get_pool().await;
 
-    let repo = Arc::new(Repository::new(&pool).await);
-    let pgws = std::env::var("PGW_EPS")
-        .unwrap_or("ws://localhost:4444/pgw".to_owned())
-        .split(",")
-        .map(|x| x.to_owned())
-        .collect::<Vec<String>>();
-    let pgw = PaymentGateway::new(&pgws).await;
+    let sub = std::env::var("SUB_SERVER").unwrap_or("ws://localhost:4444".to_owned());
+
+    let repo = Arc::new(Repository::new(&pool, &format!("{sub}/private/coordinate")).await);
+    let pgw = {
+        let url = &format!("{sub}/private/pgw");
+        let (stream, _res) = tokio_tungstenite::connect_async(url).await.unwrap();
+        let (tx, rx) = stream.split();
+        WsSystem::new(PgwSystemHandler, tx, rx)
+    };
     let speed = SpeedStatistics {
         m: Arc::new(Mutex::new(HashMap::default())),
     };
@@ -91,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
         if let Some(std_listener) = listenfd::ListenFd::from_env().take_tcp_listener(0)? {
             TcpListener::from_std(std_listener)?
         } else {
-            TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], 8080))).await?
+            TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], 3000))).await?
         };
     axum::serve(tcp_listener, app).await?;
 
@@ -114,6 +117,7 @@ async fn post_initialize(
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let status = tokio::process::Command::new("../sql/init.sh")
         .stdout(Stdio::inherit())
+        .stdin(Stdio::inherit())
         .status()
         .await?;
     if !status.success() {

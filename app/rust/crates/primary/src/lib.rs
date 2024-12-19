@@ -5,7 +5,7 @@ use repo::Repository;
 use shared::{
     ws::{
         pgw::{PgwRequest, PgwResponse},
-        TungsteniteTx, WsSystem, WsSystemHandler,
+         WsSystem, WsSystemHandler,
     },
     FxHashMap as HashMap,
 };
@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
-    pub pgw: WsSystem<TungsteniteTx, PgwSystemHandler>,
+    pub pgw: WsSystem<PgwSystemHandler>,
     pub speed: SpeedStatistics,
     pub client: reqwest::Client,
 }

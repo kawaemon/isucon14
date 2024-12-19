@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
+use shared::DlRwLock as RwLock;
 use shared::{
     deferred::{DeferrableSimple, SimpleDeferred},
-    models::{Chair, ChairLocation, Coordinate, Id, RideStatusEnum},
+    models::{Chair, ChairLocation, Coordinate, Id, Ride, RideStatus, RideStatusEnum},
     ws::coordinate::CoordResponseGet,
     FxHashMap as HashMap,
 };
 use sqlx::{MySql, Pool};
-use tokio::sync::RwLock;
 
 #[derive(Debug)]
 pub struct ChairRepository {
@@ -56,6 +56,7 @@ impl ChairRepository {
             let g = CoordResponseGet {
                 latest: entry.latest_coord,
                 total_distance: entry.total,
+                latest_updated_at: entry.updated_at,
             };
             res.insert(id.clone(), g);
         }
@@ -183,6 +184,21 @@ impl ChairLocationCacheInit {
             .fetch_all(pool)
             .await
             .unwrap();
+        let rides: Vec<Ride> = sqlx::query_as("select * from rides")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let ride_statuses: Vec<RideStatus> = sqlx::query_as("select * from ride_statuses")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        let mut statuses = HashMap::default();
+        for status in &ride_statuses {
+            statuses
+                .entry(status.ride_id.clone())
+                .or_insert_with(Vec::new)
+                .push(status.clone());
+        }
 
         locations.sort_unstable_by_key(|x| x.created_at);
 
@@ -200,6 +216,32 @@ impl ChairLocationCacheInit {
                     loc.chair_id.clone(),
                     Entry::new(loc.coord(), loc.created_at),
                 );
+            }
+        }
+
+        for ride in &rides {
+            let Some(chair_id) = ride.chair_id.as_ref() else {
+                continue;
+            };
+            let mut e = location.get(chair_id).unwrap().0.write().await;
+            for status in statuses.get(&ride.id).unwrap() {
+                match status.status {
+                    RideStatusEnum::Matching => {}
+                    RideStatusEnum::Enroute => {
+                        e.set_movement(ride.pickup(), RideStatusEnum::Pickup);
+                    }
+                    RideStatusEnum::Pickup => {
+                        e.destination = None;
+                    }
+                    RideStatusEnum::Carrying => {
+                        e.set_movement(ride.destination(), RideStatusEnum::Arrived);
+                    }
+                    RideStatusEnum::Arrived => {
+                        e.destination = None;
+                    }
+                    RideStatusEnum::Completed => {}
+                    RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
+                }
             }
         }
 

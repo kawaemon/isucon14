@@ -1,3 +1,5 @@
+use chrono::{DateTime, Utc};
+
 use crate::models::{Chair, Coordinate, RideStatusEnum};
 
 use super::*;
@@ -28,6 +30,7 @@ pub enum CoordResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoordResponseGet {
     pub latest: Coordinate,
+    pub latest_updated_at: DateTime<Utc>,
     pub total_distance: i64,
 }
 

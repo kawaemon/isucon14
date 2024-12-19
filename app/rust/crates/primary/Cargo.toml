@@ -6,12 +6,9 @@ publish = false
 
 [dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
-hex = "0.4"
 listenfd = "1"
 num-traits = "0.2"
 rand = "0.8"
-sha2 = "0.10"
-backtrace = "0.3"
 tokio-stream = { version = "0.1", features = ["sync"] }
 reqwest.workspace = true
 
@@ -30,5 +27,6 @@ serde_json.workspace = true
 ulid.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
+hex = "0.4"
 
 shared.workspace = true

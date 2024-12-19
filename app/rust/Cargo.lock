@@ -392,6 +392,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-targets 0.52.6",
 ]
@@ -1200,7 +1201,6 @@ dependencies = [
  "anyhow",
  "axum",
  "axum-extra",
- "backtrace",
  "chrono",
  "futures",
  "fxhash",
@@ -1211,7 +1211,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "shared",
  "sqlx",
  "thiserror 2.0.7",
@@ -2102,12 +2101,14 @@ name = "shared"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "backtrace",
  "chrono",
  "derivative",
  "futures",
  "fxhash",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "thiserror 2.0.7",
  "tokio",

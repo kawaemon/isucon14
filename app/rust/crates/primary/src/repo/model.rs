@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use sqlx::{MySql, Pool};
 
-use crate::repo::dl::DlRwLock as RwLock;
+use shared::DlRwLock as RwLock;
 
 use super::Repository;
 
