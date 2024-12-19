@@ -6,7 +6,6 @@ use axum::response::sse::Event;
 use axum::response::{IntoResponse, Sse};
 use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
-use futures::Stream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Coordinate, Id, Owner, Ride, RideStatusEnum, User};

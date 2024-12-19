@@ -6,7 +6,6 @@ use axum::response::sse::Event;
 use axum::response::{IntoResponse, Sse};
 use axum_extra::extract::CookieJar;
 use chrono::Utc;
-use futures::Stream;
 use shared::models::{calc_sale, FARE_PER_DISTANCE, INITIAL_FARE};
 use shared::ws::pgw::PgwRequest;
 use tokio_stream::StreamExt;

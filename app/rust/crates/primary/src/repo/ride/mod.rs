@@ -628,8 +628,12 @@ impl Repository {
             };
             let mut chair_speed = HashMap::default();
             for chair in free_chairs.iter() {
-                let c = self.chair_get_by_id(chair).await.unwrap().unwrap();
-                let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
+                let (_, model) = self
+                    .chair_get_name_and_model_by_id(chair)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let speed: i32 = *chair_speed_cache.get(&model).unwrap();
                 chair_speed.insert(chair.clone(), speed);
             }
 
