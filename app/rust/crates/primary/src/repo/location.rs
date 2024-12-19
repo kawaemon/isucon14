@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use shared::{
-    models::RideStatusEnum,
+    models::{Ride, RideStatusEnum},
     ws::{
         coordinate::{CoordNotification, CoordNotificationResponse, CoordRequest, CoordResponse},
         WsSystem, WsSystemHandler,
@@ -32,14 +32,16 @@ impl WsSystemHandler for Handler {
 
     async fn handle(&self, req: CoordNotification) -> Self::NotificationResponse {
         match req {
-            CoordNotification::AtDestination { chair, status } => {
-                let repo = self.repo.read().await;
+            CoordNotification::AtDestination {
+                ride,
+                chair: _,
+                status,
+            } => {
+                let repo = self.repo.read_notrack().await;
                 let Some(s) = repo.as_ref() else {
                     panic!("repository post init not called");
                 };
-                // 向こうから送ってもらうようにすればもっと楽になる
-                let (ride, _) = s.rides_get_assigned(&chair).await.unwrap().unwrap();
-                s.ride_status_update(&ride.id, status).await.unwrap();
+                s.ride_status_update(&ride, status).await.unwrap();
                 CoordNotificationResponse::AtDestination
             }
         }
@@ -99,6 +101,7 @@ impl Repository {
     pub async fn chair_movement_register(
         &self,
         chair: &Id<Chair>,
+        ride: &Id<Ride>,
         target: Coordinate,
         next: RideStatusEnum,
     ) {
@@ -106,6 +109,7 @@ impl Repository {
             .chair_location_cache
             .ws
             .enqueue(CoordRequest::ChairMovement {
+                ride: ride.clone(),
                 chair: chair.clone(),
                 dest: target,
                 new_state: next,

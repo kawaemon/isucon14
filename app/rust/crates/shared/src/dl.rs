@@ -17,6 +17,9 @@ impl<T> DlRwLock<T> {
     pub async fn read(&self) -> impl Deref<Target = T> + '_ {
         ReadTracked::new(with_timeout(self.0.read()).await)
     }
+    pub async fn read_notrack(&self) -> impl Deref<Target = T> + '_ {
+        with_timeout(self.0.read()).await
+    }
     pub async fn write(&self) -> impl DerefMut<Target = T> + '_ {
         with_timeout(self.0.write()).await
     }

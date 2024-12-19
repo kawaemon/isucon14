@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 
-use crate::models::{Chair, Coordinate, RideStatusEnum};
+use crate::models::{Chair, Coordinate, Ride, RideStatusEnum};
 
 use super::*;
 
@@ -12,6 +12,7 @@ pub enum CoordRequest {
         token: String,
     },
     ChairMovement {
+        ride: Id<Ride>,
         chair: Id<Chair>,
         dest: Coordinate,
         new_state: RideStatusEnum,
@@ -38,6 +39,7 @@ pub struct CoordResponseGet {
 pub enum CoordNotification {
     AtDestination {
         chair: Id<Chair>,
+        ride: Id<Ride>,
         status: RideStatusEnum,
     },
 }

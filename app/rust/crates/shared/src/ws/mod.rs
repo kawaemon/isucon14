@@ -200,7 +200,7 @@ impl<H: WsSystemHandler> WsSystem<H> {
             let sleep = tokio::time::sleep(Duration::from_millis(500));
             tokio::select! {
                 _ = sleep => {
-                    tracing::warn!("no ws response for 500ms: {msg}");
+                    // tracing::warn!("no ws response for 500ms: {msg}");
                 }
                 msg = &mut rx => {
                     return msg.unwrap();

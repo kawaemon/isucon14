@@ -66,20 +66,21 @@ impl ChairRepository {
     pub async fn chair_set_movement(
         &self,
         id: &Id<Chair>,
+        ride: Id<Ride>,
         coord: Coordinate,
         state: RideStatusEnum,
     ) {
         let cache = self.locations.read().await;
         let entry = cache.get(id).unwrap();
         let mut entry = entry.0.write().await;
-        entry.set_movement(coord, state);
+        entry.set_movement(ride, coord, state);
     }
 
     pub async fn chair_location_update(
         &self,
         chair: &Id<Chair>,
         coord: Coordinate,
-    ) -> (DateTime<Utc>, Option<RideStatusEnum>) {
+    ) -> (DateTime<Utc>, Option<(Id<Ride>, RideStatusEnum)>) {
         let now = Utc::now();
 
         self.deferred
@@ -138,7 +139,7 @@ impl Entry {
 
 #[derive(Debug)]
 struct EntryInner {
-    destination: Option<(Coordinate, RideStatusEnum)>,
+    destination: Option<(Id<Ride>, Coordinate, RideStatusEnum)>,
     latest_coord: Coordinate,
     updated_at: DateTime<Utc>,
     total: i64,
@@ -153,17 +154,21 @@ impl EntryInner {
             total: 0,
         }
     }
-    fn set_movement(&mut self, coord: Coordinate, new_state: RideStatusEnum) {
-        self.destination = Some((coord, new_state));
+    fn set_movement(&mut self, ride: Id<Ride>, coord: Coordinate, new_state: RideStatusEnum) {
+        self.destination = Some((ride, coord, new_state));
     }
-    fn update(&mut self, coord: Coordinate, at: DateTime<Utc>) -> Option<RideStatusEnum> {
+    fn update(
+        &mut self,
+        coord: Coordinate,
+        at: DateTime<Utc>,
+    ) -> Option<(Id<Ride>, RideStatusEnum)> {
         self.total += self.latest_coord.distance(coord) as i64;
         self.latest_coord = coord;
         self.updated_at = at;
-        if let Some(&(dest, status)) = self.destination.as_ref() {
-            if dest == coord {
-                self.destination = None;
-                return Some(status);
+        if let Some((_ride, dest, _status)) = self.destination.as_ref() {
+            if *dest == coord {
+                let (ride, _dest, status) = self.destination.take().unwrap();
+                return Some((ride, status));
             }
         }
         None
@@ -228,13 +233,17 @@ impl ChairLocationCacheInit {
                 match status.status {
                     RideStatusEnum::Matching => {}
                     RideStatusEnum::Enroute => {
-                        e.set_movement(ride.pickup(), RideStatusEnum::Pickup);
+                        e.set_movement(ride.id.clone(), ride.pickup(), RideStatusEnum::Pickup);
                     }
                     RideStatusEnum::Pickup => {
                         e.destination = None;
                     }
                     RideStatusEnum::Carrying => {
-                        e.set_movement(ride.destination(), RideStatusEnum::Arrived);
+                        e.set_movement(
+                            ride.id.clone(),
+                            ride.destination(),
+                            RideStatusEnum::Arrived,
+                        );
                     }
                     RideStatusEnum::Arrived => {
                         e.destination = None;

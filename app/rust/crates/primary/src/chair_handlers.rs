@@ -161,7 +161,7 @@ async fn chair_get_notification_inner(
             let chair_id = chair_id.clone();
             let repo = repo.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                tokio::time::sleep(Duration::from_millis(150)).await;
                 repo.ride_cache
                     .on_chair_status_change(&chair_id, false)
                     .await;

@@ -64,14 +64,15 @@ async fn pub_coordinate(
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
     let (created_at, new_status) = state.repo.chair_location_update(&chair, req).await;
 
-    if let Some(status) = new_status {
+    if let Some((ride, status)) = new_status {
         // しゃーない、まあコネクション貼るのは最初だけなので問題ないはず
-        let tx = state.tx.read().await;
+        let tx = state.tx.read_notrack().await;
         let Some(tx) = tx.as_ref() else {
             panic!("no connection to primary server");
         };
         let n = CoordNotification::AtDestination {
             chair: chair.clone(),
+            ride,
             status,
         };
         let res = tx.enqueue(n).await;
@@ -150,11 +151,14 @@ impl WsSystemHandler for SystemHandler {
             }
 
             CoordRequest::ChairMovement {
+                ride,
                 chair,
                 dest,
                 new_state,
             } => {
-                self.repo.chair_set_movement(&chair, dest, new_state).await;
+                self.repo
+                    .chair_set_movement(&chair, ride, dest, new_state)
+                    .await;
                 CoordResponse::ChairMovement
             }
 

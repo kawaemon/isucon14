@@ -86,7 +86,7 @@ impl Repository {
             match status {
                 RideStatusEnum::Matching => {}
                 RideStatusEnum::Enroute => {
-                    self.chair_movement_register(&c, ride.pickup, RideStatusEnum::Pickup)
+                    self.chair_movement_register(&c, &ride.id, ride.pickup, RideStatusEnum::Pickup)
                         .await;
                     movement_cache.insert(c.clone(), Arc::clone(&ride));
                 }
@@ -94,8 +94,13 @@ impl Repository {
                     movement_cache.remove(&c).unwrap();
                 }
                 RideStatusEnum::Carrying => {
-                    self.chair_movement_register(&c, ride.destination, RideStatusEnum::Arrived)
-                        .await;
+                    self.chair_movement_register(
+                        &c,
+                        &ride.id,
+                        ride.destination,
+                        RideStatusEnum::Arrived,
+                    )
+                    .await;
                     movement_cache.insert(c.clone(), Arc::clone(&ride));
                 }
                 RideStatusEnum::Arrived => {
