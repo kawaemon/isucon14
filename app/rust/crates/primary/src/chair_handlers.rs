@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

@@ -326,11 +326,11 @@ impl Repository {
         let coords = self.chair_location_get_latest(&ls).await.unwrap();
         for (chair, chair_coord) in coords.into_iter() {
             if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id(&chair).await?.unwrap();
+                let (name, model) = self.chair_get_name_and_model_by_id(&chair).await?.unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
-                    id: chair.id,
-                    name: chair.name,
-                    model: chair.model,
+                    id: chair,
+                    name,
+                    model,
                     current_coordinate: chair_coord,
                 });
             }
