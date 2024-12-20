@@ -66,7 +66,7 @@ impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
         tokio::spawn(async move {
             loop {
                 Self::commit(&set, &pool).await;
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                tokio::time::sleep(Duration::from_millis(2000)).await;
             }
         });
     }

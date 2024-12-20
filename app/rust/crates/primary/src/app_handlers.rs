@@ -432,11 +432,6 @@ async fn app_get_notification(
             let body = body.unwrap();
             let state = state.clone();
             let user = user.clone();
-            if let Some(b) = body.as_ref() {
-                tracing::debug!("sending sse notification: {:?}={}", b.ride_id, b.status);
-            } else {
-                tracing::debug!("sending sse notification: None");
-            }
             async move {
                 let s = app_get_notification_inner(&state, &user.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
@@ -483,6 +478,8 @@ async fn app_get_notification_inner(
         let chair: Chair = repo.chair_get_by_id(&chair_id).await?.unwrap();
         let stats = repo.chair_get_stats(&chair.id).await?;
 
+        // tracing::info!("app notifying {chair_id:?} => {status:?}");
+
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
             name: chair.name,
@@ -524,9 +521,17 @@ async fn app_get_nearby_chairs(
         latitude: query.latitude,
         longitude: query.longitude,
     };
+    let chairs = repo.chair_huifhiubher(coordinate, distance).await?;
+
+    // let chairs = chairs
+    //     .iter()
+    //     .map(|x| x.id.0.clone())
+    //     .collect::<Vec<_>>()
+    //     .join(", ");
+    // tracing::info!("nearby: {chairs}");
 
     Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs: repo.chair_huifhiubher(coordinate, distance).await?,
+        chairs,
         retrieved_at: Utc::now().timestamp(),
     }))
 }

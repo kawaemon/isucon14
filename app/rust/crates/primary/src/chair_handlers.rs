@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -148,7 +148,7 @@ async fn chair_get_notification(
 }
 
 async fn chair_get_notification_inner(
-    AppState { repo, config, .. }: &AppState,
+    AppState { repo, .. }: &AppState,
     chair_id: &Id<Chair>,
     body: Option<NotificationBody>,
 ) -> Result<Option<ChairGetNotificationResponseData>, Error> {
@@ -163,17 +163,21 @@ async fn chair_get_notification_inner(
         .unwrap();
 
     if body.status == RideStatusEnum::Completed {
-        let config = config.clone();
         let chair_id = chair_id.clone();
         let repo = repo.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(config.chair_notification_delay as _)).await;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            // let b = Instant::now();
             repo.ride_cache
                 .on_chair_became_free(&chair_id, &name, &model)
                 .await;
             repo.push_free_chair(&chair_id).await;
+            // let e = b.elapsed().as_millis();
+            // tracing::info!("setting free chair: {chair_id:?} in {e}ms");
         });
     }
+
+    // tracing::info!("chair notifying {chair_id:?} => {:?}", body.status);
 
     Ok(Some(ChairGetNotificationResponseData {
         ride_id: ride.id,

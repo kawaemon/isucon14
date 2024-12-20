@@ -65,15 +65,15 @@ async fn pub_coordinate(
     let (created_at, new_status) = state.repo.chair_location_update(&chair, req).await;
 
     if let Some((ride, status)) = new_status {
-        // しゃーない、まあコネクション貼るのは最初だけなので問題ないはず
-        let tx = state.tx.read_notrack().await;
-        let Some(tx) = tx.as_ref() else {
-            panic!("no connection to primary server");
-        };
         let n = CoordNotification::AtDestination {
             chair: chair.clone(),
             ride,
             status,
+        };
+        // しゃーない、まあコネクション貼るのは最初だけなので問題ないはず
+        let tx = state.tx.read_notrack().await;
+        let Some(tx) = tx.as_ref() else {
+            panic!("no connection to primary server");
         };
         let res = tx.enqueue(n).await;
         assert!(matches!(res, CoordNotificationResponse::AtDestination));
