@@ -10,10 +10,13 @@ use axum::{
 use futures_util::StreamExt;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
-use shared::ws::{
-    from_axum,
-    pgw::{PgwRequest, PgwResponse},
-    WsSystem, WsSystemHandler,
+use shared::{
+    models::Id,
+    ws::{
+        from_axum,
+        pgw::{PgwRequest, PgwResponse},
+        WsSystem, WsSystemHandler,
+    },
 };
 use tokio::sync::Semaphore;
 
@@ -151,6 +154,7 @@ impl From<PgwRequest> for Work {
 impl Work {
     async fn doit(&self, AppState { pgw: state, .. }: &AppState) {
         let _ = state.semaphore.acquire().await.unwrap();
+        let id = Id::<()>::new();
         let begin = Instant::now();
         let url = format!("{}/payments", &self.url);
 
@@ -163,7 +167,12 @@ impl Work {
             let req = Req {
                 amount: self.amount,
             };
-            let req = state.client.post(&url).bearer_auth(&self.token).json(&req);
+            let req = state
+                .client
+                .post(&url)
+                .bearer_auth(&self.token)
+                .header("Idempotency-Key", &id.0)
+                .json(&req);
             let Ok(res) = req.send().await else {
                 continue;
             };
@@ -175,32 +184,8 @@ impl Work {
                 state.stats.on_end(begin.elapsed());
                 return;
             }
-
-            // エラーが返ってきても成功している場合があるので、社内決済マイクロサービスに問い合わせ
-            let Ok(r) = state.client.get(&url).bearer_auth(&self.token).send().await else {
-                continue;
-            };
-
-            let status = r.status();
-            state.stats.on_req(status);
-
-            if status != reqwest::StatusCode::OK {
-                continue;
-            }
-
-            #[derive(Deserialize)]
-            struct Res {}
-            let Ok(r): Result<Vec<Res>, _> = r.json().await else {
-                continue;
-            };
-            let payment_len = r.len();
-
-            if self.desired_count == payment_len {
-                state.stats.on_end(begin.elapsed());
-                return;
-            }
         }
 
-        panic!("failed, {self:#?}");
+        panic!("pgw task failed: {self:#?}");
     }
 }
