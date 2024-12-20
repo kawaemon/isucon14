@@ -1,7 +1,7 @@
 use reqwest::StatusCode;
 use tokio::sync::Semaphore;
 
-use crate::Error;
+use crate::{models::Id, Error};
 use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
@@ -9,6 +9,8 @@ use std::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum PaymentGatewayError {
+    #[error("invalid status code")]
+    Status,
     #[error("reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("unexpected number of payments: {ride_count} != {payment_count}.")]
@@ -93,43 +95,17 @@ impl PaymentGatewayRestricter {
     }
 }
 
-async fn get_payment_history(
-    pgw: &PaymentGatewayRestricter,
-    client: &reqwest::Client,
-    gw: &str,
-    token: &str,
-) -> Result<usize, Error> {
-    let r = client
-        .get(format!("{gw}/payments"))
-        .bearer_auth(token)
-        .send()
-        .await
-        .map_err(PaymentGatewayError::Reqwest)?;
-
-    let status = r.status();
-    pgw.on_req(status);
-
-    if status != reqwest::StatusCode::OK {
-        return Err(PaymentGatewayError::GetPayment(r.status()).into());
-    }
-    let r: Vec<PaymentGatewayGetPaymentsResponseOne> =
-        r.json().await.map_err(PaymentGatewayError::Reqwest)?;
-    Ok(r.len())
-}
-
 pub async fn request_payment_gateway_post_payment(
     client: &reqwest::Client,
     pgw: &PaymentGatewayRestricter,
     payment_gateway_url: &str,
     token: &str,
     param: &PaymentGatewayPostPaymentRequest,
-    desired_ride_count: usize,
 ) -> Result<(), Error> {
-    // 失敗したらとりあえずリトライ
-    // FIXME: 社内決済マイクロサービスのインフラに異常が発生していて、同時にたくさんリクエストすると変なことになる可能性あり
-
     let _permit = pgw.sema.acquire().await.unwrap();
     tracing::debug!("permit acquired; remain = {}", pgw.sema.available_permits());
+
+    let key = Id::<()>::new();
 
     pgw.on_begin();
 
@@ -139,6 +115,7 @@ pub async fn request_payment_gateway_post_payment(
             let res = client
                 .post(format!("{payment_gateway_url}/payments"))
                 .bearer_auth(token)
+                .header("Idempotency-Key", &key.0)
                 .json(param)
                 .send()
                 .await
@@ -148,17 +125,7 @@ pub async fn request_payment_gateway_post_payment(
             pgw.on_req(status);
 
             if status != reqwest::StatusCode::NO_CONTENT {
-                // エラーが返ってきても成功している場合があるので、社内決済マイクロサービスに問い合わせ
-                let payment_len =
-                    get_payment_history(pgw, client, payment_gateway_url, token).await?;
-
-                if desired_ride_count != payment_len {
-                    return Err(PaymentGatewayError::UnexpectedNumberOfPayments {
-                        ride_count: desired_ride_count,
-                        payment_count: payment_len,
-                    }
-                    .into());
-                }
+                return Err(PaymentGatewayError::Status)?;
             }
 
             Ok(())
