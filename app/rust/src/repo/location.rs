@@ -1,4 +1,7 @@
-use crate::FxHashMap as HashMap;
+use crate::{
+    models::{Ride, RideStatusEnum},
+    FxHashMap as HashMap,
+};
 use std::sync::Arc;
 
 use crate::dl::DlRwLock as RwLock;
@@ -51,8 +54,25 @@ impl Entry {
     fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
         Self(RwLock::new(EntryInner::new(coord, at)))
     }
-    async fn update(&self, coord: Coordinate, at: DateTime<Utc>) {
-        self.0.write().await.update(coord, at);
+    async fn update(
+        &self,
+        coord: Coordinate,
+        at: DateTime<Utc>,
+    ) -> Option<(Id<Ride>, RideStatusEnum)> {
+        self.0.write().await.update(coord, at)
+    }
+    async fn set_movement(&self, coord: Coordinate, next: RideStatusEnum, ride: Id<Ride>) {
+        self.0.write().await.set_movement(coord, next, ride);
+    }
+    async fn latest(&self) -> Coordinate {
+        self.0.read().await.latest_coord
+    }
+    async fn get_total(&self) -> (i64, DateTime<Utc>) {
+        let e = self.0.read().await;
+        (e.total, e.updated_at)
+    }
+    async fn clear_movement(&self) {
+        self.0.write().await.clear_movement();
     }
 }
 
@@ -61,6 +81,7 @@ struct EntryInner {
     latest_coord: Coordinate,
     updated_at: DateTime<Utc>,
     total: i64,
+    movement: Option<(Coordinate, RideStatusEnum /* next */, Id<Ride>)>,
 }
 
 impl EntryInner {
@@ -69,12 +90,31 @@ impl EntryInner {
             latest_coord: coord,
             updated_at: at,
             total: 0,
+            movement: None,
         }
     }
-    fn update(&mut self, coord: Coordinate, at: DateTime<Utc>) {
+    fn update(
+        &mut self,
+        coord: Coordinate,
+        at: DateTime<Utc>,
+    ) -> Option<(Id<Ride>, RideStatusEnum)> {
         self.total += self.latest_coord.distance(coord) as i64;
         self.latest_coord = coord;
         self.updated_at = at;
+
+        if self.movement.as_ref().is_some_and(|x| x.0 == coord) {
+            let (_c, r, i) = self.movement.take().unwrap();
+            return Some((i, r));
+        }
+
+        None
+    }
+    fn set_movement(&mut self, coord: Coordinate, next: RideStatusEnum, ride: Id<Ride>) {
+        assert!(self.movement.is_none());
+        self.movement = Some((coord, next, ride));
+    }
+    fn clear_movement(&mut self) {
+        self.movement = None;
     }
 }
 
@@ -94,6 +134,58 @@ impl ChairLocationCacheInit {
                     loc.chair_id.clone(),
                     Entry::new(loc.coord(), loc.created_at),
                 );
+            }
+        }
+
+        init.rides.sort_unstable_by_key(|x| x.created_at);
+        init.ride_statuses.sort_unstable_by_key(|x| x.created_at);
+
+        let mut statuses = HashMap::default();
+        for status in &init.ride_statuses {
+            statuses
+                .entry(status.ride_id.clone())
+                .or_insert_with(Vec::new)
+                .push(status.clone());
+        }
+
+        for ride in &init.rides {
+            let Some(chair_id) = ride.chair_id.as_ref() else {
+                continue;
+            };
+            for status in statuses.get(&ride.id).unwrap() {
+                match status.status {
+                    RideStatusEnum::Matching => {}
+                    RideStatusEnum::Enroute => {
+                        let loc_entry = res.get_mut(chair_id).unwrap();
+                        loc_entry
+                            .set_movement(
+                                ride.pickup_coord(),
+                                RideStatusEnum::Pickup,
+                                ride.id.clone(),
+                            )
+                            .await;
+                    }
+                    RideStatusEnum::Pickup => {
+                        let loc_entry = res.get_mut(chair_id).unwrap();
+                        loc_entry.clear_movement().await;
+                    }
+                    RideStatusEnum::Carrying => {
+                        let loc_entry = res.get_mut(chair_id).unwrap();
+                        loc_entry
+                            .set_movement(
+                                ride.destination_coord(),
+                                RideStatusEnum::Arrived,
+                                ride.id.clone(),
+                            )
+                            .await;
+                    }
+                    RideStatusEnum::Arrived => {
+                        let loc_entry = res.get_mut(chair_id).unwrap();
+                        loc_entry.clear_movement().await;
+                    }
+                    RideStatusEnum::Completed => {}
+                    RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
+                }
             }
         }
 
@@ -130,8 +222,7 @@ impl Repository {
         let Some(cache) = cache.get(id) else {
             return Ok(None);
         };
-        let cache = cache.0.read().await;
-        Ok(Some(cache.latest_coord))
+        Ok(Some(cache.latest().await))
     }
 
     pub async fn chair_total_distance(
@@ -142,8 +233,19 @@ impl Repository {
         let Some(cache) = cache.get(chair_id) else {
             return Ok(None);
         };
-        let cache = cache.0.read().await;
-        Ok(Some((cache.total, cache.updated_at)))
+        Ok(Some(cache.get_total().await))
+    }
+
+    pub async fn chair_set_movement(
+        &self,
+        chair_id: &Id<Chair>,
+        coord: Coordinate,
+        next: RideStatusEnum,
+        ride: &Id<Ride>,
+    ) {
+        let cache = self.chair_location_cache.cache.read().await;
+        let cache = cache.get(chair_id).unwrap();
+        cache.set_movement(coord, next, ride.clone()).await;
     }
 
     pub async fn chair_location_update(
@@ -165,10 +267,18 @@ impl Repository {
         self.chair_location_cache.deferred.insert(c).await;
 
         {
-            let cache = self.chair_location_cache.cache.read().await;
-            if let Some(c) = cache.get(chair_id) {
-                c.update(coord, created_at).await;
-                return Ok(created_at);
+            {
+                let cache = self.chair_location_cache.cache.read().await;
+                if let Some(c) = cache.get(chair_id) {
+                    let update = c.update(coord, created_at).await;
+                    drop(cache);
+
+                    if let Some((ride, status)) = update {
+                        self.ride_status_update(None, &ride, status).await.unwrap();
+                    }
+
+                    return Ok(created_at);
+                }
             }
         }
 

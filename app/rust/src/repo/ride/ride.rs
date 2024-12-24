@@ -38,20 +38,6 @@ impl Repository {
         Ok(false)
     }
 
-    pub async fn rides_get_assigned(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        chair_id: &Id<Chair>,
-    ) -> Result<Option<(Ride, RideStatusEnum)>> {
-        let cache = self.ride_cache.chair_movement_cache.read().await;
-        let Some(m) = cache.get(chair_id) else {
-            return Ok(None);
-        };
-        let ride = m.ride().await;
-        let status = *m.latest_status.read().await;
-        Ok(Some((ride, status)))
-    }
-
     pub async fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
         let mut res = vec![];
         let cache = self.ride_cache.user_rides.read().await;

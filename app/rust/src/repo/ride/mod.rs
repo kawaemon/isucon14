@@ -34,13 +34,13 @@ pub struct RideCacheInner {
     free_chairs_lv1: RwLock<HashSet<Id<Chair>>>,
     free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
-    chair_movement_cache: RwLock<HashMap<Id<Chair>, Arc<RideEntry>>>,
-
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 
     ride_deferred: UpdatableDeferred<RideDeferred>,
     ride_status_deferred: UpdatableDeferred<RideStatusDeferrable>,
+
+    matching_lock: Mutex<()>,
 }
 
 struct RideCacheInit {
@@ -50,8 +50,6 @@ struct RideCacheInit {
     waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
     free_chairs_lv1: HashSet<Id<Chair>>,
     free_chairs_lv2: HashSet<Id<Chair>>,
-
-    chair_movement_cache: HashMap<Id<Chair>, Arc<RideEntry>>,
 
     user_notification: HashMap<Id<User>, NotificationQueue>,
     chair_notification: HashMap<Id<Chair>, NotificationQueue>,
@@ -245,7 +243,6 @@ impl RideCacheInit {
             waiting_rides,
             free_chairs_lv1,
             free_chairs_lv2,
-            chair_movement_cache,
             user_rides,
         }
     }
@@ -261,10 +258,10 @@ impl Repository {
             waiting_rides: Mutex::new(init.waiting_rides),
             free_chairs_lv1: RwLock::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
-            chair_movement_cache: RwLock::new(init.chair_movement_cache),
             user_rides: RwLock::new(init.user_rides),
             ride_deferred: UpdatableDeferred::new(pool),
             ride_status_deferred: UpdatableDeferred::new(pool),
+            matching_lock: Mutex::new(()),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
@@ -278,9 +275,9 @@ impl Repository {
             waiting_rides,
             free_chairs_lv1,
             free_chairs_lv2,
-            chair_movement_cache,
             ride_deferred: _,
             ride_status_deferred: _,
+            matching_lock: _,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
@@ -289,7 +286,6 @@ impl Repository {
         let mut f1 = free_chairs_lv1.write().await;
         let mut f2 = free_chairs_lv2.lock().await;
         let mut w = waiting_rides.lock().await;
-        let mut cm = chair_movement_cache.write().await;
         let mut ur = user_rides.write().await;
 
         *r = init.ride_cache;
@@ -298,7 +294,6 @@ impl Repository {
         *f1 = init.free_chairs_lv1;
         *f2 = init.free_chairs_lv2;
         *w = init.waiting_rides;
-        *cm = init.chair_movement_cache;
         *ur = init.user_rides;
     }
 }
@@ -316,7 +311,7 @@ impl Repository {
                 continue;
             };
             if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id(None, chair).await?.unwrap();
+                let chair = self.chair_get_by_id_effortless(None, chair).await?.unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -598,6 +593,8 @@ impl RideEntry {
 impl Repository {
     pub async fn do_matching(&self) {
         let (pairs, waiting, free) = {
+            let _lock = self.ride_cache.matching_lock.lock().await;
+
             let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
             let waiting_rides_len = waiting_rides.len();
             let mut free_chairs = self.ride_cache.free_chairs_lv2.lock().await;
@@ -612,7 +609,11 @@ impl Repository {
             }
             let mut chair_speed = HashMap::default();
             for chair in free_chairs.iter() {
-                let c = self.chair_get_by_id(None, chair).await.unwrap().unwrap();
+                let c = self
+                    .chair_get_by_id_effortless(None, chair)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
                 chair_speed.insert(chair.clone(), speed);
             }

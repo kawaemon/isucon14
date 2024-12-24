@@ -2,7 +2,6 @@
 
 pub mod app_handlers;
 pub mod chair_handlers;
-pub mod dl;
 pub mod internal_handlers;
 pub mod middlewares;
 pub mod models;
@@ -10,6 +9,7 @@ pub mod owner_handlers;
 pub mod payment_gateway;
 pub mod repo;
 pub mod speed;
+pub mod dl;
 
 use std::sync::{atomic::AtomicUsize, Arc};
 

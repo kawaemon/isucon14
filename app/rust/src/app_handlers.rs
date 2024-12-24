@@ -211,8 +211,8 @@ async fn app_get_rides(
         )
         .await?;
 
-        let chair: Chair = repo
-            .chair_get_by_id(None, ride.chair_id.as_ref().unwrap())
+        let chair = repo
+            .chair_get_by_id_effortless(None, ride.chair_id.as_ref().unwrap())
             .await?
             .unwrap();
         let owner: Owner = repo.owner_get_by_id(None, &chair.owner_id).await?.unwrap();
@@ -489,7 +489,10 @@ async fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair: Chair = repo.chair_get_by_id(None, &chair_id).await?.unwrap();
+        let chair = repo
+            .chair_get_by_id_effortless(None, &chair_id)
+            .await?
+            .unwrap();
         let stats = repo.chair_get_stats(None, &chair.id).await?;
 
         data.chair = Some(AppGetNotificationResponseChair {

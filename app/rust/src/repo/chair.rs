@@ -18,6 +18,16 @@ use super::{
 
 pub type ChairCache = Arc<ChairCacheInner>;
 
+#[derive(Debug, Clone)]
+pub struct EffortlessChair {
+    pub id: Id<Chair>,
+    pub owner_id: Id<Owner>,
+    pub name: String,
+    pub access_token: String,
+    pub model: String,
+    pub created_at: DateTime<Utc>,
+}
+
 type SharedChair = Arc<ChairEntry>;
 #[derive(Debug)]
 pub struct ChairEntry {
@@ -57,6 +67,16 @@ impl ChairEntry {
             is_active: *self.is_active.read().await,
             created_at: self.created_at,
             updated_at: *self.updated_at.read().await,
+        }
+    }
+    pub fn chair_effortless(&self) -> EffortlessChair {
+        EffortlessChair {
+            id: self.id.clone(),
+            owner_id: self.owner_id.clone(),
+            name: self.name.clone(),
+            access_token: self.access_token.clone(),
+            model: self.model.clone(),
+            created_at: self.created_at,
         }
     }
     pub async fn set_active(&self, is_active: bool, now: DateTime<Utc>) {
@@ -228,24 +248,24 @@ impl Repository {
 
 // chairs
 impl Repository {
-    pub async fn chair_get_by_id(
+    pub async fn chair_get_by_id_effortless(
         &self,
         _tx: impl Into<Option<&mut Tx>>,
         id: &Id<Chair>,
-    ) -> Result<Option<Chair>> {
+    ) -> Result<Option<EffortlessChair>> {
         let cache = self.chair_cache.by_id.read().await;
         let Some(entry) = cache.get(id) else {
             return Ok(None);
         };
-        Ok(Some(entry.chair().await))
+        Ok(Some(entry.chair_effortless()))
     }
 
-    pub async fn chair_get_by_access_token(&self, token: &str) -> Result<Option<Chair>> {
+    pub async fn chair_get_by_access_token(&self, token: &str) -> Result<Option<EffortlessChair>> {
         let cache = self.chair_cache.by_access_token.read().await;
         let Some(entry) = cache.get(token) else {
             return Ok(None);
         };
-        Ok(Some(entry.chair().await))
+        Ok(Some(entry.chair_effortless()))
     }
 
     pub async fn chair_get_by_owner(&self, owner: &Id<Owner>) -> Result<Vec<Chair>> {

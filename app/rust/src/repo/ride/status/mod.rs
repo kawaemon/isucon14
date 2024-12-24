@@ -87,21 +87,23 @@ impl Repository {
                 }
             }
 
-            let mut movement_cache = self.ride_cache.chair_movement_cache.write().await;
             match status {
                 RideStatusEnum::Matching => {}
                 RideStatusEnum::Enroute => {
-                    movement_cache.insert(c.clone(), Arc::clone(&ride));
+                    self.chair_set_movement(&c, ride.pickup, RideStatusEnum::Pickup, &ride.id)
+                        .await;
                 }
-                RideStatusEnum::Pickup => {
-                    movement_cache.remove(&c).unwrap();
-                }
+                RideStatusEnum::Pickup => {}
                 RideStatusEnum::Carrying => {
-                    movement_cache.insert(c.clone(), Arc::clone(&ride));
+                    self.chair_set_movement(
+                        &c,
+                        ride.destination,
+                        RideStatusEnum::Arrived,
+                        &ride.id,
+                    )
+                    .await;
                 }
-                RideStatusEnum::Arrived => {
-                    movement_cache.remove(&c).unwrap();
-                }
+                RideStatusEnum::Arrived => {}
                 RideStatusEnum::Completed => {}
                 RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
             }

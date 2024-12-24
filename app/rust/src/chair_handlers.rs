@@ -10,6 +10,7 @@ use futures::Stream;
 use tokio_stream::StreamExt;
 
 use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, User};
+use crate::repo::chair::EffortlessChair;
 use crate::repo::ride::NotificationBody;
 use crate::{AppState, Coordinate, Error};
 
@@ -101,7 +102,7 @@ struct PostChairActivityRequest {
 
 async fn chair_post_activity(
     State(AppState { repo, .. }): State<AppState>,
-    axum::Extension(chair): axum::Extension<Chair>,
+    axum::Extension(chair): axum::Extension<EffortlessChair>,
     axum::Json(req): axum::Json<PostChairActivityRequest>,
 ) -> Result<StatusCode, Error> {
     repo.chair_update_is_active(&chair.id, req.is_active)
@@ -116,23 +117,10 @@ struct ChairPostCoordinateResponse {
 
 async fn chair_post_coordinate(
     State(AppState { repo, .. }): State<AppState>,
-    axum::Extension(chair): axum::Extension<Chair>,
+    axum::Extension(chair): axum::Extension<EffortlessChair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
     let created_at = repo.chair_location_update(None, &chair.id, req).await?;
-
-    if let Some((ride, status)) = repo.rides_get_assigned(None, &chair.id).await? {
-        if req == ride.pickup_coord() && status == RideStatusEnum::Enroute {
-            repo.ride_status_update(None, &ride.id, RideStatusEnum::Pickup)
-                .await?;
-        }
-
-        if req == ride.destination_coord() && status == RideStatusEnum::Carrying {
-            repo.ride_status_update(None, &ride.id, RideStatusEnum::Arrived)
-                .await?;
-        }
-    }
-
     Ok(axum::Json(ChairPostCoordinateResponse {
         recorded_at: created_at.timestamp_millis(),
     }))
@@ -155,7 +143,7 @@ struct ChairGetNotificationResponseData {
 
 async fn chair_get_notification(
     State(state): State<AppState>,
-    axum::Extension(chair): axum::Extension<Chair>,
+    axum::Extension(chair): axum::Extension<EffortlessChair>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
     let ts = state
         .repo
@@ -232,7 +220,7 @@ struct PostChairRidesRideIDStatusRequest {
 
 async fn chair_post_ride_status(
     State(AppState { repo, .. }): State<AppState>,
-    axum::Extension(chair): axum::Extension<Chair>,
+    axum::Extension(chair): axum::Extension<EffortlessChair>,
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
 ) -> Result<StatusCode, Error> {

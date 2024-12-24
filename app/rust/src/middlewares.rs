@@ -5,7 +5,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum_extra::extract::CookieJar;
 
-use crate::models::{Chair, Owner, User};
+use crate::models::{Owner, User};
+use crate::repo::chair::EffortlessChair;
 use crate::{AppState, Error};
 
 pub async fn log_slow_requests(
@@ -81,7 +82,8 @@ pub async fn chair_auth_middleware(
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(chair): Option<Chair> = repo.chair_get_by_access_token(access_token).await? else {
+    let Some(chair): Option<EffortlessChair> = repo.chair_get_by_access_token(access_token).await?
+    else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
