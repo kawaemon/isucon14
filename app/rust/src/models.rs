@@ -1,6 +1,7 @@
 use std::{marker::PhantomData, str::FromStr};
 
 use chrono::{DateTime, Utc};
+use derivative::Derivative;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
@@ -77,17 +78,15 @@ impl FromStr for RideStatusEnum {
     }
 }
 
+#[derive(Derivative)]
+#[derivative(
+    Debug(bound = ""),
+    Clone(bound = ""),
+    Hash(bound = ""),
+    PartialEq(bound = ""),
+    Eq(bound = "")
+)]
 pub struct Id<T>(pub String, PhantomData<fn() -> T>);
-impl<T> std::fmt::Debug for Id<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-impl<T> std::clone::Clone for Id<T> {
-    fn clone(&self) -> Self {
-        Id(self.0.clone(), PhantomData)
-    }
-}
 impl<T> serde::Serialize for Id<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
@@ -98,17 +97,6 @@ impl<'de, T> serde::Deserialize<'de> for Id<T> {
         Ok(Self(String::deserialize(deserializer)?, PhantomData))
     }
 }
-impl<T> std::hash::Hash for Id<T> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state);
-    }
-}
-impl<T> PartialEq<Id<T>> for Id<T> {
-    fn eq(&self, other: &Id<T>) -> bool {
-        self.0 == other.0
-    }
-}
-impl<T> Eq for Id<T> {}
 impl<'r, T> sqlx::Encode<'r, MySql> for Id<T> {
     fn encode_by_ref(
         &self,
@@ -120,7 +108,7 @@ impl<'r, T> sqlx::Encode<'r, MySql> for Id<T> {
 impl<'r, T> sqlx::Decode<'r, MySql> for Id<T> {
     fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
         let s = <String as sqlx::Decode<MySql>>::decode(value)?;
-        Ok(Id::from_str(s))
+        Ok(Id::from_string(s))
     }
 }
 impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
@@ -135,7 +123,7 @@ impl<T> Id<T> {
     pub fn new() -> Self {
         Id(ulid::Ulid::new().to_string(), PhantomData)
     }
-    pub fn from_str(id: impl Into<String>) -> Self {
+    pub fn from_string(id: impl Into<String>) -> Self {
         Self(id.into(), PhantomData)
     }
 }

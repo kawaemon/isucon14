@@ -47,6 +47,8 @@ impl PaymentGatewayRestricter {
             .parse()
             .unwrap();
 
+        tracing::info!("pgw concurrency = {conc}");
+
         let tries = Arc::new(AtomicUsize::new(0));
         let success = Arc::new(AtomicUsize::new(0));
         let failure = Arc::new(AtomicUsize::new(0));

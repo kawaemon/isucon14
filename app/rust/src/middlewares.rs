@@ -28,10 +28,7 @@ pub async fn log_slow_requests(
         path = "/api/app/rides/:id/evaluation";
     }
     let key = format!("{method} {path}");
-    let mut speed = speed.m.lock().await;
-    let entry = speed.entry(key).or_default();
-    entry.count += 1;
-    entry.total_duration += e;
+    speed.on_request(&key, e).await;
 
     Ok(res)
 }

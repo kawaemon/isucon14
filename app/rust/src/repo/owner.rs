@@ -1,7 +1,7 @@
 use crate::FxHashMap as HashMap;
 use std::sync::Arc;
 
-use crate::repo::dl::DlRwLock as RwLock;
+use crate::dl::DlRwLock as RwLock;
 use chrono::Utc;
 
 use crate::models::{Id, Owner};

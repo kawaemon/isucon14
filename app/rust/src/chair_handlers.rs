@@ -163,14 +163,18 @@ async fn chair_get_notification(
         .await
         .unwrap();
 
+    let probe = state.chair_notification_stat.on_create();
+
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
+            let _probe = &probe;
             let body = body.unwrap();
             let state = state.clone();
             let chair = chair.clone();
             async move {
                 let s = chair_get_notification_inner(&state, &chair.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
+                state.chair_notification_stat.on_write(&chair.id).await;
                 Ok(Event::default().data(s))
             }
         });

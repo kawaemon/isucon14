@@ -1,4 +1,4 @@
-use crate::repo::dl::DlRwLock as RwLock;
+use crate::dl::DlRwLock as RwLock;
 use sqlx::{MySql, Pool};
 use std::sync::Arc;
 

@@ -1,6 +1,6 @@
 use crate::app_handlers::AppGetNearbyChairsResponseChair;
-use crate::repo::dl::DlMutex as Mutex;
-use crate::repo::dl::DlRwLock as RwLock;
+use crate::dl::DlMutex as Mutex;
+use crate::dl::DlRwLock as RwLock;
 use crate::FxHashMap as HashMap;
 use crate::FxHashSet as HashSet;
 use chrono::{DateTime, Utc};

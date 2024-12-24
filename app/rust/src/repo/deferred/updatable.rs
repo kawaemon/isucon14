@@ -116,6 +116,6 @@ impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
         tracing::debug!(
             "{name}: {inserts_len} inserts and {updates_count_old}=>{updates_count_new} updates",
         );
-        tracing::info!("{name}: prep={summarize_took}ms, inserts={inserts_took}ms, updates={updates_took}ms, commit={commit_took}ms");
+        tracing::debug!("{name}: prep={summarize_took}ms, inserts={inserts_took}ms, updates={updates_took}ms, commit={commit_took}ms");
     }
 }

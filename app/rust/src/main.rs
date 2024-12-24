@@ -1,16 +1,14 @@
 use axum::extract::State;
 use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
-use isuride::FxHashMap as HashMap;
-use isuride::SpeedStatictics;
+use isuride::speed::SpeedStatistics;
+use isuride::NotificationStatistics;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
-use std::cmp::Reverse;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,28 +52,7 @@ async fn main() -> anyhow::Result<()> {
 
     let repo = Arc::new(Repository::new(&pool).await);
     let pgw = PaymentGatewayRestricter::new();
-    let speed = SpeedStatictics {
-        m: Arc::new(Mutex::new(HashMap::default())),
-    };
-    {
-        let speed = speed.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-
-                let speed = { std::mem::take(&mut *speed.m.lock().await) };
-
-                let mut speed = speed.into_iter().collect::<Vec<_>>();
-                speed.sort_unstable_by_key(|(_p, e)| {
-                    Reverse(e.total_duration.as_millis() / e.count as u128)
-                });
-                for (path, e) in speed {
-                    let avg = e.total_duration.as_millis() / e.count as u128;
-                    tracing::info!("{path:50} {:6} requests took {:4}ms avg", e.count, avg);
-                }
-            }
-        });
-    }
+    let speed = SpeedStatistics::new();
     let client = reqwest::Client::builder()
         .tcp_keepalive(Duration::from_secs(10))
         .build()
@@ -87,6 +64,8 @@ async fn main() -> anyhow::Result<()> {
         pgw,
         speed,
         client,
+        chair_notification_stat: NotificationStatistics::new(),
+        user_notification_stat: NotificationStatistics::new(),
     };
 
     spawn_matching_thread(app_state.clone());

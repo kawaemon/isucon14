@@ -93,6 +93,6 @@ impl<D: DeferrableSimple> SimpleDeferred<D> {
         let took = begin.elapsed().as_millis();
 
         let name = D::NAME;
-        tracing::info!("{name}: {inserts_len} inserts, prep={prep_took}ms, insert={took}ms");
+        tracing::debug!("{name}: {inserts_len} inserts, prep={prep_took}ms, insert={took}ms");
     }
 }

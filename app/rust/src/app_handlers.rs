@@ -383,7 +383,6 @@ async fn app_post_ride_evaluation(
         &payment_gateway_url,
         &payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
-        repo.rides_count_by_user(&ride.user_id).await?,
     )
     .await?;
 
@@ -441,19 +440,18 @@ async fn app_get_notification(
         .await
         .unwrap();
 
+    let probe = state.user_notification_stat.on_create();
+
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
+            let _probe = &probe;
             let body = body.unwrap();
             let state = state.clone();
             let user = user.clone();
-            if let Some(b) = body.as_ref() {
-                tracing::debug!("sending sse notification: {:?}={}", b.ride_id, b.status);
-            } else {
-                tracing::debug!("sending sse notification: None");
-            }
             async move {
                 let s = app_get_notification_inner(&state, &user.id, body).await?;
                 let s = serde_json::to_string(&s).unwrap();
+                state.user_notification_stat.on_write(&user.id).await;
                 Ok(Event::default().data(s))
             }
         });

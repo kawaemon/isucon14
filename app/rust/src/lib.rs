@@ -1,8 +1,24 @@
-use std::sync::Arc;
+#![allow(clippy::new_without_default)]
+
+pub mod app_handlers;
+pub mod chair_handlers;
+pub mod dl;
+pub mod internal_handlers;
+pub mod middlewares;
+pub mod models;
+pub mod owner_handlers;
+pub mod payment_gateway;
+pub mod repo;
+pub mod speed;
+
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use axum::{http::StatusCode, response::Response};
+use derivative::Derivative;
+use models::{Chair, Id, User};
 use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
+use speed::SpeedStatistics;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
@@ -14,18 +30,10 @@ pub struct AppState {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
     pub pgw: PaymentGatewayRestricter,
-    pub speed: SpeedStatictics,
+    pub speed: SpeedStatistics,
+    pub chair_notification_stat: NotificationStatistics<Chair>,
+    pub user_notification_stat: NotificationStatistics<User>,
     pub client: reqwest::Client,
-}
-
-#[derive(Debug, Clone)]
-pub struct SpeedStatictics {
-    pub m: Arc<Mutex<FxHashMap<String, SpeedStaticticsEntry>>>,
-}
-#[derive(Debug, Default)]
-pub struct SpeedStaticticsEntry {
-    pub total_duration: Duration,
-    pub count: i32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,11 +104,97 @@ pub fn calculate_fare(pickup: Coordinate, dest: Coordinate) -> i32 {
     INITIAL_FARE + metered_fare
 }
 
-pub mod app_handlers;
-pub mod chair_handlers;
-pub mod internal_handlers;
-pub mod middlewares;
-pub mod models;
-pub mod owner_handlers;
-pub mod payment_gateway;
-pub mod repo;
+#[derive(Debug)]
+struct WithDelta {
+    total: AtomicUsize,
+    new_con: AtomicUsize,
+    dis_con: AtomicUsize,
+}
+impl WithDelta {
+    pub fn new() -> Self {
+        let t = || AtomicUsize::new(0);
+        Self {
+            total: t(),
+            new_con: t(),
+            dis_con: t(),
+        }
+    }
+    pub fn increment(&self) {
+        self.total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.new_con
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn decrement(&self) {
+        self.total
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.dis_con
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn take(&self) -> (usize, usize, usize) {
+        let total = self.total.load(std::sync::atomic::Ordering::Relaxed);
+        let new_con = self.new_con.swap(0, std::sync::atomic::Ordering::Relaxed);
+        let dis_con = self.dis_con.swap(0, std::sync::atomic::Ordering::Relaxed);
+        (total, new_con, dis_con)
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""), Clone(bound = ""))]
+pub struct NotificationStatistics<T>(NotificationStatisticsInner<T>);
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""), Clone(bound = ""))]
+pub struct NotificationStatisticsInner<T> {
+    connections: Arc<WithDelta>,
+    writes: Arc<Mutex<FxHashSet<Id<T>>>>,
+}
+impl<T: 'static> NotificationStatistics<T> {
+    pub fn new() -> Self {
+        let inner = NotificationStatisticsInner {
+            connections: Arc::new(WithDelta::new()),
+            writes: Arc::new(Mutex::new(FxHashSet::default())),
+        };
+
+        tokio::spawn({
+            let inner = inner.clone();
+            async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(5000)).await;
+                    let (total, new, dis) = inner.connections.take();
+                    let writes = inner.writes.lock().await.drain().count();
+                    let tname = std::any::type_name::<T>();
+                    tracing::info!(
+                        "{tname} notifications: total={total} (writes: {writes}), +={new}, -={dis}"
+                    );
+                }
+            }
+        });
+
+        Self(inner)
+    }
+
+    #[must_use = "hold this until stream drops"]
+    pub fn on_create(&self) -> ConnectionProbe<T> {
+        ConnectionProbe::new(self.0.clone())
+    }
+
+    pub async fn on_write(&self, id: &Id<T>) {
+        self.0.writes.lock().await.insert(id.clone());
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Debug(bound = ""))]
+pub struct ConnectionProbe<T>(NotificationStatisticsInner<T>);
+impl<T> ConnectionProbe<T> {
+    fn new(inner: NotificationStatisticsInner<T>) -> Self {
+        inner.connections.increment();
+        Self(inner)
+    }
+}
+impl<T> Drop for ConnectionProbe<T> {
+    fn drop(&mut self) {
+        self.0.connections.decrement();
+    }
+}

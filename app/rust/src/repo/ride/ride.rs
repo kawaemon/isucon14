@@ -1,6 +1,6 @@
+use crate::dl::DlRwLock as RwLock;
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::deferred::DeferrableMayUpdated;
-use crate::repo::dl::DlRwLock as RwLock;
 use crate::repo::{Repository, Result, Tx};
 use crate::Coordinate;
 use crate::FxHashMap as HashMap;
