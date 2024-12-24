@@ -31,7 +31,7 @@ pub struct RideCacheInner {
     user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
-    free_chairs_lv1: Mutex<HashSet<Id<Chair>>>,
+    free_chairs_lv1: RwLock<HashSet<Id<Chair>>>,
     free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
     chair_movement_cache: RwLock<HashMap<Id<Chair>, Arc<RideEntry>>>,
@@ -259,7 +259,7 @@ impl Repository {
             chair_notification: RwLock::new(init.chair_notification),
             ride_cache: RwLock::new(init.ride_cache),
             waiting_rides: Mutex::new(init.waiting_rides),
-            free_chairs_lv1: Mutex::new(init.free_chairs_lv1),
+            free_chairs_lv1: RwLock::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             chair_movement_cache: RwLock::new(init.chair_movement_cache),
             user_rides: RwLock::new(init.user_rides),
@@ -286,7 +286,7 @@ impl Repository {
         let mut r = ride_cache.write().await;
         let mut u = user_notification.write().await;
         let mut c = chair_notification.write().await;
-        let mut f1 = free_chairs_lv1.lock().await;
+        let mut f1 = free_chairs_lv1.write().await;
         let mut f2 = free_chairs_lv2.lock().await;
         let mut w = waiting_rides.lock().await;
         let mut cm = chair_movement_cache.write().await;
@@ -309,7 +309,7 @@ impl Repository {
         coord: Coordinate,
         dist: i32,
     ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
-        let cache = self.ride_cache.free_chairs_lv1.lock().await;
+        let cache = self.ride_cache.free_chairs_lv1.read().await;
         let mut res = vec![];
         for chair in cache.iter() {
             let Some(chair_coord) = self.chair_location_get_latest(chair).await? else {
@@ -363,7 +363,7 @@ impl RideCacheInner {
             .insert(id.clone(), NotificationQueue::new());
     }
     pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
-        let mut cache = self.free_chairs_lv1.lock().await;
+        let mut cache = self.free_chairs_lv1.write().await;
         if on_duty {
             cache.remove(id);
         } else {
