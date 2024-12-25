@@ -4,6 +4,7 @@ use crate::dl::DlRwLock as RwLock;
 use crate::FxHashMap as HashMap;
 use crate::FxHashSet as HashSet;
 use chrono::{DateTime, Utc};
+use dashmap::DashSet;
 use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
@@ -31,7 +32,7 @@ pub struct RideCacheInner {
     user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
-    free_chairs_lv1: RwLock<HashSet<Id<Chair>>>,
+    free_chairs_lv1: RwLock<DashSet<Id<Chair>, fxhash::FxBuildHasher>>,
     free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
@@ -48,7 +49,7 @@ struct RideCacheInit {
     user_rides: HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>,
 
     waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
-    free_chairs_lv1: HashSet<Id<Chair>>,
+    free_chairs_lv1: DashSet<Id<Chair>, fxhash::FxBuildHasher>,
     free_chairs_lv2: HashSet<Id<Chair>>,
 
     user_notification: HashMap<Id<User>, NotificationQueue>,
@@ -190,7 +191,7 @@ impl RideCacheInit {
         //
         // free_chairs
         //
-        let mut free_chairs_lv1 = HashSet::default();
+        let free_chairs_lv1 = DashSet::default();
         let mut free_chairs_lv2 = HashSet::default();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
@@ -307,11 +308,14 @@ impl Repository {
         let cache = self.ride_cache.free_chairs_lv1.read().await;
         let mut res = vec![];
         for chair in cache.iter() {
-            let Some(chair_coord) = self.chair_location_get_latest(chair).await? else {
+            let Some(chair_coord) = self.chair_location_get_latest(&chair).await? else {
                 continue;
             };
             if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id_effortless(None, chair).await?.unwrap();
+                let chair = self
+                    .chair_get_by_id_effortless(None, &chair)
+                    .await?
+                    .unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -358,7 +362,7 @@ impl RideCacheInner {
             .insert(id.clone(), NotificationQueue::new());
     }
     pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
-        let mut cache = self.free_chairs_lv1.write().await;
+        let cache = self.free_chairs_lv1.read().await;
         if on_duty {
             cache.remove(id);
         } else {
