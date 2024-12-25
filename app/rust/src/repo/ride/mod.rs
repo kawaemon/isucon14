@@ -595,10 +595,16 @@ impl Repository {
         let (pairs, waiting, free) = {
             let _lock = self.ride_cache.matching_lock.lock().await;
 
-            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
-            let waiting_rides_len = waiting_rides.len();
-            let mut free_chairs = self.ride_cache.free_chairs_lv2.lock().await;
+            let mut free_chairs = {
+                let mut c = self.ride_cache.free_chairs_lv2.lock().await;
+                std::mem::take(&mut *c)
+            };
             let free_chairs_len = free_chairs.len();
+            let (waiting_rides, waiting_rides_len) = {
+                let mut l = self.ride_cache.waiting_rides.lock().await;
+                let r = 0..l.len().min(free_chairs_len);
+                (l.drain(r).collect::<Vec<_>>(), l.len())
+            };
             let chair_speed_cache = self.chair_model_cache.speed.read().await;
 
             // stupid
@@ -618,8 +624,6 @@ impl Repository {
                 chair_speed.insert(chair.clone(), speed);
             }
 
-            let matches = waiting_rides.len().min(free_chairs.len());
-
             struct Pair {
                 chair_id: Id<Chair>,
                 ride_id: Id<Ride>,
@@ -627,7 +631,7 @@ impl Repository {
             }
             let mut pairs = vec![];
 
-            for (ride, status_id) in waiting_rides.drain(0..matches) {
+            for (ride, status_id) in waiting_rides {
                 let best = free_chairs
                     .iter()
                     .min_by_key(|cid| {
@@ -648,6 +652,12 @@ impl Repository {
                     status_id,
                 });
             }
+
+            if !free_chairs.is_empty() {
+                let mut c = self.ride_cache.free_chairs_lv2.lock().await;
+                c.extend(free_chairs);
+            }
+
             (pairs, waiting_rides_len, free_chairs_len)
         };
 

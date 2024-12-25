@@ -81,7 +81,7 @@ static DL_TIMEOUT: LazyLock<Duration> = LazyLock::new(|| {
     Duration::from_millis(ms)
 });
 
-async fn with_timeout<T>(fut: impl Future<Output = T>) -> T {
+pub async fn with_timeout<T>(fut: impl Future<Output = T>) -> T {
     let Ok(o) = tokio::time::timeout(*DL_TIMEOUT, fut).await else {
         let bt = get_bt();
         use sha2::Digest;
@@ -110,7 +110,12 @@ fn get_bt() -> String {
         let useful = syms
             .iter()
             .flat_map(|x| x.name().and_then(|x| x.as_str()))
-            .any(|x| x.contains(env!("CARGO_CRATE_NAME")));
+            .any(|x| {
+                if x.contains("dl::") {
+                    return false;
+                }
+                x.contains(env!("CARGO_CRATE_NAME"))
+            });
         if !useful {
             if !frames.last().unwrap().is_empty() {
                 frames.push(vec![]);

@@ -157,15 +157,20 @@ impl Repository {
 impl ChairCacheInner {
     pub async fn push_chair(&self, c: Chair) {
         let shared = Arc::new(ChairEntry::new(c.clone()));
-        let mut id = self.by_id.write().await;
-        let mut ac = self.by_access_token.write().await;
-        let mut ow = self.by_owner.write().await;
-
-        id.insert(c.id.clone(), Arc::clone(&shared));
-        ac.insert(c.access_token, Arc::clone(&shared));
-        ow.entry(c.owner_id)
-            .or_insert_with(Vec::new)
-            .push(Arc::clone(&shared));
+        {
+            let mut id = self.by_id.write().await;
+            id.insert(c.id.clone(), Arc::clone(&shared));
+        }
+        {
+            let mut ac = self.by_access_token.write().await;
+            ac.insert(c.access_token, Arc::clone(&shared));
+        }
+        {
+            let mut ow = self.by_owner.write().await;
+            ow.entry(c.owner_id)
+                .or_insert_with(Vec::new)
+                .push(Arc::clone(&shared));
+        }
     }
 
     pub async fn on_eval(&self, chair_id: &Id<Chair>, eval: i32, sales: i32, at: DateTime<Utc>) {
