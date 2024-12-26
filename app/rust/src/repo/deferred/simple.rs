@@ -5,15 +5,18 @@ use std::{
 };
 
 use derivative::Derivative;
-use sqlx::{MySql, Pool};
+use sqlx::{MySql, Pool, Transaction};
 use tokio::sync::Mutex;
 
 pub trait DeferrableSimple: 'static {
     const NAME: &str;
 
-    type Insert: std::fmt::Debug + Send + 'static;
+    type Insert: std::fmt::Debug + Send + Sync + 'static;
 
-    fn exec_insert(tx: &Pool<MySql>, inserts: &[Self::Insert]) -> impl Future<Output = ()> + Send;
+    fn exec_insert(
+        tx: &mut Transaction<'static, MySql>,
+        inserts: &[Self::Insert],
+    ) -> impl Future<Output = ()> + Send;
 }
 
 const COMMIT_THRESHOLD: usize = 500;
@@ -76,8 +79,7 @@ impl<D: DeferrableSimple> SimpleDeferred<D> {
         let inserts = {
             let mut inserts = vec![];
             let mut set = set.lock().await;
-            let r = 0..set.inserts.len().min(500);
-            inserts.extend(set.inserts.drain(r));
+            inserts.append(&mut set.inserts);
             inserts
         };
 
@@ -89,7 +91,11 @@ impl<D: DeferrableSimple> SimpleDeferred<D> {
         let prep_took = begin.elapsed().as_millis();
 
         let begin = Instant::now();
-        D::exec_insert(pool, &inserts).await;
+        let mut tx = pool.begin().await.unwrap();
+        for i in inserts.chunks(500) {
+            D::exec_insert(&mut tx, i).await;
+        }
+        tx.commit().await.unwrap();
         let took = begin.elapsed().as_millis();
 
         let name = D::NAME;

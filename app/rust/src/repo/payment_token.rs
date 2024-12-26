@@ -1,4 +1,4 @@
-use sqlx::{MySql, Pool, QueryBuilder};
+use sqlx::{MySql, Pool, QueryBuilder, Transaction};
 
 use crate::dl::DlRwLock as RwLock;
 use crate::FxHashMap as HashMap;
@@ -81,11 +81,11 @@ impl DeferrableSimple for PaymentTokenDeferrable {
 
     type Insert = TokenInsert;
 
-    async fn exec_insert(tx: &Pool<MySql>, inserts: &[Self::Insert]) {
+    async fn exec_insert(tx: &mut Transaction<'static, MySql>, inserts: &[Self::Insert]) {
         let mut builder = QueryBuilder::new("INSERT INTO payment_tokens (user_id, token) ");
         builder.push_values(inserts, |mut b, i| {
             b.push_bind(&i.id).push_bind(&i.token);
         });
-        builder.build().execute(tx).await.unwrap();
+        builder.build().execute(&mut **tx).await.unwrap();
     }
 }

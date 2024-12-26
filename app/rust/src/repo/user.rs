@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::dl::DlRwLock as RwLock;
 use chrono::Utc;
-use sqlx::{MySql, Pool, QueryBuilder};
+use sqlx::{MySql, Pool, QueryBuilder, Transaction};
 
 use crate::models::{Id, User};
 
@@ -151,7 +151,7 @@ impl DeferrableSimple for UserDeferrable {
 
     type Insert = User;
 
-    async fn exec_insert(tx: &sqlx::Pool<sqlx::MySql>, inserts: &[Self::Insert]) {
+    async fn exec_insert(tx: &mut Transaction<'static, MySql>, inserts: &[Self::Insert]) {
         let mut builder = QueryBuilder::new("
             INSERT INTO users
                 (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at)
@@ -167,6 +167,6 @@ impl DeferrableSimple for UserDeferrable {
                 .push_bind(i.created_at)
                 .push_bind(i.updated_at);
         });
-        builder.build().execute(tx).await.unwrap();
+        builder.build().execute(&mut **tx).await.unwrap();
     }
 }

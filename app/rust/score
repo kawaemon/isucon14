@@ -1,2 +1,4 @@
-time=19:21:00.867 level=INFO msg=93.1%のライドは椅子がマッチされるまでの時間、53.0%のライドはマッチされた椅子が乗車地点までに掛かる時間、3.9%のライドは椅子の実移動時間に不満がありました
-time=19:21:00.870 level=INFO msg=結果 pass=true スコア=767355 種別エラー数=map[30:11]
+PGW_CONCURRENCY=9999 MATCHING_INTERVAL_MS=500 MATCHING_CHAIR_THRESHOLD=30
+time=14:01:29.731 level=INFO msg=95.2%のライドは椅子がマッチされるまでの時間、35.6%のライドはマッチされた椅子が乗車地点までに掛かる時間、31.8%のライドは椅子の実移動時間に不満がありました
+time=14:01:29.733 level=INFO msg=結果 pass=true スコア=1021121 種別エラー数=map[30:11]
+time=14:01:29.733 level=INFO msg=負荷走行が終了しました

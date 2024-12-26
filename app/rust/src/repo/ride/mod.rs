@@ -328,6 +328,11 @@ impl Repository {
     }
 }
 
+crate::conf_env!(static MATCHING_CHAIR_THRESHOLD: usize = {
+    from: "MATCHING_CHAIR_THRESHOLD",
+    default: "10",
+});
+
 impl Repository {
     pub async fn push_free_chair(&self, id: &Id<Chair>) {
         let len = {
@@ -335,7 +340,7 @@ impl Repository {
             cache.insert(id.clone());
             cache.len()
         };
-        if len == 10 {
+        if len == *MATCHING_CHAIR_THRESHOLD {
             let me = self.clone();
             tokio::spawn(async move {
                 me.do_matching().await;

@@ -2,6 +2,7 @@
 
 pub mod app_handlers;
 pub mod chair_handlers;
+pub mod dl;
 pub mod internal_handlers;
 pub mod middlewares;
 pub mod models;
@@ -9,7 +10,6 @@ pub mod owner_handlers;
 pub mod payment_gateway;
 pub mod repo;
 pub mod speed;
-pub mod dl;
 
 use std::sync::{atomic::AtomicUsize, Arc};
 
@@ -198,3 +198,17 @@ impl<T> Drop for ConnectionProbe<T> {
         self.0.connections.decrement();
     }
 }
+
+macro_rules! conf_env {
+    (static $name:ident: $ty:ty = {from: $env:expr, default: $def:expr,}) => {
+        static $name: std::sync::LazyLock<$ty> = std::sync::LazyLock::new(|| {
+            let v = std::env::var($env)
+                .unwrap_or_else(|_| $def.to_owned())
+                .parse()
+                .unwrap_or_else(|_| panic!(concat!("invalid ", $env)));
+            tracing::info!("{} = {v}", $env);
+            v
+        });
+    };
+}
+use conf_env;

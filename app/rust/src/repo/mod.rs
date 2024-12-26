@@ -47,7 +47,7 @@ impl Repository {
         let mut init = CacheInit::load(pool).await;
 
         let chair_cache = Self::init_chair_cache(pool, &mut init).await;
-        Self {
+        let r = Self {
             pool: pool.clone(),
 
             user_cache: Self::init_user_cache(&mut init, pool),
@@ -59,7 +59,9 @@ impl Repository {
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init, pool),
             coupon_cache: Self::init_coupon_cache(pool, &mut init).await,
-        }
+        };
+        tracing::info!("cache initialized");
+        r
     }
 
     pub async fn reinit(&self) {
@@ -75,5 +77,7 @@ impl Repository {
         self.reinit_pgw_cache(&self.pool).await;
         self.reinit_pt_cache(&mut init).await;
         self.reinit_coupon_cache(&mut init).await;
+
+        tracing::info!("cache re-initialized");
     }
 }

@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -9,11 +7,18 @@ use crate::models::{Owner, User};
 use crate::repo::chair::EffortlessChair;
 use crate::{AppState, Error};
 
+#[cfg(not(feature = "speed"))]
+pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Error> {
+    Ok(next.run(req).await)
+}
+
+#[cfg(feature = "speed")]
 pub async fn log_slow_requests(
     State(AppState { speed, .. }): State<AppState>,
     req: Request,
     next: Next,
 ) -> Result<Response, Error> {
+    use std::time::Instant;
     let uri = req.uri().clone();
     let mut path = uri.path();
     let method = req.method().clone();

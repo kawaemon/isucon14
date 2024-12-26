@@ -5,14 +5,16 @@ use axum::http::StatusCode;
 
 use crate::{AppState, Error};
 
+crate::conf_env!(static MATCHING_INTERVAL_MS: u64 = {
+    from: "MATCHING_INTERVAL_MS",
+    default: "250",
+});
+
 pub fn spawn_matching_thread(state: AppState) {
     tokio::spawn(async move {
         loop {
-            // if let Err(e) = do_matching(&state).await {
-            //     tracing::warn!("matching failed: {e:?}; continuing anyway");
-            // }
             state.repo.do_matching().await;
-            tokio::time::sleep(Duration::from_millis(250)).await;
+            tokio::time::sleep(Duration::from_millis(*MATCHING_INTERVAL_MS)).await;
         }
     });
 }

@@ -5,3 +5,4 @@ insertの遅延書き込み
 再起動したらfree chairが増える謎
  - sse接続時の通知の先送り処理でinnerが呼ばれるからfree chairs v2にinsertされてる？
 latest_locationとspeedとかをchair_cacheに統合する
+ID生成

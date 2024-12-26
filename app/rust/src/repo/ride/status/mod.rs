@@ -138,7 +138,6 @@ impl Repository {
                 at: Utc::now(),
             })
             .await;
-
         Ok(())
     }
 }

@@ -31,6 +31,10 @@ pub struct PaymentGatewayPostPaymentRequest {
 struct PaymentGatewayGetPaymentsResponseOne {}
 
 const RETRY_LIMIT: usize = 1000;
+crate::conf_env!(static CONCURRENCY: usize = {
+    from: "PGW_CONCURRENCY",
+    default: "150",
+});
 
 #[derive(Debug, Clone)]
 pub struct PaymentGatewayRestricter {
@@ -42,13 +46,6 @@ pub struct PaymentGatewayRestricter {
 impl PaymentGatewayRestricter {
     #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
-        let conc = std::env::var("CONCURRENCY")
-            .unwrap_or("30".to_owned())
-            .parse()
-            .unwrap();
-
-        tracing::info!("pgw concurrency = {conc}");
-
         let tries = Arc::new(AtomicUsize::new(0));
         let success = Arc::new(AtomicUsize::new(0));
         let failure = Arc::new(AtomicUsize::new(0));
@@ -75,7 +72,7 @@ impl PaymentGatewayRestricter {
         }
 
         Self {
-            sema: Arc::new(Semaphore::new(conc)),
+            sema: Arc::new(Semaphore::new(*CONCURRENCY)),
             success,
             failure,
             tries,

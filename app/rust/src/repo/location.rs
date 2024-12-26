@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::dl::DlRwLock as RwLock;
 use chrono::{DateTime, Utc};
-use sqlx::{MySql, Pool};
+use sqlx::{MySql, Pool, Transaction};
 
 use crate::{
     models::{Chair, ChairLocation, Id},
@@ -33,7 +33,7 @@ impl DeferrableSimple for ChairLocationDeferrable {
 
     type Insert = ChairLocation;
 
-    async fn exec_insert(tx: &Pool<MySql>, inserts: &[Self::Insert]) {
+    async fn exec_insert(tx: &mut Transaction<'static, MySql>, inserts: &[Self::Insert]) {
         let mut query = sqlx::QueryBuilder::new(
             "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
         );
@@ -44,7 +44,7 @@ impl DeferrableSimple for ChairLocationDeferrable {
                 .push_bind(e.longitude)
                 .push_bind(e.created_at);
         });
-        query.build().execute(tx).await.unwrap();
+        query.build().execute(&mut **tx).await.unwrap();
     }
 }
 
