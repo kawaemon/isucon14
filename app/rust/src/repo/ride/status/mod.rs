@@ -5,17 +5,13 @@ use deferred::{NotifiedType, RideStatusUpdate};
 use std::sync::Arc;
 
 use crate::models::{Id, Ride, RideStatus, RideStatusEnum};
-use crate::repo::{Repository, Result, Tx};
+use crate::repo::{Repository, Result};
 
 use super::NotificationBody;
 
 // ride_status
 impl Repository {
-    pub async fn ride_status_latest(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        ride_id: &Id<Ride>,
-    ) -> Result<RideStatusEnum> {
+    pub async fn ride_status_latest(&self, ride_id: &Id<Ride>) -> Result<RideStatusEnum> {
         let cache = self.ride_cache.ride_cache.read().await;
         let ride = cache.get(ride_id).unwrap();
         let s = ride.latest_status.read().await;
@@ -26,7 +22,6 @@ impl Repository {
 
     pub async fn ride_status_update(
         &self,
-        _tx: impl Into<Option<&mut Tx>>,
         ride_id: &Id<Ride>,
         status: RideStatusEnum,
     ) -> Result<()> {
@@ -55,17 +50,12 @@ impl Repository {
 
         *ride.latest_status.write().await = status;
 
-        {
-            let mark_sent = {
-                let user = self.ride_cache.user_notification.read().await;
-                user.get(&ride.user_id)
-                    .unwrap()
-                    .push(b.clone(), false)
-                    .await
-            };
-            if mark_sent {
-                self.ride_status_app_notified(&status_id);
-            }
+        let mark_sent = {
+            let user = self.ride_cache.user_notification.read().await;
+            user.get(&ride.user_id).unwrap().push(b.clone(), false)
+        };
+        if mark_sent {
+            self.ride_status_app_notified(&status_id);
         }
 
         let chair_id = {
@@ -77,7 +67,7 @@ impl Repository {
             {
                 let mark_sent = {
                     let chair = self.ride_cache.chair_notification.read().await;
-                    chair.get(&c).unwrap().push(b.clone(), false).await
+                    chair.get(&c).unwrap().push(b.clone(), false)
                 };
                 if mark_sent {
                     self.ride_status_chair_notified(&status_id);

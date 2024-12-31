@@ -13,6 +13,7 @@ speed = []
 parking_lot = ["tokio/parking_lot"]
 
 [dependencies]
+ahash = "0.8.11"
 anyhow = { version = "1", features = ["backtrace"] }
 axum = { version = "0.7", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["cookie"] }
@@ -23,7 +24,6 @@ console-subscriber = "0.4.1"
 dashmap = "6.1.0"
 derivative = "2.2.0"
 futures = "0.3.31"
-fxhash = "0.2.1"
 hex = "0.4"
 listenfd = "1"
 num-traits = "0.2"

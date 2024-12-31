@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use crate::HashMap as HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, QueryBuilder};

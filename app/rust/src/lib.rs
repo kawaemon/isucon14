@@ -24,8 +24,10 @@ use speed::SpeedStatistics;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub type FxHashMap<K, V> = std::collections::HashMap<K, V, fxhash::FxBuildHasher>;
-pub type FxHashSet<K> = std::collections::HashSet<K, fxhash::FxBuildHasher>;
+pub type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
+pub type HashSet<K> = std::collections::HashSet<K, ahash::RandomState>;
+pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
+pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -149,13 +151,13 @@ pub struct NotificationStatistics<T>(NotificationStatisticsInner<T>);
 #[derivative(Debug(bound = ""), Clone(bound = ""))]
 pub struct NotificationStatisticsInner<T> {
     connections: Arc<WithDelta>,
-    writes: Arc<Mutex<FxHashSet<Id<T>>>>,
+    writes: Arc<Mutex<HashSet<Id<T>>>>,
 }
 impl<T: 'static> NotificationStatistics<T> {
     pub fn new() -> Self {
         let inner = NotificationStatisticsInner {
             connections: Arc::new(WithDelta::new()),
-            writes: Arc::new(Mutex::new(FxHashSet::default())),
+            writes: Arc::new(Mutex::new(HashSet::default())),
         };
 
         tokio::spawn({

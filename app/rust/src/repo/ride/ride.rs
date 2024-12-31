@@ -1,9 +1,9 @@
 use crate::dl::DlRwLock as RwLock;
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::deferred::DeferrableMayUpdated;
-use crate::repo::{Repository, Result, Tx};
+use crate::repo::{Repository, Result};
 use crate::Coordinate;
-use crate::FxHashMap as HashMap;
+use crate::HashMap as HashMap;
 use chrono::{DateTime, Utc};
 use sqlx::QueryBuilder;
 use std::sync::Arc;
@@ -12,11 +12,7 @@ use super::{NotificationBody, RideEntry};
 
 // rides
 impl Repository {
-    pub async fn ride_get(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Ride>,
-    ) -> Result<Option<Ride>> {
+    pub async fn ride_get(&self, id: &Id<Ride>) -> Result<Option<Ride>> {
         let cache = self.ride_cache.ride_cache.read().await;
         let Some(e) = cache.get(id) else {
             return Ok(None);
@@ -59,7 +55,6 @@ impl Repository {
 
     pub async fn rides_new_and_set_matching(
         &self,
-        tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
         user: &Id<User>,
         pickup: Coordinate,
@@ -99,7 +94,7 @@ impl Repository {
             cache.push(Arc::clone(&r));
         }
 
-        self.ride_status_update(tx, id, RideStatusEnum::Matching)
+        self.ride_status_update(id, RideStatusEnum::Matching)
             .await?;
 
         Ok(())
@@ -117,9 +112,8 @@ impl Repository {
             let e = cache.get_mut(ride_id).unwrap();
             e.set_chair_id(chair_id, now).await;
         }
-        {
-            self.ride_cache.on_chair_status_change(chair_id, true).await;
-        }
+
+        self.ride_cache.on_chair_status_change(chair_id, true);
 
         self.ride_cache.ride_deferred.update(RideUpdate {
             id: ride_id.clone(),
@@ -137,7 +131,7 @@ impl Repository {
         {
             let mark_sent = {
                 let cache = self.ride_cache.chair_notification.read().await;
-                cache.get(chair_id).unwrap().push(b, false).await
+                cache.get(chair_id).unwrap().push(b, false)
             };
             if mark_sent {
                 self.ride_status_chair_notified(status_id);
@@ -148,7 +142,6 @@ impl Repository {
 
     pub async fn rides_set_evaluation(
         &self,
-        _tx: impl Into<Option<&mut Tx>>,
         id: &Id<Ride>,
         chair_id: &Id<Chair>,
         eval: i32,

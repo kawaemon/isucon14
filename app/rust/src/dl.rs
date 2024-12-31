@@ -64,7 +64,7 @@ mod dl_off {
         pub fn new(v: T) -> Self {
             Self(SyncMutex::new(v))
         }
-        pub async fn lock(&self) -> impl DerefMut<Target = T> + '_ {
+        pub fn lock(&self) -> impl DerefMut<Target = T> + '_ {
             #[cfg(feature = "parking_lot")]
             return self.0.lock();
             #[cfg(not(feature = "parking_lot"))]

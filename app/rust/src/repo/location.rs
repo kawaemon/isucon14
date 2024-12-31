@@ -1,7 +1,7 @@
 use crate::{
     dl::DlSyncRwLock,
     models::{Ride, RideStatusEnum},
-    FxHashMap as HashMap,
+    HashMap as HashMap,
 };
 use std::sync::Arc;
 
@@ -16,7 +16,7 @@ use crate::{
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result, Tx,
+    Repository, Result,
 };
 
 pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
@@ -118,7 +118,7 @@ struct ChairLocationCacheInit {
     cache: HashMap<Id<Chair>, Entry>,
 }
 impl ChairLocationCacheInit {
-    async fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
+    fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
         init.locations.sort_unstable_by_key(|x| x.created_at);
 
         let mut res: HashMap<Id<Chair>, Entry> = HashMap::default();
@@ -186,11 +186,11 @@ impl ChairLocationCacheInit {
 }
 
 impl Repository {
-    pub(super) async fn init_chair_location_cache(
+    pub(super) fn init_chair_location_cache(
         pool: &Pool<MySql>,
         init: &mut CacheInit,
     ) -> ChairLocationCache {
-        let init = ChairLocationCacheInit::from_init(init).await;
+        let init = ChairLocationCacheInit::from_init(init);
 
         Arc::new(ChairLocationCacheInner {
             cache: DlSyncRwLock::new(init.cache),
@@ -198,12 +198,8 @@ impl Repository {
         })
     }
 
-    pub(super) async fn reinit_chair_location_cache(
-        &self,
-        _pool: &Pool<MySql>,
-        init: &mut CacheInit,
-    ) {
-        let init = ChairLocationCacheInit::from_init(init).await;
+    pub(super) fn reinit_chair_location_cache(&self, init: &mut CacheInit) {
+        let init = ChairLocationCacheInit::from_init(init);
         *self.chair_location_cache.cache.write() = init.cache;
     }
 }
@@ -242,7 +238,6 @@ impl Repository {
 
     pub async fn chair_location_update(
         &self,
-        _tx: impl Into<Option<&mut Tx>>,
         chair_id: &Id<Chair>,
         coord: Coordinate,
     ) -> Result<DateTime<Utc>> {
@@ -267,7 +262,7 @@ impl Repository {
             };
 
             if let Some((ride, status)) = update {
-                self.ride_status_update(None, &ride, status).await.unwrap();
+                self.ride_status_update(&ride, status).await.unwrap();
             }
 
             if hit {

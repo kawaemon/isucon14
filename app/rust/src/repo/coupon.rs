@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::dl::DlRwLock as RwLock;
-use crate::FxHashMap as HashMap;
+use crate::HashMap;
 use std::sync::Arc;
 
 use crate::models::{Coupon, Id, Ride, User};

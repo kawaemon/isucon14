@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use crate::HashMap as HashMap;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -117,10 +117,7 @@ async fn owner_get_sales(
 
     let mut model_sales_by_model = HashMap::default();
 
-    for chair in repo
-        .chair_sale_stats_by_owner(&owner.id, since, until)
-        .await?
-    {
+    for chair in repo.chair_sale_stats_by_owner(&owner.id, since, until)? {
         res.total_sales += chair.sales;
         *model_sales_by_model.entry(chair.model).or_insert(0) += chair.sales;
         res.chairs.push(ChairSales {

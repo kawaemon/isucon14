@@ -1,9 +1,11 @@
 use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::dl::DlMutex as Mutex;
 use crate::dl::DlRwLock as RwLock;
+use crate::dl::DlSyncMutex;
 use crate::dl::DlSyncRwLock;
-use crate::FxHashMap as HashMap;
-use crate::FxHashSet as HashSet;
+use crate::ConcurrentHashSet;
+use crate::HashMap;
+use crate::HashSet;
 use chrono::{DateTime, Utc};
 use dashmap::DashSet;
 use ride::RideDeferred;
@@ -33,7 +35,7 @@ pub struct RideCacheInner {
     user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
-    free_chairs_lv1: DlSyncRwLock<DashSet<Id<Chair>, fxhash::FxBuildHasher>>,
+    free_chairs_lv1: DlSyncRwLock<ConcurrentHashSet<Id<Chair>>>,
     free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
@@ -50,7 +52,7 @@ struct RideCacheInit {
     user_rides: HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>,
 
     waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
-    free_chairs_lv1: DashSet<Id<Chair>, fxhash::FxBuildHasher>,
+    free_chairs_lv1: ConcurrentHashSet<Id<Chair>>,
     free_chairs_lv2: HashSet<Id<Chair>>,
 
     user_notification: HashMap<Id<User>, NotificationQueue>,
@@ -93,7 +95,7 @@ impl RideCacheInit {
                     ride_status_id: status.id.clone(),
                     status: status.status,
                 };
-                let mark_sent = queue.push(b, status.app_sent_at.is_some()).await;
+                let mark_sent = queue.push(b, status.app_sent_at.is_some());
                 assert!(!mark_sent);
             }
         }
@@ -119,7 +121,7 @@ impl RideCacheInit {
                     ride_status_id: status.id.clone(),
                     status: status.status,
                 };
-                let mark_sent = queue.push(b, status.chair_sent_at.is_some()).await;
+                let mark_sent = queue.push(b, status.chair_sent_at.is_some());
                 assert!(!mark_sent);
             }
         }
@@ -196,7 +198,7 @@ impl RideCacheInit {
         let mut free_chairs_lv2 = HashSet::default();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
-            let n = n.0.lock().await;
+            let n = n.0.lock();
             // active かつ 送信済みかそうでないかに関わらず最後に作成された通知が Completed であればいい
             let mut lv1 = chair.is_active;
             if !n.queue.is_empty() {
@@ -366,7 +368,7 @@ impl RideCacheInner {
             .await
             .insert(id.clone(), NotificationQueue::new());
     }
-    pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
+    pub fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
         let cache = self.free_chairs_lv1.read();
         if on_duty {
             cache.remove(id);
@@ -391,25 +393,22 @@ impl Repository {
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
-        let next = queue.get_next().await;
+        let next = queue.get_next();
         tx.send(next.clone().map(|x| x.body)).unwrap();
         let mut send = 1;
 
         if let Some(mut next) = next {
             while !next.sent {
                 self.ride_status_chair_notified(&next.body.ride_status_id);
-                next = queue.get_next().await.unwrap();
+                next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
             }
         }
 
-        // 嘘、notification inner がそれを勝手にやっているはず
-        // if queue.last_sent.status == Completed { push_to_v2 }
-
         tracing::debug!("chair sse beginning, sent to sync={send}");
 
-        queue.0.lock().await.tx = Some(tx);
+        queue.0.lock().tx = Some(tx);
 
         Ok(NotificationTransceiver {
             notification_rx: rx,
@@ -425,14 +424,14 @@ impl Repository {
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
-        let next = queue.get_next().await;
+        let next = queue.get_next();
         tx.send(next.clone().map(|x| x.body)).unwrap();
         let mut send = 1;
 
         if let Some(mut next) = next {
             while !next.sent {
                 self.ride_status_app_notified(&next.body.ride_status_id);
-                next = queue.get_next().await.unwrap();
+                next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
             }
@@ -440,7 +439,7 @@ impl Repository {
 
         tracing::debug!("app sse beginning, sent to sync={send}");
 
-        queue.0.lock().await.tx = Some(tx);
+        queue.0.lock().tx = Some(tx);
 
         Ok(NotificationTransceiver {
             notification_rx: rx,
@@ -449,16 +448,16 @@ impl Repository {
 }
 
 #[derive(Debug)]
-pub struct NotificationQueue(Mutex<NotificationQueueInner>);
+pub struct NotificationQueue(DlSyncMutex<NotificationQueueInner>);
 impl NotificationQueue {
     fn new() -> Self {
-        Self(Mutex::new(NotificationQueueInner::new()))
+        Self(DlSyncMutex::new(NotificationQueueInner::new()))
     }
-    pub async fn push(&self, b: NotificationBody, sent: bool) -> bool {
-        self.0.lock().await.push(b, sent)
+    pub fn push(&self, b: NotificationBody, sent: bool) -> bool {
+        self.0.lock().push(b, sent)
     }
-    pub async fn get_next(&self) -> Option<NotificationEntry> {
-        self.0.lock().await.get_next()
+    pub fn get_next(&self) -> Option<NotificationEntry> {
+        self.0.lock().get_next()
     }
 }
 

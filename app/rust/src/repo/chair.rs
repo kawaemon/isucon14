@@ -1,5 +1,5 @@
 use crate::dl::DlSyncRwLock;
-use crate::FxHashMap as HashMap;
+use crate::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -136,7 +136,7 @@ pub struct ChairSalesStat {
 }
 
 impl Repository {
-    pub async fn chair_sale_stats_by_owner(
+    pub fn chair_sale_stats_by_owner(
         &self,
         owner: &Id<Owner>,
         since: DateTime<Utc>,
@@ -171,9 +171,7 @@ impl ChairCacheInner {
         }
         {
             let mut ow = self.by_owner.write();
-            ow.entry(c.owner_id)
-                .or_insert_with(Vec::new)
-                .push(Arc::clone(&shared));
+            ow.entry(c.owner_id).or_default().push(Arc::clone(&shared));
         }
     }
 
@@ -191,7 +189,7 @@ struct ChairCacheInit {
     by_owner: HashMap<Id<Owner>, Vec<SharedChair>>,
 }
 impl ChairCacheInit {
-    async fn from_init(init: &mut CacheInit) -> Self {
+    fn from_init(init: &mut CacheInit) -> Self {
         let mut bid = HashMap::default();
         let mut ac = HashMap::default();
         let mut owner = HashMap::default();
@@ -225,8 +223,8 @@ impl ChairCacheInit {
 }
 
 impl Repository {
-    pub(super) async fn init_chair_cache(pool: &Pool<MySql>, init: &mut CacheInit) -> ChairCache {
-        let init = ChairCacheInit::from_init(init).await;
+    pub(super) fn init_chair_cache(pool: &Pool<MySql>, init: &mut CacheInit) -> ChairCache {
+        let init = ChairCacheInit::from_init(init);
 
         ChairCache::new(ChairCacheInner {
             by_id: DlSyncRwLock::new(init.by_id),
@@ -235,8 +233,8 @@ impl Repository {
             deferred: UpdatableDeferred::new(pool),
         })
     }
-    pub(super) async fn reinit_chair_cache(&self, init: &mut CacheInit) {
-        let init = ChairCacheInit::from_init(init).await;
+    pub(super) fn reinit_chair_cache(&self, init: &mut CacheInit) {
+        let init = ChairCacheInit::from_init(init);
 
         let ChairCacheInner {
             by_id,
@@ -277,11 +275,11 @@ impl Repository {
         let Some(entry) = cache.get(owner) else {
             return Ok(vec![]);
         };
-        Ok(entry.into_iter().map(|x| x.chair()).collect())
+        Ok(entry.iter().map(|x| x.chair()).collect())
     }
 
     // COMPLETED なものを集める(1)
-    pub async fn chair_get_stats(&self, id: &Id<Chair>) -> Result<ChairStats> {
+    pub fn chair_get_stats(&self, id: &Id<Chair>) -> Result<ChairStats> {
         let stat: ChairStat = {
             let cache = self.chair_cache.by_id.read();
             let chair = cache.get(id).unwrap();
@@ -298,7 +296,7 @@ impl Repository {
         };
 
         Ok(ChairStats {
-            total_rides_count: stat.total_rides as i32,
+            total_rides_count: stat.total_rides,
             total_evaluation_avg,
         })
     }
@@ -341,7 +339,7 @@ impl Repository {
         }
 
         if active {
-            self.ride_cache.on_chair_status_change(id, false).await;
+            self.ride_cache.on_chair_status_change(id, false);
             self.push_free_chair(id).await;
         }
 

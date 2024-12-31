@@ -1,4 +1,4 @@
-use crate::FxHashMap as HashMap;
+use crate::HashMap as HashMap;
 use std::sync::Arc;
 
 use crate::dl::DlRwLock as RwLock;
@@ -6,7 +6,7 @@ use chrono::Utc;
 
 use crate::models::{Id, Owner};
 
-use super::{cache_init::CacheInit, Repository, Result, Tx};
+use super::{cache_init::CacheInit, Repository, Result};
 
 pub type OwnerCache = Arc<OwnerCacheInner>;
 type SharedOwner = Arc<Owner>;
@@ -90,22 +90,14 @@ impl Repository {
         };
         Ok(Some(Owner::clone(entry)))
     }
-    pub async fn owner_get_by_id(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Owner>,
-    ) -> Result<Option<Owner>> {
+    pub async fn owner_get_by_id(&self, id: &Id<Owner>) -> Result<Option<Owner>> {
         let cache = self.owner_cache.by_id.read().await;
         let Some(entry) = cache.get(id) else {
             return Ok(None);
         };
         Ok(Some(Owner::clone(entry)))
     }
-    pub async fn owner_get_by_chair_register_token(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        crt: &str,
-    ) -> Result<Option<Owner>> {
+    pub async fn owner_get_by_chair_register_token(&self, crt: &str) -> Result<Option<Owner>> {
         let cache = self.owner_cache.by_crt.read().await;
         let Some(entry) = cache.get(crt) else {
             return Ok(None);

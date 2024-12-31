@@ -1,6 +1,6 @@
 use std::{cmp::Reverse, sync::Arc, time::Duration};
 
-use crate::{dl::DlMutex as Mutex, FxHashMap as HashMap};
+use crate::{dl::DlMutex as Mutex, HashMap as HashMap};
 
 type Registry = Arc<Mutex<HashMap<String, SpeedStatisticsEntry>>>;
 
