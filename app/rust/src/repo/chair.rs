@@ -1,6 +1,6 @@
 use crate::dl::DlSyncRwLock;
-use crate::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64};
+use crate::{AtomicDateTime, HashMap};
+use std::sync::atomic::AtomicBool;
 use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
@@ -40,7 +40,7 @@ pub struct ChairEntry {
     pub created_at: DateTime<Utc>,
 
     pub is_active: AtomicBool,
-    pub updated_at: AtomicI64,
+    pub updated_at: AtomicDateTime,
 
     pub stat: DlSyncRwLock<ChairStat>,
 }
@@ -54,7 +54,7 @@ impl ChairEntry {
             model: c.model.clone(),
             is_active: AtomicBool::new(c.is_active),
             created_at: c.created_at,
-            updated_at: AtomicI64::new(c.updated_at.timestamp_micros()),
+            updated_at: AtomicDateTime::new(c.updated_at),
             stat: DlSyncRwLock::new(ChairStat::new()),
         }
     }
@@ -67,10 +67,7 @@ impl ChairEntry {
             model: self.model.clone(),
             is_active: self.is_active.load(std::sync::atomic::Ordering::Relaxed),
             created_at: self.created_at,
-            updated_at: DateTime::from_timestamp_micros(
-                self.updated_at.load(std::sync::atomic::Ordering::Relaxed),
-            )
-            .unwrap(),
+            updated_at: self.updated_at.load(),
         }
     }
     pub fn chair_effortless(&self) -> EffortlessChair {
@@ -86,8 +83,7 @@ impl ChairEntry {
     pub fn set_active(&self, is_active: bool, now: DateTime<Utc>) {
         self.is_active
             .store(is_active, std::sync::atomic::Ordering::Relaxed);
-        self.updated_at
-            .store(now.timestamp_micros(), std::sync::atomic::Ordering::Relaxed);
+        self.updated_at.store(now);
     }
 }
 

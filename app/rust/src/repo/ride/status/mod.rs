@@ -2,6 +2,7 @@ pub mod deferred;
 use chrono::Utc;
 use deferred::{NotifiedType, RideStatusUpdate};
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use crate::models::{Id, Ride, RideStatus, RideStatusEnum};
@@ -14,7 +15,7 @@ impl Repository {
     pub async fn ride_status_latest(&self, ride_id: &Id<Ride>) -> Result<RideStatusEnum> {
         let cache = self.ride_cache.ride_cache.read().await;
         let ride = cache.get(ride_id).unwrap();
-        let s = ride.latest_status.read().await;
+        let s = ride.latest_status.read();
         Ok(*s)
     }
 
@@ -48,7 +49,7 @@ impl Repository {
             Arc::clone(ride)
         };
 
-        *ride.latest_status.write().await = status;
+        ride.set_latest_ride_status(status);
 
         let mark_sent = {
             let user = self.ride_cache.user_notification.read().await;
@@ -58,10 +59,7 @@ impl Repository {
             self.ride_status_app_notified(&status_id);
         }
 
-        let chair_id = {
-            let ref_ = ride.chair_id.read().await;
-            ref_.clone()
-        };
+        let chair_id = { ride.chair_id.read().clone() };
 
         if let Some(c) = chair_id {
             {
@@ -75,7 +73,14 @@ impl Repository {
             }
 
             match status {
-                RideStatusEnum::Matching => {}
+                RideStatusEnum::Matching => {
+                    self.ride_cache
+                        .user_has_ride
+                        .read()
+                        .entry(ride.user_id.clone())
+                        .or_insert_with(|| AtomicBool::new(true))
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
                 RideStatusEnum::Enroute => {
                     self.chair_set_movement(&c, ride.pickup, RideStatusEnum::Pickup, &ride.id);
                 }
@@ -89,7 +94,14 @@ impl Repository {
                     );
                 }
                 RideStatusEnum::Arrived => {}
-                RideStatusEnum::Completed => {}
+                RideStatusEnum::Completed => {
+                    self.ride_cache
+                        .user_has_ride
+                        .read()
+                        .entry(ride.user_id.clone())
+                        .or_insert_with(|| AtomicBool::new(false))
+                        .store(false, std::sync::atomic::Ordering::Relaxed);
+                }
                 RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
             }
         }

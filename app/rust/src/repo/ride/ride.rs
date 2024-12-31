@@ -1,9 +1,9 @@
-use crate::dl::DlRwLock as RwLock;
+use crate::dl::DlSyncRwLock;
 use crate::models::{Chair, Id, Ride, RideStatus, RideStatusEnum, User};
 use crate::repo::deferred::DeferrableMayUpdated;
 use crate::repo::{Repository, Result};
 use crate::Coordinate;
-use crate::HashMap as HashMap;
+use crate::HashMap;
 use chrono::{DateTime, Utc};
 use sqlx::QueryBuilder;
 use std::sync::Arc;
@@ -17,21 +17,19 @@ impl Repository {
         let Some(e) = cache.get(id) else {
             return Ok(None);
         };
-        Ok(Some(e.ride().await))
+        Ok(Some(e.ride()))
     }
 
     // COMPLETED
-    pub async fn rides_user_ongoing(&self, user: &Id<User>) -> Result<bool> {
-        let cache = self.ride_cache.ride_cache.read().await;
-        for ride in cache.values() {
-            if &ride.user_id != user {
-                continue;
-            }
-            if *ride.latest_status.read().await != RideStatusEnum::Completed {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+    pub fn rides_user_ongoing(&self, user: &Id<User>) -> Result<bool> {
+        let s = self
+            .ride_cache
+            .user_has_ride
+            .read()
+            .get(user)
+            .map(|x| x.load(std::sync::atomic::Ordering::Relaxed))
+            .unwrap_or(false);
+        Ok(s)
     }
 
     pub async fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
@@ -39,7 +37,7 @@ impl Repository {
         let cache = self.ride_cache.user_rides.read().await;
         let cache = cache.get(id).unwrap().read().await;
         for c in cache.iter() {
-            res.push(c.ride().await);
+            res.push(c.ride());
         }
         res.reverse();
         Ok(res)
@@ -82,10 +80,10 @@ impl Repository {
                 pickup,
                 destination: dest,
                 created_at: now,
-                chair_id: RwLock::new(None),
-                evaluation: RwLock::new(None),
-                updated_at: RwLock::new(now),
-                latest_status: RwLock::new(RideStatusEnum::Matching),
+                chair_id: DlSyncRwLock::new(None),
+                evaluation: DlSyncRwLock::new(None),
+                updated_at: DlSyncRwLock::new(now),
+                latest_status: DlSyncRwLock::new(RideStatusEnum::Matching),
             });
             let mut cache = self.ride_cache.ride_cache.write().await;
             cache.insert(id.clone(), Arc::clone(&r));
@@ -110,7 +108,7 @@ impl Repository {
         {
             let mut cache = self.ride_cache.ride_cache.write().await;
             let e = cache.get_mut(ride_id).unwrap();
-            e.set_chair_id(chair_id, now).await;
+            e.set_chair_id(chair_id, now);
         }
 
         self.ride_cache.on_chair_status_change(chair_id, true);
@@ -155,10 +153,10 @@ impl Repository {
         });
 
         let sales = {
-            let mut cache = self.ride_cache.ride_cache.write().await;
-            let ride = cache.get_mut(id).unwrap();
-            ride.set_evaluation(eval, now).await;
-            ride.ride().await.calc_sale()
+            let cache = self.ride_cache.ride_cache.read().await;
+            let ride = cache.get(id).unwrap();
+            ride.set_evaluation(eval, now);
+            crate::calculate_fare(ride.pickup, ride.destination)
         };
 
         self.chair_cache.on_eval(chair_id, eval, sales, now);

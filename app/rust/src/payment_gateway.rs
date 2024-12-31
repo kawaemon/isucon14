@@ -114,7 +114,7 @@ pub async fn request_payment_gateway_post_payment(
             let res = client
                 .post(format!("{payment_gateway_url}/payments"))
                 .bearer_auth(token)
-                .header("Idempotency-Key", &key.0)
+                .header("Idempotency-Key", &key)
                 .json(param)
                 .send()
                 .await

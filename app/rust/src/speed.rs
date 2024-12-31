@@ -1,6 +1,6 @@
 use std::{cmp::Reverse, sync::Arc, time::Duration};
 
-use crate::{dl::DlMutex as Mutex, HashMap as HashMap};
+use crate::{dl::DlMutex as Mutex, HashMap};
 
 type Registry = Arc<Mutex<HashMap<String, SpeedStatisticsEntry>>>;
 
@@ -37,10 +37,10 @@ impl SpeedStatistics {
             Reverse(e.total_duration.as_millis() / e.count as u128)
         });
         for (path, e) in speed {
-            let avg = e.total_duration.as_millis() / e.count as u128;
+            let avg = (e.total_duration.as_micros() / e.count as u128) as f64 / 1000.0;
             let total = e.total_duration.as_millis();
             tracing::info!(
-                "{path:40} {:6} requests took {avg:4}ms avg {total:6}ms total",
+                "{path:40} {:6} requests took {avg:7.3}ms avg {total:6}ms total",
                 e.count
             );
         }

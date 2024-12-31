@@ -61,9 +61,8 @@ async fn chair_post_chairs(
     jar: CookieJar,
     axum::Json(req): axum::Json<ChairPostChairsRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
-    let Some(owner): Option<Owner> = repo
-        .owner_get_by_chair_register_token(&req.chair_register_token)
-        .await?
+    let Some(owner): Option<Owner> =
+        repo.owner_get_by_chair_register_token(&req.chair_register_token)?
     else {
         return Err(Error::Unauthorized("invalid chair_register_token"));
     };
@@ -181,7 +180,7 @@ async fn chair_get_notification_inner(
         return Ok(None);
     };
     let ride = repo.ride_get(&body.ride_id).await?.unwrap();
-    let user = repo.user_get_by_id(&ride.user_id).await?.unwrap();
+    let user = repo.user_get_by_id(&ride.user_id)?.unwrap();
 
     if body.status == RideStatusEnum::Completed {
         {

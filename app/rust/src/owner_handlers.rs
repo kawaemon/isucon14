@@ -1,4 +1,4 @@
-use crate::HashMap as HashMap;
+use crate::HashMap;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -44,8 +44,7 @@ async fn owner_post_owners(
     let access_token = crate::secure_random_str(32);
     let chair_register_token = crate::secure_random_str(32);
 
-    repo.owner_add(&owner_id, &req.name, &access_token, &chair_register_token)
-        .await?;
+    repo.owner_add(&owner_id, &req.name, &access_token, &chair_register_token)?;
 
     let jar = jar.add(Cookie::build(("owner_session", access_token)).path("/"));
 

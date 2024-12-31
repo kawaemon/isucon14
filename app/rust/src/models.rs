@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, str::FromStr};
+use std::{marker::PhantomData, str::FromStr, sync::atomic::AtomicUsize};
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
@@ -86,7 +86,22 @@ impl FromStr for RideStatusEnum {
     PartialEq(bound = ""),
     Eq(bound = "")
 )]
-pub struct Id<T>(pub String, PhantomData<fn() -> T>);
+pub struct Id<T>(String, PhantomData<fn() -> T>);
+impl<T> AsRef<str> for Id<T> {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+impl<T> std::fmt::Display for Id<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl<T> From<&Id<T>> for reqwest::header::HeaderValue {
+    fn from(val: &Id<T>) -> Self {
+        reqwest::header::HeaderValue::from_str(&val.0).unwrap()
+    }
+}
 impl<T> serde::Serialize for Id<T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
@@ -121,7 +136,9 @@ impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
 }
 impl<T> Id<T> {
     pub fn new() -> Self {
-        Id(ulid::Ulid::new().to_string(), PhantomData)
+        static ID: AtomicUsize = AtomicUsize::new(1);
+        let id = ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Id(id.to_string(), PhantomData)
     }
     pub fn from_string(id: impl Into<String>) -> Self {
         Self(id.into(), PhantomData)

@@ -107,30 +107,28 @@ async fn app_post_users_inner(
     .await?;
 
     // 初回登録キャンペーンのクーポンを付与
-    repo.coupon_add(&user_id, "CP_NEW2024", 3000).await?;
+    repo.coupon_add(&user_id, "CP_NEW2024", 3000)?;
 
     // 招待コードを使った登録
     if let Some(req_invitation_code) = req.invitation_code.as_ref() {
         if !req_invitation_code.is_empty() {
             let inv_prefixed_code = format!("INV_{req_invitation_code}");
             // 招待する側の招待数をチェック
-            let coupons = repo.coupon_get_count_by_code(&inv_prefixed_code).await?;
+            let coupons = repo.coupon_get_count_by_code(&inv_prefixed_code)?;
             if coupons >= 3 {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             }
 
             // ユーザーチェック
-            let Some(inviter): Option<User> =
-                repo.user_get_by_inv_code(req_invitation_code).await?
+            let Some(inviter): Option<User> = repo.user_get_by_inv_code(req_invitation_code)?
             else {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             };
 
             // 招待クーポン付与
-            repo.coupon_add(&user_id, &inv_prefixed_code, 1500).await?;
+            repo.coupon_add(&user_id, &inv_prefixed_code, 1500)?;
             // 招待した人にもRewardを付与
-            repo.coupon_add(&inviter.id, &format!("RWD_{}", Id::<Coupon>::new().0), 1000)
-                .await?;
+            repo.coupon_add(&inviter.id, &format!("RWD_{}", Id::<Coupon>::new()), 1000)?;
         }
     }
 
@@ -208,13 +206,12 @@ async fn app_get_rides(
             Some(&ride.id),
             ride.pickup_coord(),
             ride.destination_coord(),
-        )
-        .await?;
+        )?;
 
         let chair = repo
             .chair_get_by_id_effortless(ride.chair_id.as_ref().unwrap())?
             .unwrap();
-        let owner: Owner = repo.owner_get_by_id(&chair.owner_id).await?.unwrap();
+        let owner: Owner = repo.owner_get_by_id(&chair.owner_id)?.unwrap();
 
         items.push(GetAppRidesResponseItem {
             pickup_coordinate: ride.pickup_coord(),
@@ -255,7 +252,7 @@ async fn app_post_rides(
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
     let ride_id = Id::new();
 
-    if repo.rides_user_ongoing(&user.id).await? {
+    if repo.rides_user_ongoing(&user.id)? {
         return Err(Error::Conflict("ride already exists"));
     }
 
@@ -268,14 +265,13 @@ async fn app_post_rides(
     .await?;
 
     let mut discount = 0;
-    let unused_coupons = repo.coupon_get_unused_order_by_created_at(&user.id).await?;
+    let unused_coupons = repo.coupon_get_unused_order_by_created_at(&user.id)?;
     let coupon_candidate = unused_coupons
         .iter()
         .find(|x| x.code == "CP_NEW2024")
         .or(unused_coupons.first());
     if let Some(coupon) = coupon_candidate {
-        repo.coupon_set_used(&user.id, &coupon.code, &ride_id)
-            .await?;
+        repo.coupon_set_used(&user.id, &coupon.code, &ride_id)?;
         discount = coupon.discount;
     }
 
@@ -314,8 +310,7 @@ async fn app_post_rides_estimated_fare(
         None,
         req.pickup_coordinate,
         req.destination_coordinate,
-    )
-    .await?;
+    )?;
 
     Ok(axum::Json(AppPostRidesEstimatedFareResponse {
         fare: discounted,
@@ -365,10 +360,9 @@ async fn app_post_ride_evaluation(
         Some(&ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
-    )
-    .await?;
+    )?;
 
-    let payment_gateway_url: String = repo.pgw_get().await?;
+    let payment_gateway_url: String = repo.pgw_get()?;
 
     crate::payment_gateway::request_payment_gateway_post_payment(
         &client,
@@ -463,8 +457,7 @@ async fn app_get_notification_inner(
         Some(&ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
-    )
-    .await?;
+    )?;
 
     let mut data = AppGetNotificationResponseData {
         pickup_coordinate: ride.pickup_coord(),
@@ -530,7 +523,7 @@ async fn app_get_nearby_chairs(
     }))
 }
 
-async fn calculate_discounted_fare(
+fn calculate_discounted_fare(
     repo: &Arc<Repository>,
     user_id: &Id<User>,
     ride_id: Option<&Id<Ride>>,
@@ -540,11 +533,11 @@ async fn calculate_discounted_fare(
     let discount = {
         if let Some(ride_id) = ride_id {
             // すでにクーポンが紐づいているならそれの割引額を参照
-            let coupon: Option<Coupon> = repo.coupon_get_by_usedby(ride_id).await?;
+            let coupon: Option<Coupon> = repo.coupon_get_by_usedby(ride_id)?;
             coupon.map(|c| c.discount).unwrap_or(0)
         } else {
             // 初回利用クーポンを最優先で使う
-            let unused_coupons = repo.coupon_get_unused_order_by_created_at(user_id).await?;
+            let unused_coupons = repo.coupon_get_unused_order_by_created_at(user_id)?;
             if let Some(coupon) = unused_coupons.iter().find(|x| x.code == "CP_NEW2024") {
                 coupon.discount
             } else {

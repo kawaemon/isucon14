@@ -51,14 +51,14 @@ impl Repository {
             pool: pool.clone(),
 
             user_cache: Self::init_user_cache(&mut init, pool),
-            owner_cache: Self::init_owner_cache(&mut init),
+            owner_cache: Self::init_owner_cache(&mut init, pool),
             ride_cache: Self::init_ride_cache(&mut init, pool).await,
             chair_model_cache: Self::init_chair_model_cache(pool).await,
             chair_cache,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init),
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init, pool),
-            coupon_cache: Self::init_coupon_cache(pool, &mut init).await,
+            coupon_cache: Self::init_coupon_cache(pool, &mut init),
         };
         tracing::info!("cache initialized");
         r
@@ -67,15 +67,15 @@ impl Repository {
     pub async fn reinit(&self) {
         let mut init = CacheInit::load(&self.pool).await;
 
-        self.reinit_user_cache(&mut init).await;
-        self.reinit_owner_cache(&mut init).await;
+        self.reinit_user_cache(&mut init);
+        self.reinit_owner_cache(&mut init);
         self.reinit_chair_cache(&mut init);
         self.reinit_ride_cache(&mut init).await;
         self.reinit_chair_location_cache(&mut init);
         self.reinit_chair_model_cache().await;
         self.reinit_pgw_cache(&self.pool).await;
         self.reinit_pt_cache(&mut init).await;
-        self.reinit_coupon_cache(&mut init).await;
+        self.reinit_coupon_cache(&mut init);
 
         tracing::info!("cache re-initialized");
     }

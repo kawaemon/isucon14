@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["parking_lot"]
+default = ["parking_lot", "speed"]
 safety = ["dl", "speed"]
 
 dl = []
@@ -13,21 +13,22 @@ speed = []
 parking_lot = ["tokio/parking_lot"]
 
 [dependencies]
-ahash = "0.8.11"
+ahash = "0.8"
 anyhow = { version = "1", features = ["backtrace"] }
 axum = { version = "0.7", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["cookie"] }
-backtrace = "0.3.74"
-cfg-if = "1.0.0"
+backtrace = "0.3"
+cfg-if = "1"
 chrono = "0.4"
-console-subscriber = "0.4.1"
-dashmap = "6.1.0"
-derivative = "2.2.0"
-futures = "0.3.31"
+console-subscriber = "0.4"
+dashmap = { version = "6", features = ["inline"] }
+derivative = "2"
+futures = "0.3"
+hashbrown = { version = "0.15.2", features = ["inline-more", "serde"] }
 hex = "0.4"
 listenfd = "1"
 num-traits = "0.2"
-parking_lot = "0.12.3"
+parking_lot = "0.12"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
@@ -35,8 +36,8 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
 ] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1.0.133"
-sha2 = "0.10.8"
+serde_json = "1"
+sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
     "mysql",
@@ -58,7 +59,7 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
-tokio-stream = { version = "0.1.17", features = ["sync"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
 tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

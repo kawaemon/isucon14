@@ -13,9 +13,13 @@ pub mod payment_gateway;
 pub mod repo;
 pub mod speed;
 
-use std::sync::{atomic::AtomicUsize, Arc};
+use std::sync::{
+    atomic::{AtomicI64, AtomicUsize},
+    Arc,
+};
 
 use axum::{http::StatusCode, response::Response};
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use models::{Chair, Id, User};
 use payment_gateway::PaymentGatewayRestricter;
@@ -24,10 +28,28 @@ use speed::SpeedStatistics;
 use std::time::Duration;
 use tokio::sync::Mutex;
 
-pub type HashMap<K, V> = std::collections::HashMap<K, V, ahash::RandomState>;
-pub type HashSet<K> = std::collections::HashSet<K, ahash::RandomState>;
+pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
+pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
 pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
+
+#[derive(Debug)]
+pub struct AtomicDateTime(AtomicI64);
+impl AtomicDateTime {
+    pub fn new(d: DateTime<Utc>) -> Self {
+        let s = Self(AtomicI64::new(0));
+        s.store(d);
+        s
+    }
+    pub fn load(&self) -> DateTime<Utc> {
+        let raw = self.0.load(std::sync::atomic::Ordering::Relaxed);
+        DateTime::from_timestamp_micros(raw).unwrap()
+    }
+    pub fn store(&self, d: DateTime<Utc>) {
+        let d = d.timestamp_micros();
+        self.0.store(d, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AppState {

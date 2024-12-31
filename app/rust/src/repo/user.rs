@@ -1,7 +1,6 @@
-use crate::HashMap as HashMap;
+use crate::{dl::DlSyncRwLock, ConcurrentHashMap};
 use std::sync::Arc;
 
-use crate::dl::DlRwLock as RwLock;
 use chrono::Utc;
 use sqlx::{MySql, Pool, QueryBuilder, Transaction};
 
@@ -18,41 +17,34 @@ type SharedUser = Arc<User>;
 
 #[derive(Debug)]
 pub struct UserCacheInner {
-    by_id: Arc<RwLock<HashMap<Id<User>, SharedUser>>>,
-    by_token: Arc<RwLock<HashMap<String, SharedUser>>>,
-    by_inv_code: Arc<RwLock<HashMap<String, SharedUser>>>,
+    by_id: Arc<DlSyncRwLock<ConcurrentHashMap<Id<User>, SharedUser>>>,
+    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<String, SharedUser>>>,
+    by_inv_code: Arc<DlSyncRwLock<ConcurrentHashMap<String, SharedUser>>>,
     deferred: SimpleDeferred<UserDeferrable>,
 }
 
 impl UserCacheInner {
-    async fn push(&self, u: User) {
+    fn push(&self, u: User) {
         let s = Arc::new(u.clone());
 
-        {
-            let mut id = self.by_id.write().await;
-            id.insert(u.id, Arc::clone(&s));
-        }
-        {
-            let mut t = self.by_token.write().await;
-            t.insert(u.access_token, Arc::clone(&s));
-        }
-        {
-            let mut inv = self.by_inv_code.write().await;
-            inv.insert(u.invitation_code, Arc::clone(&s));
-        }
+        self.by_id.read().insert(u.id, Arc::clone(&s));
+        self.by_token.read().insert(u.access_token, Arc::clone(&s));
+        self.by_inv_code
+            .read()
+            .insert(u.invitation_code, Arc::clone(&s));
     }
 }
 
 pub struct UserCacheInit {
-    by_id: HashMap<Id<User>, SharedUser>,
-    by_token: HashMap<String, SharedUser>,
-    by_inv_code: HashMap<String, SharedUser>,
+    by_id: ConcurrentHashMap<Id<User>, SharedUser>,
+    by_token: ConcurrentHashMap<String, SharedUser>,
+    by_inv_code: ConcurrentHashMap<String, SharedUser>,
 }
 impl UserCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
-        let mut id = HashMap::default();
-        let mut t = HashMap::default();
-        let mut inv = HashMap::default();
+        let id = ConcurrentHashMap::default();
+        let t = ConcurrentHashMap::default();
+        let inv = ConcurrentHashMap::default();
         for user in &init.users {
             let user = Arc::new(user.clone());
             id.insert(user.id.clone(), Arc::clone(&user));
@@ -72,13 +64,13 @@ impl Repository {
         let init = UserCacheInit::from_init(init);
 
         Arc::new(UserCacheInner {
-            by_id: Arc::new(RwLock::new(init.by_id)),
-            by_token: Arc::new(RwLock::new(init.by_token)),
-            by_inv_code: Arc::new(RwLock::new(init.by_inv_code)),
+            by_id: Arc::new(DlSyncRwLock::new(init.by_id)),
+            by_token: Arc::new(DlSyncRwLock::new(init.by_token)),
+            by_inv_code: Arc::new(DlSyncRwLock::new(init.by_inv_code)),
             deferred: SimpleDeferred::new(pool),
         })
     }
-    pub(super) async fn reinit_user_cache(&self, init: &mut CacheInit) {
+    pub(super) fn reinit_user_cache(&self, init: &mut CacheInit) {
         let init = UserCacheInit::from_init(init);
 
         let UserCacheInner {
@@ -87,9 +79,9 @@ impl Repository {
             by_inv_code,
             deferred: _,
         } = &*self.user_cache;
-        let mut id = by_id.write().await;
-        let mut t = by_token.write().await;
-        let mut inv = by_inv_code.write().await;
+        let mut id = by_id.write();
+        let mut t = by_token.write();
+        let mut inv = by_inv_code.write();
 
         *id = init.by_id;
         *t = init.by_token;
@@ -98,26 +90,26 @@ impl Repository {
 }
 
 impl Repository {
-    pub async fn user_get_by_access_token(&self, token: &str) -> Result<Option<User>> {
-        let cache = self.user_cache.by_token.read().await;
+    pub fn user_get_by_access_token(&self, token: &str) -> Result<Option<User>> {
+        let cache = self.user_cache.by_token.read();
         let Some(entry) = cache.get(token) else {
             return Ok(None);
         };
-        Ok(Some(User::clone(entry)))
+        Ok(Some(User::clone(&*entry)))
     }
-    pub async fn user_get_by_id(&self, id: &Id<User>) -> Result<Option<User>> {
-        let cache = self.user_cache.by_id.read().await;
+    pub fn user_get_by_id(&self, id: &Id<User>) -> Result<Option<User>> {
+        let cache = self.user_cache.by_id.read();
         let Some(entry) = cache.get(id) else {
             return Ok(None);
         };
-        Ok(Some(User::clone(entry)))
+        Ok(Some(User::clone(&*entry)))
     }
-    pub async fn user_get_by_inv_code(&self, code: &str) -> Result<Option<User>> {
-        let cache = self.user_cache.by_inv_code.read().await;
+    pub fn user_get_by_inv_code(&self, code: &str) -> Result<Option<User>> {
+        let cache = self.user_cache.by_inv_code.read();
         let Some(entry) = cache.get(code) else {
             return Ok(None);
         };
-        Ok(Some(User::clone(entry)))
+        Ok(Some(User::clone(&*entry)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -144,7 +136,7 @@ impl Repository {
             created_at: now,
             updated_at: now,
         };
-        self.user_cache.push(u.clone()).await;
+        self.user_cache.push(u.clone());
         self.user_cache.deferred.insert(u);
         self.ride_cache.on_user_add(id).await;
         Ok(())

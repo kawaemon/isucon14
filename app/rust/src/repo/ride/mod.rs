@@ -3,6 +3,7 @@ use crate::dl::DlMutex as Mutex;
 use crate::dl::DlRwLock as RwLock;
 use crate::dl::DlSyncMutex;
 use crate::dl::DlSyncRwLock;
+use crate::ConcurrentHashMap;
 use crate::ConcurrentHashSet;
 use crate::HashMap;
 use crate::HashSet;
@@ -12,6 +13,7 @@ use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
+use std::sync::atomic::AtomicBool;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
@@ -38,6 +40,8 @@ pub struct RideCacheInner {
     free_chairs_lv1: DlSyncRwLock<ConcurrentHashSet<Id<Chair>>>,
     free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
+    user_has_ride: DlSyncRwLock<ConcurrentHashMap<Id<User>, AtomicBool>>,
+
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
     chair_notification: RwLock<HashMap<Id<Chair>, NotificationQueue>>,
 
@@ -54,6 +58,8 @@ struct RideCacheInit {
     waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
     free_chairs_lv1: ConcurrentHashSet<Id<Chair>>,
     free_chairs_lv2: HashSet<Id<Chair>>,
+
+    user_has_ride: ConcurrentHashMap<Id<User>, AtomicBool>,
 
     user_notification: HashMap<Id<User>, NotificationQueue>,
     chair_notification: HashMap<Id<Chair>, NotificationQueue>,
@@ -139,10 +145,10 @@ impl RideCacheInit {
                     pickup: ride.pickup_coord(),
                     destination: ride.destination_coord(),
                     created_at: ride.created_at,
-                    chair_id: RwLock::new(ride.chair_id.clone()),
-                    evaluation: RwLock::new(ride.evaluation),
-                    updated_at: RwLock::new(ride.updated_at),
-                    latest_status: RwLock::new(*latest_ride_stat.get(&ride.id).unwrap()),
+                    chair_id: DlSyncRwLock::new(ride.chair_id.clone()),
+                    evaluation: DlSyncRwLock::new(ride.evaluation),
+                    updated_at: DlSyncRwLock::new(ride.updated_at),
+                    latest_status: DlSyncRwLock::new(*latest_ride_stat.get(&ride.id).unwrap()),
                 }),
             );
         }
@@ -151,27 +157,36 @@ impl RideCacheInit {
         // chair_movement_cache
         //
         let mut chair_movement_cache = HashMap::default();
+        let user_has_ride = ConcurrentHashMap::default();
         for ride in &init.rides {
-            let Some(chair_id) = ride.chair_id.as_ref() else {
-                continue;
-            };
+            let chair_id = ride.chair_id.as_ref();
             let ride = rides.get(&ride.id).unwrap();
             for status in statuses.get(&ride.id).unwrap() {
                 match status.status {
-                    RideStatusEnum::Matching => {}
+                    RideStatusEnum::Matching => {
+                        user_has_ride
+                            .entry(ride.user_id.clone())
+                            .or_insert_with(|| AtomicBool::new(true))
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     RideStatusEnum::Enroute => {
-                        chair_movement_cache.insert(chair_id.clone(), Arc::clone(ride));
+                        chair_movement_cache.insert(chair_id.unwrap().clone(), Arc::clone(ride));
                     }
                     RideStatusEnum::Pickup => {
-                        chair_movement_cache.remove(chair_id).unwrap();
+                        chair_movement_cache.remove(chair_id.unwrap()).unwrap();
                     }
                     RideStatusEnum::Carrying => {
-                        chair_movement_cache.insert(chair_id.clone(), Arc::clone(ride));
+                        chair_movement_cache.insert(chair_id.unwrap().clone(), Arc::clone(ride));
                     }
                     RideStatusEnum::Arrived => {
-                        chair_movement_cache.remove(chair_id).unwrap();
+                        chair_movement_cache.remove(chair_id.unwrap()).unwrap();
                     }
-                    RideStatusEnum::Completed => {}
+                    RideStatusEnum::Completed => {
+                        user_has_ride
+                            .get(&ride.user_id)
+                            .unwrap()
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
                     RideStatusEnum::Canceled => unreachable!(), // 使われてないよね？
                 }
             }
@@ -248,6 +263,7 @@ impl RideCacheInit {
             free_chairs_lv1,
             free_chairs_lv2,
             user_rides,
+            user_has_ride,
         }
     }
 }
@@ -266,6 +282,7 @@ impl Repository {
             ride_deferred: UpdatableDeferred::new(pool),
             ride_status_deferred: UpdatableDeferred::new(pool),
             matching_lock: Mutex::new(()),
+            user_has_ride: DlSyncRwLock::new(init.user_has_ride),
         })
     }
     pub(super) async fn reinit_ride_cache(&self, init: &mut CacheInit) {
@@ -282,6 +299,7 @@ impl Repository {
             ride_deferred: _,
             ride_status_deferred: _,
             matching_lock: _,
+            user_has_ride,
         } = &*self.ride_cache;
 
         let mut r = ride_cache.write().await;
@@ -294,13 +312,11 @@ impl Repository {
         *r = init.ride_cache;
         *u = init.user_notification;
         *c = init.chair_notification;
-
-        let mut f1 = free_chairs_lv1.write();
-        *f1 = init.free_chairs_lv1;
-
         *f2 = init.free_chairs_lv2;
         *w = init.waiting_rides;
         *ur = init.user_rides;
+        *free_chairs_lv1.write() = init.free_chairs_lv1;
+        *user_has_ride.write() = init.user_has_ride;
     }
 }
 
@@ -495,7 +511,7 @@ impl NotificationQueueInner {
         }
     }
 
-    #[must_use = "if true returned, you must set sent flag"]
+    #[must_use = "if returned true, you must set sent flag"]
     pub fn push(&mut self, b: NotificationBody, sent: bool) -> bool {
         if sent {
             if self.tx.is_some() {
@@ -512,11 +528,9 @@ impl NotificationQueueInner {
             assert!(self.queue.is_empty());
             let sent = tx.send(Some(b.clone())).is_ok();
             if sent {
-                tracing::debug!("queue: sse sent");
                 self.last_sent = Some(b);
                 return true;
             }
-            tracing::debug!("notification queue tx dropped");
             self.tx = None;
         }
         self.last_sent = None;
@@ -559,40 +573,36 @@ pub struct RideEntry {
     destination: Coordinate,
     created_at: DateTime<Utc>,
 
-    chair_id: RwLock<Option<Id<Chair>>>,
-    evaluation: RwLock<Option<i32>>,
-    updated_at: RwLock<DateTime<Utc>>,
-    latest_status: RwLock<RideStatusEnum>,
+    chair_id: DlSyncRwLock<Option<Id<Chair>>>,
+    evaluation: DlSyncRwLock<Option<i32>>,
+    updated_at: DlSyncRwLock<DateTime<Utc>>,
+    latest_status: DlSyncRwLock<RideStatusEnum>,
 }
 impl RideEntry {
-    pub async fn ride(&self) -> Ride {
+    pub fn ride(&self) -> Ride {
         Ride {
             id: self.id.clone(),
             user_id: self.user_id.clone(),
-            chair_id: self.chair_id.read().await.clone(),
+            chair_id: self.chair_id.read().clone(),
             pickup_latitude: self.pickup.latitude,
             pickup_longitude: self.pickup.longitude,
             destination_latitude: self.destination.latitude,
             destination_longitude: self.destination.longitude,
-            evaluation: *self.evaluation.read().await,
+            evaluation: *self.evaluation.read(),
             created_at: self.created_at,
-            updated_at: *self.updated_at.read().await,
+            updated_at: *self.updated_at.read(),
         }
     }
-    pub async fn set_chair_id(&self, chair_id: &Id<Chair>, now: DateTime<Utc>) {
-        let mut c = self.chair_id.write().await;
-        let mut u = self.updated_at.write().await;
-        *c = Some(chair_id.clone());
-        *u = now;
+    pub fn set_chair_id(&self, chair_id: &Id<Chair>, now: DateTime<Utc>) {
+        *self.chair_id.write() = Some(chair_id.clone());
+        *self.updated_at.write() = now;
     }
-    pub async fn set_evaluation(&self, eval: i32, now: DateTime<Utc>) {
-        let mut e = self.evaluation.write().await;
-        let mut u = self.updated_at.write().await;
-        *e = Some(eval);
-        *u = now;
+    pub fn set_evaluation(&self, eval: i32, now: DateTime<Utc>) {
+        *self.evaluation.write() = Some(eval);
+        *self.updated_at.write() = now;
     }
-    pub async fn set_latest_ride_status(&self, status: RideStatusEnum) {
-        *self.latest_status.write().await = status;
+    pub fn set_latest_ride_status(&self, status: RideStatusEnum) {
+        *self.latest_status.write() = status;
     }
 }
 
@@ -636,7 +646,7 @@ impl Repository {
             for (ride, status_id) in waiting_rides {
                 let best = free_chairs
                     .iter()
-                    .min_by_key(|cid| {
+                    .min_by_key(|&cid| {
                         let Some(chair_pos) = chair_pos.get(cid).unwrap() else {
                             return 99999999;
                         };

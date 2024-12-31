@@ -49,7 +49,7 @@ pub async fn app_auth_middleware(
         return Err(Error::Unauthorized("app_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(user): Option<User> = repo.user_get_by_access_token(access_token).await? else {
+    let Some(user): Option<User> = repo.user_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -68,7 +68,7 @@ pub async fn owner_auth_middleware(
         return Err(Error::Unauthorized("owner_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(owner): Option<Owner> = repo.owner_get_by_access_token(access_token).await? else {
+    let Some(owner): Option<Owner> = repo.owner_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
