@@ -7,7 +7,7 @@ use crate::{AppState, Error};
 
 crate::conf_env!(static MATCHING_INTERVAL_MS: u64 = {
     from: "MATCHING_INTERVAL_MS",
-    default: "250",
+    default: "500",
 });
 
 pub fn spawn_matching_thread(state: AppState) {

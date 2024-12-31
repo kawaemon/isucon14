@@ -28,12 +28,18 @@ impl UserCacheInner {
     async fn push(&self, u: User) {
         let s = Arc::new(u.clone());
 
-        let mut id = self.by_id.write().await;
-        let mut t = self.by_token.write().await;
-        let mut inv = self.by_inv_code.write().await;
-        id.insert(u.id, Arc::clone(&s));
-        t.insert(u.access_token, Arc::clone(&s));
-        inv.insert(u.invitation_code, Arc::clone(&s));
+        {
+            let mut id = self.by_id.write().await;
+            id.insert(u.id, Arc::clone(&s));
+        }
+        {
+            let mut t = self.by_token.write().await;
+            t.insert(u.access_token, Arc::clone(&s));
+        }
+        {
+            let mut inv = self.by_inv_code.write().await;
+            inv.insert(u.invitation_code, Arc::clone(&s));
+        }
     }
 }
 
@@ -139,7 +145,7 @@ impl Repository {
             updated_at: now,
         };
         self.user_cache.push(u.clone()).await;
-        self.user_cache.deferred.insert(u).await;
+        self.user_cache.deferred.insert(u);
         self.ride_cache.on_user_add(id).await;
         Ok(())
     }

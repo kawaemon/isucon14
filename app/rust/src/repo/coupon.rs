@@ -182,16 +182,18 @@ impl Repository {
             created_at: Utc::now(),
             used_by: None,
         };
+        let e = Arc::new(CouponEntry::new(&c));
         {
-            let e = Arc::new(CouponEntry::new(&c));
             let mut code_cache = self.coupon_cache.by_code.write().await;
-            let mut user_cache = self.coupon_cache.user_queue.write().await;
             code_cache
                 .entry(code.to_owned())
                 .or_insert_with(|| RwLock::new(Vec::new()))
                 .write()
                 .await
                 .push(Arc::clone(&e));
+        }
+        {
+            let mut user_cache = self.coupon_cache.user_queue.write().await;
             user_cache
                 .entry(user.clone())
                 .or_insert_with(|| RwLock::new(Vec::new()))
@@ -200,7 +202,7 @@ impl Repository {
                 .push(Arc::clone(&e));
         }
 
-        self.coupon_cache.deferred.insert(c).await;
+        self.coupon_cache.deferred.insert(c);
         Ok(())
     }
 
@@ -222,14 +224,11 @@ impl Repository {
             assert!(res.is_none());
         }
 
-        self.coupon_cache
-            .deferred
-            .update(CouponUpdate {
-                user_id: user.clone(),
-                code: code.to_owned(),
-                used_by: ride.clone(),
-            })
-            .await;
+        self.coupon_cache.deferred.update(CouponUpdate {
+            user_id: user.clone(),
+            code: code.to_owned(),
+            used_by: ride.clone(),
+        });
         Ok(())
     }
 }

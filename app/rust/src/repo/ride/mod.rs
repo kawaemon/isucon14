@@ -1,6 +1,7 @@
 use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::dl::DlMutex as Mutex;
 use crate::dl::DlRwLock as RwLock;
+use crate::dl::DlSyncRwLock;
 use crate::FxHashMap as HashMap;
 use crate::FxHashSet as HashSet;
 use chrono::{DateTime, Utc};
@@ -32,7 +33,7 @@ pub struct RideCacheInner {
     user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
-    free_chairs_lv1: RwLock<DashSet<Id<Chair>, fxhash::FxBuildHasher>>,
+    free_chairs_lv1: DlSyncRwLock<DashSet<Id<Chair>, fxhash::FxBuildHasher>>,
     free_chairs_lv2: Mutex<HashSet<Id<Chair>>>,
 
     user_notification: RwLock<HashMap<Id<User>, NotificationQueue>>,
@@ -257,7 +258,7 @@ impl Repository {
             chair_notification: RwLock::new(init.chair_notification),
             ride_cache: RwLock::new(init.ride_cache),
             waiting_rides: Mutex::new(init.waiting_rides),
-            free_chairs_lv1: RwLock::new(init.free_chairs_lv1),
+            free_chairs_lv1: DlSyncRwLock::new(init.free_chairs_lv1),
             free_chairs_lv2: Mutex::new(init.free_chairs_lv2),
             user_rides: RwLock::new(init.user_rides),
             ride_deferred: UpdatableDeferred::new(pool),
@@ -284,7 +285,6 @@ impl Repository {
         let mut r = ride_cache.write().await;
         let mut u = user_notification.write().await;
         let mut c = chair_notification.write().await;
-        let mut f1 = free_chairs_lv1.write().await;
         let mut f2 = free_chairs_lv2.lock().await;
         let mut w = waiting_rides.lock().await;
         let mut ur = user_rides.write().await;
@@ -292,7 +292,10 @@ impl Repository {
         *r = init.ride_cache;
         *u = init.user_notification;
         *c = init.chair_notification;
+
+        let mut f1 = free_chairs_lv1.write();
         *f1 = init.free_chairs_lv1;
+
         *f2 = init.free_chairs_lv2;
         *w = init.waiting_rides;
         *ur = init.user_rides;
@@ -300,22 +303,19 @@ impl Repository {
 }
 
 impl Repository {
-    pub async fn chair_huifhiubher(
+    pub fn chair_huifhiubher(
         &self,
         coord: Coordinate,
         dist: i32,
     ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
-        let cache = self.ride_cache.free_chairs_lv1.read().await;
+        let cache = self.ride_cache.free_chairs_lv1.read();
         let mut res = vec![];
         for chair in cache.iter() {
-            let Some(chair_coord) = self.chair_location_get_latest(&chair).await? else {
+            let Some(chair_coord) = self.chair_location_get_latest(&chair)? else {
                 continue;
             };
             if coord.distance(chair_coord) <= dist {
-                let chair = self
-                    .chair_get_by_id_effortless(None, &chair)
-                    .await?
-                    .unwrap();
+                let chair = self.chair_get_by_id_effortless(&chair)?.unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -330,7 +330,7 @@ impl Repository {
 
 crate::conf_env!(static MATCHING_CHAIR_THRESHOLD: usize = {
     from: "MATCHING_CHAIR_THRESHOLD",
-    default: "10",
+    default: "30",
 });
 
 impl Repository {
@@ -367,7 +367,7 @@ impl RideCacheInner {
             .insert(id.clone(), NotificationQueue::new());
     }
     pub async fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
-        let cache = self.free_chairs_lv1.read().await;
+        let cache = self.free_chairs_lv1.read();
         if on_duty {
             cache.remove(id);
         } else {
@@ -397,8 +397,7 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
-                self.ride_status_chair_notified(&next.body.ride_status_id)
-                    .await?;
+                self.ride_status_chair_notified(&next.body.ride_status_id);
                 next = queue.get_next().await.unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
@@ -432,8 +431,7 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
-                self.ride_status_app_notified(&next.body.ride_status_id)
-                    .await?;
+                self.ride_status_app_notified(&next.body.ride_status_id);
                 next = queue.get_next().await.unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
@@ -619,16 +617,12 @@ impl Repository {
             // stupid
             let mut chair_pos = HashMap::default();
             for chair in free_chairs.iter() {
-                let loc = self.chair_location_get_latest(chair).await.unwrap();
+                let loc = self.chair_location_get_latest(chair).unwrap();
                 chair_pos.insert(chair.clone(), loc);
             }
             let mut chair_speed = HashMap::default();
             for chair in free_chairs.iter() {
-                let c = self
-                    .chair_get_by_id_effortless(None, chair)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let c = self.chair_get_by_id_effortless(chair).unwrap().unwrap();
                 let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
                 chair_speed.insert(chair.clone(), speed);
             }

@@ -199,13 +199,12 @@ async fn owner_get_chairs(
     State(AppState { repo, .. }): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
 ) -> Result<axum::Json<OwnerGetChairResponse>, Error> {
-    let chairs = repo.chair_get_by_owner(&owner.id).await?;
+    let chairs = repo.chair_get_by_owner(&owner.id)?;
 
     let mut res = vec![];
     for chair in chairs {
         let (total_distance, total_distance_updated_at) = repo
-            .chair_total_distance(&chair.id)
-            .await?
+            .chair_total_distance(&chair.id)?
             .map(|x| (x.0, Some(x.1.timestamp_millis())))
             .unwrap_or((0, None));
 

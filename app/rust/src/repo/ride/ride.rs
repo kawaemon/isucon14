@@ -67,21 +67,18 @@ impl Repository {
     ) -> Result<()> {
         let now = Utc::now();
 
-        self.ride_cache
-            .ride_deferred
-            .insert(Ride {
-                id: id.clone(),
-                user_id: user.clone(),
-                chair_id: None,
-                pickup_latitude: pickup.latitude,
-                pickup_longitude: pickup.longitude,
-                destination_latitude: dest.latitude,
-                destination_longitude: dest.longitude,
-                evaluation: None,
-                created_at: now,
-                updated_at: now,
-            })
-            .await;
+        self.ride_cache.ride_deferred.insert(Ride {
+            id: id.clone(),
+            user_id: user.clone(),
+            chair_id: None,
+            pickup_latitude: pickup.latitude,
+            pickup_longitude: pickup.longitude,
+            destination_latitude: dest.latitude,
+            destination_longitude: dest.longitude,
+            evaluation: None,
+            created_at: now,
+            updated_at: now,
+        });
 
         {
             let r = Arc::new(RideEntry {
@@ -124,16 +121,13 @@ impl Repository {
             self.ride_cache.on_chair_status_change(chair_id, true).await;
         }
 
-        self.ride_cache
-            .ride_deferred
-            .update(RideUpdate {
-                id: ride_id.clone(),
-                updated_at: now,
-                content: RideUpdateContent::Assign {
-                    chair_id: chair_id.clone(),
-                },
-            })
-            .await;
+        self.ride_cache.ride_deferred.update(RideUpdate {
+            id: ride_id.clone(),
+            updated_at: now,
+            content: RideUpdateContent::Assign {
+                chair_id: chair_id.clone(),
+            },
+        });
 
         let b = NotificationBody {
             ride_id: ride_id.clone(),
@@ -146,7 +140,7 @@ impl Repository {
                 cache.get(chair_id).unwrap().push(b, false).await
             };
             if mark_sent {
-                self.ride_status_chair_notified(status_id).await.unwrap();
+                self.ride_status_chair_notified(status_id);
             }
         }
         Ok(())
@@ -161,14 +155,11 @@ impl Repository {
     ) -> Result<DateTime<Utc>> {
         let now = Utc::now();
 
-        self.ride_cache
-            .ride_deferred
-            .update(RideUpdate {
-                id: id.clone(),
-                updated_at: now,
-                content: RideUpdateContent::Eval { eval },
-            })
-            .await;
+        self.ride_cache.ride_deferred.update(RideUpdate {
+            id: id.clone(),
+            updated_at: now,
+            content: RideUpdateContent::Eval { eval },
+        });
 
         let sales = {
             let mut cache = self.ride_cache.ride_cache.write().await;
@@ -177,7 +168,7 @@ impl Repository {
             ride.ride().await.calc_sale()
         };
 
-        self.chair_cache.on_eval(chair_id, eval, sales, now).await;
+        self.chair_cache.on_eval(chair_id, eval, sales, now);
 
         Ok(now)
     }

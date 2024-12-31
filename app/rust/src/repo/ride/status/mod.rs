@@ -32,17 +32,14 @@ impl Repository {
     ) -> Result<()> {
         let status_id = Id::<RideStatus>::new();
 
-        self.ride_cache
-            .ride_status_deferred
-            .insert(RideStatus {
-                id: status_id.clone(),
-                ride_id: ride_id.clone(),
-                status,
-                created_at: Utc::now(),
-                app_sent_at: None,
-                chair_sent_at: None,
-            })
-            .await;
+        self.ride_cache.ride_status_deferred.insert(RideStatus {
+            id: status_id.clone(),
+            ride_id: ride_id.clone(),
+            status,
+            created_at: Utc::now(),
+            app_sent_at: None,
+            chair_sent_at: None,
+        });
 
         let b = NotificationBody {
             ride_id: ride_id.clone(),
@@ -67,7 +64,7 @@ impl Repository {
                     .await
             };
             if mark_sent {
-                self.ride_status_app_notified(&status_id).await?;
+                self.ride_status_app_notified(&status_id);
             }
         }
 
@@ -83,15 +80,14 @@ impl Repository {
                     chair.get(&c).unwrap().push(b.clone(), false).await
                 };
                 if mark_sent {
-                    self.ride_status_chair_notified(&status_id).await?;
+                    self.ride_status_chair_notified(&status_id);
                 }
             }
 
             match status {
                 RideStatusEnum::Matching => {}
                 RideStatusEnum::Enroute => {
-                    self.chair_set_movement(&c, ride.pickup, RideStatusEnum::Pickup, &ride.id)
-                        .await;
+                    self.chair_set_movement(&c, ride.pickup, RideStatusEnum::Pickup, &ride.id);
                 }
                 RideStatusEnum::Pickup => {}
                 RideStatusEnum::Carrying => {
@@ -100,8 +96,7 @@ impl Repository {
                         ride.destination,
                         RideStatusEnum::Arrived,
                         &ride.id,
-                    )
-                    .await;
+                    );
                 }
                 RideStatusEnum::Arrived => {}
                 RideStatusEnum::Completed => {}
@@ -117,27 +112,23 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn ride_status_chair_notified(&self, status_id: &Id<RideStatus>) -> Result<()> {
+    pub fn ride_status_chair_notified(&self, status_id: &Id<RideStatus>) {
         self.ride_cache
             .ride_status_deferred
             .update(RideStatusUpdate {
                 ty: NotifiedType::Chair,
                 status_id: status_id.clone(),
                 at: Utc::now(),
-            })
-            .await;
-        Ok(())
+            });
     }
 
-    pub async fn ride_status_app_notified(&self, status_id: &Id<RideStatus>) -> Result<()> {
+    pub fn ride_status_app_notified(&self, status_id: &Id<RideStatus>) {
         self.ride_cache
             .ride_status_deferred
             .update(RideStatusUpdate {
                 ty: NotifiedType::App,
                 status_id: status_id.clone(),
                 at: Utc::now(),
-            })
-            .await;
-        Ok(())
+            });
     }
 }

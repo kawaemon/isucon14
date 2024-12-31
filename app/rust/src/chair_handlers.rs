@@ -100,6 +100,7 @@ struct PostChairActivityRequest {
     is_active: bool,
 }
 
+#[axum::debug_handler]
 async fn chair_post_activity(
     State(AppState { repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<EffortlessChair>,
@@ -115,6 +116,7 @@ struct ChairPostCoordinateResponse {
     recorded_at: i64,
 }
 
+#[axum::debug_handler]
 async fn chair_post_coordinate(
     State(AppState { repo, .. }): State<AppState>,
     axum::Extension(chair): axum::Extension<EffortlessChair>,
@@ -196,20 +198,14 @@ async fn chair_get_notification_inner(
     }
 
     Ok(Some(ChairGetNotificationResponseData {
-        ride_id: ride.id,
         user: SimpleUser {
             id: user.id,
             name: format!("{} {}", user.firstname, user.lastname),
         },
-        pickup_coordinate: Coordinate {
-            latitude: ride.pickup_latitude,
-            longitude: ride.pickup_longitude,
-        },
-        destination_coordinate: Coordinate {
-            latitude: ride.destination_latitude,
-            longitude: ride.destination_longitude,
-        },
+        pickup_coordinate: ride.pickup_coord(),
+        destination_coordinate: ride.destination_coord(),
         status: body.status,
+        ride_id: ride.id,
     }))
 }
 

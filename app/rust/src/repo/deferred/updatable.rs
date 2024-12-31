@@ -1,19 +1,18 @@
 use std::{
     future::Future,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
 use derivative::Derivative;
 use sqlx::{MySql, Pool, Transaction};
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 pub trait DeferrableMayUpdated: 'static {
     const NAME: &str;
 
-    type Insert: std::fmt::Debug + Send + 'static;
-    type Update: std::fmt::Debug + Send + 'static;
-    type UpdateQuery: std::fmt::Debug + Send + 'static;
+    type Insert: std::fmt::Debug + Send + Sync + 'static;
+    type Update: std::fmt::Debug + Send + Sync + 'static;
+    type UpdateQuery: std::fmt::Debug + Send + Sync + 'static;
 
     fn summarize(
         inserts: &mut [Self::Insert],
@@ -40,45 +39,53 @@ struct ChangeSet<D: DeferrableMayUpdated> {
 #[derive(Derivative)]
 #[derivative(Debug(bound = ""), Clone(bound = ""))]
 pub struct UpdatableDeferred<D: DeferrableMayUpdated> {
-    set: Arc<Mutex<ChangeSet<D>>>,
+    insert_tx: mpsc::UnboundedSender<D::Insert>,
+    update_tx: mpsc::UnboundedSender<D::Update>,
 }
 
 impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
     pub fn new(pool: &Pool<MySql>) -> Self {
-        let set = Arc::new(Mutex::new(ChangeSet {
-            inserts: vec![],
-            updates: vec![],
-        }));
-        Self::spawn_committer(&set, pool);
-        Self { set }
+        let insert = mpsc::unbounded_channel();
+        let update = mpsc::unbounded_channel();
+        Self::spawn_committer(pool, insert.1, update.1);
+        Self {
+            insert_tx: insert.0,
+            update_tx: update.0,
+        }
     }
-    pub async fn insert(&self, i: D::Insert) {
-        let mut set = self.set.lock().await;
-        set.inserts.push(i);
+    pub fn insert(&self, i: D::Insert) {
+        self.insert_tx.send(i).unwrap();
     }
-    pub async fn update(&self, u: D::Update) {
-        let mut set = self.set.lock().await;
-        set.updates.push(u);
+    pub fn update(&self, u: D::Update) {
+        self.update_tx.send(u).unwrap();
     }
-    fn spawn_committer(set: &Arc<Mutex<ChangeSet<D>>>, pool: &Pool<MySql>) {
+    fn spawn_committer(
+        pool: &Pool<MySql>,
+        mut insert_rx: mpsc::UnboundedReceiver<D::Insert>,
+        mut update_rx: mpsc::UnboundedReceiver<D::Update>,
+    ) {
         let pool = pool.clone();
-        let set = Arc::clone(set);
         tokio::spawn(async move {
             loop {
-                Self::commit(&set, &pool).await;
                 tokio::time::sleep(Duration::from_millis(500)).await;
+
+                let mut set = ChangeSet {
+                    inserts: vec![],
+                    updates: vec![],
+                };
+
+                insert_rx.recv_many(&mut set.inserts, 99999).await;
+                update_rx.recv_many(&mut set.updates, 99999).await;
+
+                Self::commit(set, &pool).await;
             }
         });
     }
-    async fn commit(set: &Arc<Mutex<ChangeSet<D>>>, pool: &Pool<MySql>) {
+    async fn commit(set: ChangeSet<D>, pool: &Pool<MySql>) {
         let begin = Instant::now();
-        let (mut inserts, updates) = {
-            let mut set = set.lock().await;
-            let inserts = std::mem::take(&mut set.inserts);
-            let updates = std::mem::take(&mut set.updates);
-            (inserts, updates)
-        };
+        let mut inserts = set.inserts;
         let inserts_len = inserts.len();
+        let updates = set.updates;
         let updates_count_old = updates.len();
 
         let actual_updates = D::summarize(&mut inserts, updates);
@@ -95,7 +102,9 @@ impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
         let mut tx = pool.begin().await.unwrap();
 
         if !inserts.is_empty() {
-            D::exec_insert(&mut tx, &inserts).await;
+            for i in inserts.chunks(500) {
+                D::exec_insert(&mut tx, i).await;
+            }
         }
 
         let inserts_took = begin.elapsed().as_millis();

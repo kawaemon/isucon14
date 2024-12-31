@@ -104,6 +104,7 @@ struct PostInitializeResponse {
     language: &'static str,
 }
 
+#[axum::debug_handler]
 async fn post_initialize(
     State(AppState { repo, .. }): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,

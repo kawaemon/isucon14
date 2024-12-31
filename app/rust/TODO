@@ -1,7 +1,3 @@
-couponのキャッシュ
-insertの遅延書き込み
-マッチング処理にモデル変数を加える
-移動距離/送迎を含む総移動距離が最も小さいものとマッチングとかしたら良さそう
 再起動したらfree chairが増える謎
  - sse接続時の通知の先送り処理でinnerが呼ばれるからfree chairs v2にinsertされてる？
 latest_locationとspeedとかをchair_cacheに統合する

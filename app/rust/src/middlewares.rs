@@ -87,8 +87,7 @@ pub async fn chair_auth_middleware(
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(chair): Option<EffortlessChair> = repo.chair_get_by_access_token(access_token).await?
-    else {
+    let Some(chair): Option<EffortlessChair> = repo.chair_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 

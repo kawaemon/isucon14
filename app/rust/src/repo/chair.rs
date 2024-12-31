@@ -1,5 +1,6 @@
-use crate::dl::DlRwLock as RwLock;
+use crate::dl::DlSyncRwLock;
 use crate::FxHashMap as HashMap;
+use std::sync::atomic::{AtomicBool, AtomicI64};
 use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
@@ -13,7 +14,7 @@ use crate::{
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableMayUpdated, UpdatableDeferred},
-    Repository, Result, Tx,
+    Repository, Result,
 };
 
 pub type ChairCache = Arc<ChairCacheInner>;
@@ -38,10 +39,10 @@ pub struct ChairEntry {
     pub model: String,
     pub created_at: DateTime<Utc>,
 
-    pub is_active: RwLock<bool>,
-    pub updated_at: RwLock<DateTime<Utc>>,
+    pub is_active: AtomicBool,
+    pub updated_at: AtomicI64,
 
-    pub stat: RwLock<ChairStat>,
+    pub stat: DlSyncRwLock<ChairStat>,
 }
 impl ChairEntry {
     pub fn new(c: Chair) -> Self {
@@ -51,22 +52,25 @@ impl ChairEntry {
             name: c.name.clone(),
             access_token: c.access_token.clone(),
             model: c.model.clone(),
-            is_active: RwLock::new(c.is_active),
+            is_active: AtomicBool::new(c.is_active),
             created_at: c.created_at,
-            updated_at: RwLock::new(c.updated_at),
-            stat: RwLock::new(ChairStat::new()),
+            updated_at: AtomicI64::new(c.updated_at.timestamp_micros()),
+            stat: DlSyncRwLock::new(ChairStat::new()),
         }
     }
-    pub async fn chair(&self) -> Chair {
+    pub fn chair(&self) -> Chair {
         Chair {
             id: self.id.clone(),
             owner_id: self.owner_id.clone(),
             name: self.name.clone(),
             access_token: self.access_token.clone(),
             model: self.model.clone(),
-            is_active: *self.is_active.read().await,
+            is_active: self.is_active.load(std::sync::atomic::Ordering::Relaxed),
             created_at: self.created_at,
-            updated_at: *self.updated_at.read().await,
+            updated_at: DateTime::from_timestamp_micros(
+                self.updated_at.load(std::sync::atomic::Ordering::Relaxed),
+            )
+            .unwrap(),
         }
     }
     pub fn chair_effortless(&self) -> EffortlessChair {
@@ -79,11 +83,11 @@ impl ChairEntry {
             created_at: self.created_at,
         }
     }
-    pub async fn set_active(&self, is_active: bool, now: DateTime<Utc>) {
-        let mut a = self.is_active.write().await;
-        let mut u = self.updated_at.write().await;
-        *a = is_active;
-        *u = now;
+    pub fn set_active(&self, is_active: bool, now: DateTime<Utc>) {
+        self.is_active
+            .store(is_active, std::sync::atomic::Ordering::Relaxed);
+        self.updated_at
+            .store(now.timestamp_micros(), std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -117,9 +121,9 @@ impl ChairStat {
 
 #[derive(Debug)]
 pub struct ChairCacheInner {
-    by_id: RwLock<HashMap<Id<Chair>, SharedChair>>,
-    by_access_token: RwLock<HashMap<String, SharedChair>>,
-    by_owner: RwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
+    by_id: DlSyncRwLock<HashMap<Id<Chair>, SharedChair>>,
+    by_access_token: DlSyncRwLock<HashMap<String, SharedChair>>,
+    by_owner: DlSyncRwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
 
     deferred: UpdatableDeferred<ChairDeferrable>,
 }
@@ -138,11 +142,11 @@ impl Repository {
         since: DateTime<Utc>,
         until: DateTime<Utc>,
     ) -> Result<Vec<ChairSalesStat>> {
-        let cache = self.chair_cache.by_owner.read().await;
+        let cache = self.chair_cache.by_owner.read();
         let cache = cache.get(owner).unwrap();
         let mut res = vec![];
         for c in cache.iter() {
-            let sales = c.stat.read().await.get_sales(since, until);
+            let sales = c.stat.read().get_sales(since, until);
             res.push(ChairSalesStat {
                 id: c.id.clone(),
                 name: c.name.clone(),
@@ -155,28 +159,28 @@ impl Repository {
 }
 
 impl ChairCacheInner {
-    pub async fn push_chair(&self, c: Chair) {
+    pub fn push_chair(&self, c: Chair) {
         let shared = Arc::new(ChairEntry::new(c.clone()));
         {
-            let mut id = self.by_id.write().await;
+            let mut id = self.by_id.write();
             id.insert(c.id.clone(), Arc::clone(&shared));
         }
         {
-            let mut ac = self.by_access_token.write().await;
+            let mut ac = self.by_access_token.write();
             ac.insert(c.access_token, Arc::clone(&shared));
         }
         {
-            let mut ow = self.by_owner.write().await;
+            let mut ow = self.by_owner.write();
             ow.entry(c.owner_id)
                 .or_insert_with(Vec::new)
                 .push(Arc::clone(&shared));
         }
     }
 
-    pub async fn on_eval(&self, chair_id: &Id<Chair>, eval: i32, sales: i32, at: DateTime<Utc>) {
-        let cache = self.by_id.read().await;
+    pub fn on_eval(&self, chair_id: &Id<Chair>, eval: i32, sales: i32, at: DateTime<Utc>) {
+        let cache = self.by_id.read();
         let chair = cache.get(chair_id).unwrap();
-        let mut stat = chair.stat.write().await;
+        let mut stat = chair.stat.write();
         stat.update(eval, sales, at);
     }
 }
@@ -208,7 +212,6 @@ impl ChairCacheInit {
                 chair
                     .stat
                     .write()
-                    .await
                     .update(*eval, s.calc_sale(), s.updated_at);
             }
         }
@@ -226,9 +229,9 @@ impl Repository {
         let init = ChairCacheInit::from_init(init).await;
 
         ChairCache::new(ChairCacheInner {
-            by_id: RwLock::new(init.by_id),
-            by_access_token: RwLock::new(init.by_access_token),
-            by_owner: RwLock::new(init.by_owner),
+            by_id: DlSyncRwLock::new(init.by_id),
+            by_access_token: DlSyncRwLock::new(init.by_access_token),
+            by_owner: DlSyncRwLock::new(init.by_owner),
             deferred: UpdatableDeferred::new(pool),
         })
     }
@@ -241,9 +244,9 @@ impl Repository {
             by_owner,
             deferred: _,
         } = &*self.chair_cache;
-        let mut id = by_id.write().await;
-        let mut ac = by_access_token.write().await;
-        let mut ow = by_owner.write().await;
+        let mut id = by_id.write();
+        let mut ac = by_access_token.write();
+        let mut ow = by_owner.write();
 
         *id = init.by_id;
         *ac = init.by_access_token;
@@ -253,48 +256,36 @@ impl Repository {
 
 // chairs
 impl Repository {
-    pub async fn chair_get_by_id_effortless(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Chair>,
-    ) -> Result<Option<EffortlessChair>> {
-        let cache = self.chair_cache.by_id.read().await;
+    pub fn chair_get_by_id_effortless(&self, id: &Id<Chair>) -> Result<Option<EffortlessChair>> {
+        let cache = self.chair_cache.by_id.read();
         let Some(entry) = cache.get(id) else {
             return Ok(None);
         };
         Ok(Some(entry.chair_effortless()))
     }
 
-    pub async fn chair_get_by_access_token(&self, token: &str) -> Result<Option<EffortlessChair>> {
-        let cache = self.chair_cache.by_access_token.read().await;
+    pub fn chair_get_by_access_token(&self, token: &str) -> Result<Option<EffortlessChair>> {
+        let cache = self.chair_cache.by_access_token.read();
         let Some(entry) = cache.get(token) else {
             return Ok(None);
         };
         Ok(Some(entry.chair_effortless()))
     }
 
-    pub async fn chair_get_by_owner(&self, owner: &Id<Owner>) -> Result<Vec<Chair>> {
-        let cache = self.chair_cache.by_owner.read().await;
+    pub fn chair_get_by_owner(&self, owner: &Id<Owner>) -> Result<Vec<Chair>> {
+        let cache = self.chair_cache.by_owner.read();
         let Some(entry) = cache.get(owner) else {
             return Ok(vec![]);
         };
-        let mut res = vec![];
-        for e in entry {
-            res.push(e.chair().await);
-        }
-        Ok(res)
+        Ok(entry.into_iter().map(|x| x.chair()).collect())
     }
 
     // COMPLETED なものを集める(1)
-    pub async fn chair_get_stats(
-        &self,
-        _tx: impl Into<Option<&mut Tx>>,
-        id: &Id<Chair>,
-    ) -> Result<ChairStats> {
+    pub async fn chair_get_stats(&self, id: &Id<Chair>) -> Result<ChairStats> {
         let stat: ChairStat = {
-            let cache = self.chair_cache.by_id.read().await;
+            let cache = self.chair_cache.by_id.read();
             let chair = cache.get(id).unwrap();
-            let s: ChairStat = chair.stat.read().await.clone();
+            let s: ChairStat = chair.stat.read().clone();
             s
         };
 
@@ -334,8 +325,8 @@ impl Repository {
             created_at: at,
             updated_at: at,
         };
-        self.chair_cache.push_chair(c.clone()).await;
-        self.chair_cache.deferred.insert(c).await;
+        self.chair_cache.push_chair(c.clone());
+        self.chair_cache.deferred.insert(c);
         self.ride_cache.on_chair_add(id).await;
 
         Ok(())
@@ -344,24 +335,21 @@ impl Repository {
     pub async fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
         let now = Utc::now();
         {
-            let cache = self.chair_cache.by_id.read().await;
+            let cache = self.chair_cache.by_id.read();
             let entry = cache.get(id).unwrap();
-            entry.set_active(active, now).await;
-
-            if active {
-                self.ride_cache.on_chair_status_change(id, false).await;
-                self.push_free_chair(id).await;
-            }
+            entry.set_active(active, now);
         }
 
-        self.chair_cache
-            .deferred
-            .update(ChairUpdate {
-                id: id.clone(),
-                active,
-                at: now,
-            })
-            .await;
+        if active {
+            self.ride_cache.on_chair_status_change(id, false).await;
+            self.push_free_chair(id).await;
+        }
+
+        self.chair_cache.deferred.update(ChairUpdate {
+            id: id.clone(),
+            active,
+            at: now,
+        });
 
         Ok(())
     }

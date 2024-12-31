@@ -58,13 +58,10 @@ impl Repository {
             .write()
             .await
             .insert(user.clone(), token.to_owned());
-        self.pt_cache
-            .deferred
-            .insert(TokenInsert {
-                id: user.clone(),
-                token: token.to_owned(),
-            })
-            .await;
+        self.pt_cache.deferred.insert(TokenInsert {
+            id: user.clone(),
+            token: token.to_owned(),
+        });
         Ok(())
     }
 }

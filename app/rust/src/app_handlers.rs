@@ -212,8 +212,7 @@ async fn app_get_rides(
         .await?;
 
         let chair = repo
-            .chair_get_by_id_effortless(None, ride.chair_id.as_ref().unwrap())
-            .await?
+            .chair_get_by_id_effortless(ride.chair_id.as_ref().unwrap())?
             .unwrap();
         let owner: Owner = repo.owner_get_by_id(None, &chair.owner_id).await?.unwrap();
 
@@ -375,7 +374,7 @@ async fn app_post_ride_evaluation(
     )
     .await?;
 
-    let payment_gateway_url: String = repo.pgw_get(None).await?;
+    let payment_gateway_url: String = repo.pgw_get().await?;
 
     crate::payment_gateway::request_payment_gateway_post_payment(
         &client,
@@ -489,11 +488,8 @@ async fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair = repo
-            .chair_get_by_id_effortless(None, &chair_id)
-            .await?
-            .unwrap();
-        let stats = repo.chair_get_stats(None, &chair.id).await?;
+        let chair = repo.chair_get_by_id_effortless(&chair_id)?.unwrap();
+        let stats = repo.chair_get_stats(&chair.id).await?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
@@ -527,6 +523,7 @@ pub struct AppGetNearbyChairsResponseChair {
     pub current_coordinate: Coordinate,
 }
 
+#[axum::debug_handler]
 async fn app_get_nearby_chairs(
     State(AppState { repo, .. }): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
@@ -538,7 +535,7 @@ async fn app_get_nearby_chairs(
     };
 
     Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs: repo.chair_huifhiubher(coordinate, distance).await?,
+        chairs: repo.chair_huifhiubher(coordinate, distance)?,
         retrieved_at: Utc::now().timestamp(),
     }))
 }

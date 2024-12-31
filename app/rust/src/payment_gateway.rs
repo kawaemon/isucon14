@@ -33,7 +33,7 @@ struct PaymentGatewayGetPaymentsResponseOne {}
 const RETRY_LIMIT: usize = 1000;
 crate::conf_env!(static CONCURRENCY: usize = {
     from: "PGW_CONCURRENCY",
-    default: "150",
+    default: "9999",
 });
 
 #[derive(Debug, Clone)]

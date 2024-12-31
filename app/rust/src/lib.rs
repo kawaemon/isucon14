@@ -1,4 +1,6 @@
 #![allow(clippy::new_without_default)]
+#![warn(clippy::future_not_send)]
+#![warn(clippy::unused_async)]
 
 pub mod app_handlers;
 pub mod chair_handlers;
