@@ -77,11 +77,13 @@ async fn main() -> anyhow::Result<()> {
         .merge(isuride::chair_handlers::chair_routes(app_state.clone()))
         .merge(isuride::internal_handlers::internal_routes())
         .with_state(app_state.clone())
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn_with_state(
-            app_state,
-            isuride::middlewares::log_slow_requests,
-        ));
+        .layer(tower_http::trace::TraceLayer::new_for_http());
+
+    #[cfg(feature = "speed")]
+    let app = app.layer(axum::middleware::from_fn_with_state(
+        app_state,
+        isuride::middlewares::log_slow_requests,
+    ));
 
     let tcp_listener =
         if let Some(std_listener) = listenfd::ListenFd::from_env().take_tcp_listener(0)? {

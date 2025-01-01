@@ -5,7 +5,7 @@ edition = "2021"
 publish = false
 
 [features]
-default = ["parking_lot", "speed"]
+default = ["parking_lot"]
 safety = ["dl", "speed"]
 
 dl = []
