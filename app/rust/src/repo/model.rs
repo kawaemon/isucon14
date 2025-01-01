@@ -1,9 +1,7 @@
-use crate::HashMap as HashMap;
+use crate::{dl::DlSyncRwLock, HashMap};
 use std::sync::Arc;
 
 use sqlx::{MySql, Pool};
-
-use crate::dl::DlRwLock as RwLock;
 
 use super::Repository;
 
@@ -11,7 +9,7 @@ pub type ChairModelCache = Arc<Inner>;
 
 #[derive(Debug)]
 pub struct Inner {
-    pub speed: RwLock<HashMap<String, i32>>,
+    pub speed: DlSyncRwLock<HashMap<String, i32>>,
 }
 
 #[derive(Debug)]
@@ -39,11 +37,11 @@ impl Repository {
     pub(super) async fn init_chair_model_cache(pool: &Pool<MySql>) -> ChairModelCache {
         let init = Init::fetch(pool).await;
         Arc::new(Inner {
-            speed: RwLock::new(init.cache),
+            speed: DlSyncRwLock::new(init.cache),
         })
     }
     pub(super) async fn reinit_chair_model_cache(&self) {
         let init = Init::fetch(&self.pool).await;
-        *self.chair_model_cache.speed.write().await = init.cache;
+        *self.chair_model_cache.speed.write() = init.cache;
     }
 }

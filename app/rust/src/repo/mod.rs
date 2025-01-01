@@ -52,7 +52,7 @@ impl Repository {
 
             user_cache: Self::init_user_cache(&mut init, pool),
             owner_cache: Self::init_owner_cache(&mut init, pool),
-            ride_cache: Self::init_ride_cache(&mut init, pool).await,
+            ride_cache: Self::init_ride_cache(&mut init, pool),
             chair_model_cache: Self::init_chair_model_cache(pool).await,
             chair_cache,
             chair_location_cache: Self::init_chair_location_cache(pool, &mut init),
@@ -70,11 +70,11 @@ impl Repository {
         self.reinit_user_cache(&mut init);
         self.reinit_owner_cache(&mut init);
         self.reinit_chair_cache(&mut init);
-        self.reinit_ride_cache(&mut init).await;
+        self.reinit_ride_cache(&mut init);
         self.reinit_chair_location_cache(&mut init);
         self.reinit_chair_model_cache().await;
         self.reinit_pgw_cache(&self.pool).await;
-        self.reinit_pt_cache(&mut init).await;
+        self.reinit_pt_cache(&mut init);
         self.reinit_coupon_cache(&mut init);
 
         tracing::info!("cache re-initialized");

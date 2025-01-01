@@ -71,17 +71,14 @@ async fn chair_post_chairs(
     let chair_id = Id::new();
     let access_token = crate::secure_random_str(32);
 
-    state
-        .repo
-        .chair_add(
-            &chair_id,
-            &owner.id,
-            &req.name,
-            &req.model,
-            false,
-            &access_token,
-        )
-        .await?;
+    state.repo.chair_add(
+        &chair_id,
+        &owner.id,
+        &req.name,
+        &req.model,
+        false,
+        &access_token,
+    )?;
 
     let jar = jar.add(Cookie::build(("chair_session", access_token)).path("/"));
 
@@ -110,8 +107,7 @@ async fn chair_post_activity(
 ) -> Result<StatusCode, Error> {
     state
         .repo
-        .chair_update_is_active(&chair.id, req.is_active)
-        .await?;
+        .chair_update_is_active(&chair.id, req.is_active)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -126,7 +122,7 @@ async fn chair_post_coordinate(
     axum::Extension(chair): axum::Extension<EffortlessChair>,
     axum::Json(req): axum::Json<Coordinate>,
 ) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
-    let created_at = state.repo.chair_location_update(&chair.id, req).await?;
+    let created_at = state.repo.chair_location_update(&chair.id, req)?;
     Ok(axum::Json(ChairPostCoordinateResponse {
         recorded_at: created_at.timestamp_millis(),
     }))
@@ -154,29 +150,23 @@ async fn chair_get_notification(
     let ts = state
         .repo
         .chair_get_next_notification_sse(&chair.id)
-        .await
         .unwrap();
 
     let probe = state.chair_notification_stat.on_create();
 
     let stream =
-        tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
+        tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).map(move |body| {
             let _probe = &probe;
-            let body = body.unwrap();
-            let state = state.clone();
-            let chair = chair.clone();
-            async move {
-                let s = chair_get_notification_inner(&state, &chair.id, body).await?;
-                let s = serde_json::to_string(&s).unwrap();
-                state.chair_notification_stat.on_write(&chair.id).await;
-                Ok(Event::default().data(s))
-            }
+            let s = chair_get_notification_inner(&state, &chair.id, body.unwrap())?;
+            let s = serde_json::to_string(&s).unwrap();
+            state.chair_notification_stat.on_write(&chair.id);
+            Ok(Event::default().data(s))
         });
 
     Sse::new(stream)
 }
 
-async fn chair_get_notification_inner(
+fn chair_get_notification_inner(
     state: &AppState,
     chair_id: &Id<Chair>,
     body: Option<NotificationBody>,
@@ -184,7 +174,7 @@ async fn chair_get_notification_inner(
     let Some(body) = body else {
         return Ok(None);
     };
-    let ride = state.repo.ride_get(&body.ride_id).await?.unwrap();
+    let ride = state.repo.ride_get(&body.ride_id)?.unwrap();
     let user = state.repo.user_get_by_id(&ride.user_id)?.unwrap();
 
     if body.status == RideStatusEnum::Completed {
@@ -194,7 +184,7 @@ async fn chair_get_notification_inner(
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 repo.ride_cache.on_chair_status_change(&chair_id, false);
-                repo.push_free_chair(&chair_id).await;
+                repo.push_free_chair(&chair_id);
             });
         }
     }
@@ -222,7 +212,7 @@ async fn chair_post_ride_status(
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
 ) -> Result<StatusCode, Error> {
-    let Some(ride): Option<Ride> = state.repo.ride_get(&ride_id).await? else {
+    let Some(ride): Option<Ride> = state.repo.ride_get(&ride_id)? else {
         return Err(Error::NotFound("rides not found"));
     };
 
@@ -239,7 +229,7 @@ async fn chair_post_ride_status(
         RideStatusEnum::Enroute => RideStatusEnum::Enroute,
         // After Picking up user
         RideStatusEnum::Carrying => {
-            let status = state.repo.ride_status_latest(&ride.id).await?;
+            let status = state.repo.ride_status_latest(&ride.id)?;
             if status != RideStatusEnum::Pickup {
                 return Err(Error::BadRequest("chair has not arrived yet"));
             }
@@ -250,7 +240,7 @@ async fn chair_post_ride_status(
         }
     };
 
-    state.repo.ride_status_update(&ride_id, next).await?;
+    state.repo.ride_status_update(&ride_id, next)?;
 
     Ok(StatusCode::NO_CONTENT)
 }

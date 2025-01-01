@@ -1,7 +1,7 @@
 use sqlx::{MySql, Pool, QueryBuilder, Transaction};
 
-use crate::dl::DlRwLock as RwLock;
-use crate::HashMap as HashMap;
+use crate::dl::DlSyncRwLock;
+use crate::ConcurrentHashMap;
 use std::sync::Arc;
 
 use crate::models::{Id, User};
@@ -9,21 +9,21 @@ use crate::models::{Id, User};
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result
+    Repository, Result,
 };
 
 pub type PtCache = Arc<PtCacheInner>;
 
 #[derive(Debug)]
 pub struct PtCacheInner {
-    cache: RwLock<HashMap<Id<User>, String>>,
+    cache: DlSyncRwLock<ConcurrentHashMap<Id<User>, String>>,
     deferred: SimpleDeferred<PaymentTokenDeferrable>,
 }
 
-pub type PtCacheInit = HashMap<Id<User>, String>;
+pub type PtCacheInit = ConcurrentHashMap<Id<User>, String>;
 
 fn init(init: &mut CacheInit) -> PtCacheInit {
-    let mut res = HashMap::default();
+    let res = ConcurrentHashMap::default();
     for t in &init.pt {
         res.insert(t.user_id.clone(), t.token.clone());
     }
@@ -33,29 +33,25 @@ fn init(init: &mut CacheInit) -> PtCacheInit {
 impl Repository {
     pub fn init_pt_cache(i: &mut CacheInit, pool: &Pool<MySql>) -> PtCache {
         Arc::new(PtCacheInner {
-            cache: RwLock::new(init(i)),
+            cache: DlSyncRwLock::new(init(i)),
             deferred: SimpleDeferred::new(pool),
         })
     }
-    pub async fn reinit_pt_cache(&self, i: &mut CacheInit) {
-        *self.pt_cache.cache.write().await = init(i);
+    pub fn reinit_pt_cache(&self, i: &mut CacheInit) {
+        *self.pt_cache.cache.write() = init(i);
     }
 }
 
 impl Repository {
-    pub async fn payment_token_get(
-        &self,
-        user: &Id<User>,
-    ) -> Result<Option<String>> {
-        let cache = self.pt_cache.cache.read().await;
-        Ok(cache.get(user).cloned())
+    pub fn payment_token_get(&self, user: &Id<User>) -> Result<Option<String>> {
+        let cache = self.pt_cache.cache.read();
+        Ok(cache.get(user).map(|x| x.clone()))
     }
 
-    pub async fn payment_token_add(&self, user: &Id<User>, token: &str) -> Result<()> {
+    pub fn payment_token_add(&self, user: &Id<User>, token: &str) -> Result<()> {
         self.pt_cache
             .cache
             .write()
-            .await
             .insert(user.clone(), token.to_owned());
         self.pt_cache.deferred.insert(TokenInsert {
             id: user.clone(),

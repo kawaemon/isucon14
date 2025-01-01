@@ -12,8 +12,8 @@ use super::NotificationBody;
 
 // ride_status
 impl Repository {
-    pub async fn ride_status_latest(&self, ride_id: &Id<Ride>) -> Result<RideStatusEnum> {
-        let cache = self.ride_cache.ride_cache.read().await;
+    pub fn ride_status_latest(&self, ride_id: &Id<Ride>) -> Result<RideStatusEnum> {
+        let cache = self.ride_cache.ride_cache.read();
         let ride = cache.get(ride_id).unwrap();
         let s = ride.latest_status.read();
         Ok(*s)
@@ -21,11 +21,7 @@ impl Repository {
 
     // writes
 
-    pub async fn ride_status_update(
-        &self,
-        ride_id: &Id<Ride>,
-        status: RideStatusEnum,
-    ) -> Result<()> {
+    pub fn ride_status_update(&self, ride_id: &Id<Ride>, status: RideStatusEnum) -> Result<()> {
         let status_id = Id::<RideStatus>::new();
 
         self.ride_cache.ride_status_deferred.insert(RideStatus {
@@ -44,16 +40,17 @@ impl Repository {
         };
 
         let ride = {
-            let ride_cache = self.ride_cache.ride_cache.read().await;
+            let ride_cache = self.ride_cache.ride_cache.read();
             let ride = ride_cache.get(ride_id).unwrap();
-            Arc::clone(ride)
+            Arc::clone(&*ride)
         };
 
         ride.set_latest_ride_status(status);
 
         let mark_sent = {
-            let user = self.ride_cache.user_notification.read().await;
-            user.get(&ride.user_id).unwrap().push(b.clone(), false)
+            let user = self.ride_cache.user_notification.read();
+            let user = user.get(&ride.user_id).unwrap();
+            user.push(b.clone(), false)
         };
         if mark_sent {
             self.ride_status_app_notified(&status_id);
@@ -62,14 +59,13 @@ impl Repository {
         let chair_id = { ride.chair_id.read().clone() };
 
         if let Some(c) = chair_id {
-            {
-                let mark_sent = {
-                    let chair = self.ride_cache.chair_notification.read().await;
-                    chair.get(&c).unwrap().push(b.clone(), false)
-                };
-                if mark_sent {
-                    self.ride_status_chair_notified(&status_id);
-                }
+            let mark_sent = {
+                let chair = self.ride_cache.chair_notification.read();
+                let chair = chair.get(&c).unwrap();
+                chair.push(b.clone(), false)
+            };
+            if mark_sent {
+                self.ride_status_chair_notified(&status_id);
             }
 
             match status {
@@ -107,7 +103,7 @@ impl Repository {
         }
 
         if status == RideStatusEnum::Matching {
-            let mut waiting_rides = self.ride_cache.waiting_rides.lock().await;
+            let mut waiting_rides = self.ride_cache.waiting_rides.lock();
             waiting_rides.push_back((Arc::clone(&ride), status_id));
         }
 

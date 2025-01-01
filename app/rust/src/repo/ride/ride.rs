@@ -12,8 +12,8 @@ use super::{NotificationBody, RideEntry};
 
 // rides
 impl Repository {
-    pub async fn ride_get(&self, id: &Id<Ride>) -> Result<Option<Ride>> {
-        let cache = self.ride_cache.ride_cache.read().await;
+    pub fn ride_get(&self, id: &Id<Ride>) -> Result<Option<Ride>> {
+        let cache = self.ride_cache.ride_cache.read();
         let Some(e) = cache.get(id) else {
             return Ok(None);
         };
@@ -32,10 +32,11 @@ impl Repository {
         Ok(s)
     }
 
-    pub async fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
+    pub fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
         let mut res = vec![];
-        let cache = self.ride_cache.user_rides.read().await;
-        let cache = cache.get(id).unwrap().read().await;
+        let cache = self.ride_cache.user_rides.read();
+        let cache = cache.get(id).unwrap();
+        let cache = cache.read();
         for c in cache.iter() {
             res.push(c.ride());
         }
@@ -43,15 +44,15 @@ impl Repository {
         Ok(res)
     }
 
-    pub async fn rides_count_by_user(&self, id: &Id<User>) -> Result<usize> {
-        let cache = self.ride_cache.user_rides.read().await;
-        let len = cache.get(id).unwrap().read().await.len();
+    pub fn rides_count_by_user(&self, id: &Id<User>) -> Result<usize> {
+        let cache = self.ride_cache.user_rides.read();
+        let len = cache.get(id).unwrap().read().len();
         Ok(len)
     }
 
     // writes
 
-    pub async fn rides_new_and_set_matching(
+    pub fn rides_new_and_set_matching(
         &self,
         id: &Id<Ride>,
         user: &Id<User>,
@@ -85,20 +86,20 @@ impl Repository {
                 updated_at: DlSyncRwLock::new(now),
                 latest_status: DlSyncRwLock::new(RideStatusEnum::Matching),
             });
-            let mut cache = self.ride_cache.ride_cache.write().await;
+            let cache = self.ride_cache.ride_cache.read();
             cache.insert(id.clone(), Arc::clone(&r));
-            let cache = self.ride_cache.user_rides.read().await;
-            let mut cache = cache.get(user).unwrap().write().await;
+            let cache = self.ride_cache.user_rides.read();
+            let cache = cache.get(user).unwrap();
+            let mut cache = cache.write();
             cache.push(Arc::clone(&r));
         }
 
-        self.ride_status_update(id, RideStatusEnum::Matching)
-            .await?;
+        self.ride_status_update(id, RideStatusEnum::Matching)?;
 
         Ok(())
     }
 
-    pub async fn rides_assign(
+    pub fn rides_assign(
         &self,
         ride_id: &Id<Ride>,
         status_id: &Id<RideStatus>,
@@ -106,7 +107,7 @@ impl Repository {
     ) -> Result<()> {
         let now = Utc::now();
         {
-            let mut cache = self.ride_cache.ride_cache.write().await;
+            let cache = self.ride_cache.ride_cache.read();
             let e = cache.get_mut(ride_id).unwrap();
             e.set_chair_id(chair_id, now);
         }
@@ -128,8 +129,9 @@ impl Repository {
         };
         {
             let mark_sent = {
-                let cache = self.ride_cache.chair_notification.read().await;
-                cache.get(chair_id).unwrap().push(b, false)
+                let cache = self.ride_cache.chair_notification.read();
+                let cache = cache.get(chair_id).unwrap();
+                cache.push(b, false)
             };
             if mark_sent {
                 self.ride_status_chair_notified(status_id);
@@ -138,7 +140,7 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn rides_set_evaluation(
+    pub fn rides_set_evaluation(
         &self,
         id: &Id<Ride>,
         chair_id: &Id<Chair>,
@@ -153,7 +155,7 @@ impl Repository {
         });
 
         let sales = {
-            let cache = self.ride_cache.ride_cache.read().await;
+            let cache = self.ride_cache.ride_cache.read();
             let ride = cache.get(id).unwrap();
             ride.set_evaluation(eval, now);
             crate::calculate_fare(ride.pickup, ride.destination)

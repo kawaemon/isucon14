@@ -22,12 +22,12 @@ use std::sync::{
 use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use dl::DlSyncMutex;
 use models::{Chair, Id, User};
 use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
 use speed::SpeedStatistics;
 use std::time::Duration;
-use tokio::sync::Mutex;
 
 pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
 pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
@@ -176,13 +176,13 @@ pub struct NotificationStatistics<T>(NotificationStatisticsInner<T>);
 #[derivative(Debug(bound = ""), Clone(bound = ""))]
 pub struct NotificationStatisticsInner<T> {
     connections: Arc<WithDelta>,
-    writes: Arc<Mutex<HashSet<Id<T>>>>,
+    writes: Arc<DlSyncMutex<HashSet<Id<T>>>>,
 }
 impl<T: 'static> NotificationStatistics<T> {
     pub fn new() -> Self {
         let inner = NotificationStatisticsInner {
             connections: Arc::new(WithDelta::new()),
-            writes: Arc::new(Mutex::new(HashSet::default())),
+            writes: Arc::new(DlSyncMutex::new(HashSet::default())),
         };
 
         tokio::spawn({
@@ -191,7 +191,7 @@ impl<T: 'static> NotificationStatistics<T> {
                 loop {
                     tokio::time::sleep(Duration::from_millis(5000)).await;
                     let (total, new, dis) = inner.connections.take();
-                    let writes = inner.writes.lock().await.drain().count();
+                    let writes = inner.writes.lock().drain().count();
                     let tname = std::any::type_name::<T>();
                     tracing::info!(
                         "{tname} notifications: total={total} (writes: {writes}), +={new}, -={dis}"
@@ -208,8 +208,8 @@ impl<T: 'static> NotificationStatistics<T> {
         ConnectionProbe::new(self.0.clone())
     }
 
-    pub async fn on_write(&self, id: &Id<T>) {
-        self.0.writes.lock().await.insert(id.clone());
+    pub fn on_write(&self, id: &Id<T>) {
+        self.0.writes.lock().insert(id.clone());
     }
 }
 

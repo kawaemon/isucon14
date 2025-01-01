@@ -113,7 +113,7 @@ impl Repository {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn user_add(
+    pub fn user_add(
         &self,
         id: &Id<User>,
         username: &str,
@@ -138,7 +138,7 @@ impl Repository {
         };
         self.user_cache.push(u.clone());
         self.user_cache.deferred.insert(u);
-        self.ride_cache.on_user_add(id).await;
+        self.ride_cache.on_user_add(id);
         Ok(())
     }
 }

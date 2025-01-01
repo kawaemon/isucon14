@@ -13,7 +13,7 @@ crate::conf_env!(static MATCHING_INTERVAL_MS: u64 = {
 pub fn spawn_matching_thread(state: AppState) {
     tokio::spawn(async move {
         loop {
-            state.repo.do_matching().await;
+            state.repo.do_matching();
             tokio::time::sleep(Duration::from_millis(*MATCHING_INTERVAL_MS)).await;
         }
     });

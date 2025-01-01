@@ -72,7 +72,7 @@ async fn app_post_users(
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
     let mut jar = Some(jar);
     for retry in 1.. {
-        match app_post_users_inner(&state, &mut jar, &req).await {
+        match app_post_users_inner(&state, &mut jar, &req) {
             Ok(t) => return Ok(t),
             Err(Error::Sqlx(sqlx::Error::Database(e)))
                 if e.code().is_some_and(|x| x == "40001") =>
@@ -86,7 +86,7 @@ async fn app_post_users(
     unreachable!()
 }
 
-async fn app_post_users_inner(
+fn app_post_users_inner(
     state: &AppState,
     jar: &mut Option<CookieJar>,
     req: &AppPostUsersRequest,
@@ -95,18 +95,15 @@ async fn app_post_users_inner(
     let access_token = crate::secure_random_str(32);
     let invitation_code = crate::secure_random_str(15);
 
-    state
-        .repo
-        .user_add(
-            &user_id,
-            &req.username,
-            &req.firstname,
-            &req.lastname,
-            &req.date_of_birth,
-            &access_token,
-            &invitation_code,
-        )
-        .await?;
+    state.repo.user_add(
+        &user_id,
+        &req.username,
+        &req.firstname,
+        &req.lastname,
+        &req.date_of_birth,
+        &access_token,
+        &invitation_code,
+    )?;
 
     // 初回登録キャンペーンのクーポンを付与
     state.repo.coupon_add(&user_id, "CP_NEW2024", 3000)?;
@@ -164,7 +161,7 @@ async fn app_post_payment_methods(
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostPaymentMethodsRequest>,
 ) -> Result<StatusCode, Error> {
-    state.repo.payment_token_add(&user.id, &req.token).await?;
+    state.repo.payment_token_add(&user.id, &req.token)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -197,10 +194,10 @@ async fn app_get_rides(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
-    let rides: Vec<Ride> = state.repo.rides_by_user(&user.id).await?;
+    let rides: Vec<Ride> = state.repo.rides_by_user(&user.id)?;
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = state.repo.ride_status_latest(&ride.id).await?;
+        let status = state.repo.ride_status_latest(&ride.id)?;
         if status != RideStatusEnum::Completed {
             continue;
         }
@@ -262,15 +259,12 @@ async fn app_post_rides(
         return Err(Error::Conflict("ride already exists"));
     }
 
-    state
-        .repo
-        .rides_new_and_set_matching(
-            &ride_id,
-            &user.id,
-            req.pickup_coordinate,
-            req.destination_coordinate,
-        )
-        .await?;
+    state.repo.rides_new_and_set_matching(
+        &ride_id,
+        &user.id,
+        req.pickup_coordinate,
+        req.destination_coordinate,
+    )?;
 
     let mut discount = 0;
     let unused_coupons = state.repo.coupon_get_unused_order_by_created_at(&user.id)?;
@@ -349,17 +343,16 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("evaluation must be between 1 and 5"));
     }
 
-    let Some(ride): Option<Ride> = state.repo.ride_get(&ride_id).await? else {
+    let Some(ride): Option<Ride> = state.repo.ride_get(&ride_id)? else {
         return Err(Error::NotFound("ride not found"));
     };
 
-    let status = state.repo.ride_status_latest(&ride.id).await?;
+    let status = state.repo.ride_status_latest(&ride.id)?;
     if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let Some(payment_token): Option<String> = state.repo.payment_token_get(&ride.user_id).await?
-    else {
+    let Some(payment_token): Option<String> = state.repo.payment_token_get(&ride.user_id)? else {
         return Err(Error::BadRequest("payment token not registered"));
     };
 
@@ -385,12 +378,10 @@ async fn app_post_ride_evaluation(
     let chair_id = ride.chair_id.as_ref().unwrap();
     let updated_at = state
         .repo
-        .rides_set_evaluation(&ride_id, chair_id, req.evaluation)
-        .await?;
+        .rides_set_evaluation(&ride_id, chair_id, req.evaluation)?;
     state
         .repo
-        .ride_status_update(&ride_id, RideStatusEnum::Completed)
-        .await?;
+        .ride_status_update(&ride_id, RideStatusEnum::Completed)?;
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
         fare,
@@ -429,11 +420,7 @@ async fn app_get_notification(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let ts = state
-        .repo
-        .user_get_next_notification_sse(&user.id)
-        .await
-        .unwrap();
+    let ts = state.repo.user_get_next_notification_sse(&user.id).unwrap();
 
     let probe = state.user_notification_stat.on_create();
 
@@ -444,9 +431,9 @@ async fn app_get_notification(
             let state = state.clone();
             let user = user.clone();
             async move {
-                let s = app_get_notification_inner(&state, &user.id, body).await?;
+                let s = app_get_notification_inner(&state, &user.id, body)?;
                 let s = serde_json::to_string(&s).unwrap();
-                state.user_notification_stat.on_write(&user.id).await;
+                state.user_notification_stat.on_write(&user.id);
                 Ok(Event::default().data(s))
             }
         });
@@ -454,13 +441,13 @@ async fn app_get_notification(
     Sse::new(stream)
 }
 
-async fn app_get_notification_inner(
+fn app_get_notification_inner(
     state: &AppState,
     user_id: &Id<User>,
     body: Option<NotificationBody>,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let Some(body) = body else { return Ok(None) };
-    let ride = state.repo.ride_get(&body.ride_id).await?.unwrap();
+    let ride = state.repo.ride_get(&body.ride_id)?.unwrap();
     let status = body.status;
 
     let fare = calculate_discounted_fare(

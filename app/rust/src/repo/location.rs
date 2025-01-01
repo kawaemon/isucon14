@@ -1,7 +1,7 @@
 use crate::{
     dl::DlSyncRwLock,
     models::{Ride, RideStatusEnum},
-    HashMap as HashMap,
+    HashMap,
 };
 use std::sync::Arc;
 
@@ -236,7 +236,7 @@ impl Repository {
         cache.set_movement(coord, next, ride.clone());
     }
 
-    pub async fn chair_location_update(
+    pub fn chair_location_update(
         &self,
         chair_id: &Id<Chair>,
         coord: Coordinate,
@@ -262,7 +262,7 @@ impl Repository {
             };
 
             if let Some((ride, status)) = update {
-                self.ride_status_update(&ride, status).await.unwrap();
+                self.ride_status_update(&ride, status).unwrap();
             }
 
             if hit {

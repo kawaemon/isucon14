@@ -299,7 +299,7 @@ impl Repository {
 
     // writes
 
-    pub async fn chair_add(
+    pub fn chair_add(
         &self,
         id: &Id<Chair>,
         owner: &Id<Owner>,
@@ -321,12 +321,12 @@ impl Repository {
         };
         self.chair_cache.push_chair(c.clone());
         self.chair_cache.deferred.insert(c);
-        self.ride_cache.on_chair_add(id).await;
+        self.ride_cache.on_chair_add(id);
 
         Ok(())
     }
 
-    pub async fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
+    pub fn chair_update_is_active(&self, id: &Id<Chair>, active: bool) -> Result<()> {
         let now = Utc::now();
         {
             let cache = self.chair_cache.by_id.read();
@@ -336,7 +336,7 @@ impl Repository {
 
         if active {
             self.ride_cache.on_chair_status_change(id, false);
-            self.push_free_chair(id).await;
+            self.push_free_chair(id);
         }
 
         self.chair_cache.deferred.update(ChairUpdate {
