@@ -136,9 +136,7 @@ impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
 }
 impl<T> Id<T> {
     pub fn new() -> Self {
-        static ID: AtomicUsize = AtomicUsize::new(1);
-        let id = ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Id(id.to_string(), PhantomData)
+        Id(ulid::Ulid::new().to_string(), PhantomData)
     }
     pub fn from_string(id: impl Into<String>) -> Self {
         Self(id.into(), PhantomData)
