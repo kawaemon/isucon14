@@ -33,7 +33,6 @@ pub type RideCache = Arc<RideCacheInner>;
 #[derive(Debug)]
 pub struct RideCacheInner {
     ride_cache: RwLock<HashMap<Id<Ride>, Arc<RideEntry>>>,
-    #[allow(clippy::type_complexity)]
     user_rides: RwLock<HashMap<Id<User>, RwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: Mutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,

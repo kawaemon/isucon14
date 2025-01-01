@@ -1,4 +1,5 @@
 #![allow(clippy::new_without_default)]
+#![allow(clippy::type_complexity)]
 #![warn(clippy::future_not_send)]
 #![warn(clippy::unused_async)]
 
@@ -51,8 +52,10 @@ impl AtomicDateTime {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AppState {
+pub type AppState = Arc<AppStateInner>;
+
+#[derive(Debug)]
+pub struct AppStateInner {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
     pub pgw: PaymentGatewayRestricter,

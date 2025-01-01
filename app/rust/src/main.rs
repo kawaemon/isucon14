@@ -2,8 +2,8 @@ use axum::extract::State;
 use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
 use isuride::speed::SpeedStatistics;
-use isuride::NotificationStatistics;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
+use isuride::{AppStateInner, NotificationStatistics};
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
         .build()
         .unwrap();
 
-    let app_state = AppState {
+    let app_state = Arc::new(AppStateInner {
         pool,
         repo,
         pgw,
@@ -66,7 +66,7 @@ async fn main() -> anyhow::Result<()> {
         client,
         chair_notification_stat: NotificationStatistics::new(),
         user_notification_stat: NotificationStatistics::new(),
-    };
+    });
 
     spawn_matching_thread(app_state.clone());
 
@@ -106,7 +106,7 @@ struct PostInitializeResponse {
 
 #[axum::debug_handler]
 async fn post_initialize(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Json(req): axum::Json<PostInitializeRequest>,
 ) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let status = tokio::process::Command::new("../sql/init.sh")
@@ -120,8 +120,8 @@ async fn post_initialize(
         });
     }
 
-    repo.reinit().await;
-    repo.pgw_set(&req.payment_server).await?;
+    state.repo.reinit().await;
+    state.repo.pgw_set(&req.payment_server).await?;
 
     Ok(axum::Json(PostInitializeResponse { language: "rust" }))
 }

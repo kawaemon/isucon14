@@ -36,7 +36,7 @@ struct OwnerPostOwnersResponse {
 }
 
 async fn owner_post_owners(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     jar: CookieJar,
     axum::Json(req): axum::Json<OwnerPostOwnersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<OwnerPostOwnersResponse>)), Error> {
@@ -44,7 +44,9 @@ async fn owner_post_owners(
     let access_token = crate::secure_random_str(32);
     let chair_register_token = crate::secure_random_str(32);
 
-    repo.owner_add(&owner_id, &req.name, &access_token, &chair_register_token)?;
+    state
+        .repo
+        .owner_add(&owner_id, &req.name, &access_token, &chair_register_token)?;
 
     let jar = jar.add(Cookie::build(("owner_session", access_token)).path("/"));
 
@@ -87,7 +89,7 @@ struct GetOwnerSalesQuery {
 }
 
 async fn owner_get_sales(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
     Query(query): Query<GetOwnerSalesQuery>,
 ) -> Result<axum::Json<OwnerGetSalesResponse>, Error> {
@@ -116,7 +118,10 @@ async fn owner_get_sales(
 
     let mut model_sales_by_model = HashMap::default();
 
-    for chair in repo.chair_sale_stats_by_owner(&owner.id, since, until)? {
+    for chair in state
+        .repo
+        .chair_sale_stats_by_owner(&owner.id, since, until)?
+    {
         res.total_sales += chair.sales;
         *model_sales_by_model.entry(chair.model).or_insert(0) += chair.sales;
         res.chairs.push(ChairSales {
@@ -192,14 +197,15 @@ struct OwnerGetChairResponseChair {
 }
 
 async fn owner_get_chairs(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
 ) -> Result<axum::Json<OwnerGetChairResponse>, Error> {
-    let chairs = repo.chair_get_by_owner(&owner.id)?;
+    let chairs = state.repo.chair_get_by_owner(&owner.id)?;
 
     let mut res = vec![];
     for chair in chairs {
-        let (total_distance, total_distance_updated_at) = repo
+        let (total_distance, total_distance_updated_at) = state
+            .repo
             .chair_total_distance(&chair.id)?
             .map(|x| (x.0, Some(x.1.timestamp_millis())))
             .unwrap_or((0, None));

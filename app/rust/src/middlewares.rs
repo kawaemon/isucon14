@@ -14,7 +14,7 @@ pub async fn log_slow_requests(req: Request, next: Next) -> Result<Response, Err
 
 #[cfg(feature = "speed")]
 pub async fn log_slow_requests(
-    State(AppState { speed, .. }): State<AppState>,
+    State(state): State<AppState>,
     req: Request,
     next: Next,
 ) -> Result<Response, Error> {
@@ -34,13 +34,13 @@ pub async fn log_slow_requests(
         path = "/api/app/rides/:id/evaluation";
     }
     let key = format!("{method} {path}");
-    speed.on_request(&key, e).await;
+    state.speed.on_request(&key, e).await;
 
     Ok(res)
 }
 
 pub async fn app_auth_middleware(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -49,7 +49,7 @@ pub async fn app_auth_middleware(
         return Err(Error::Unauthorized("app_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(user): Option<User> = repo.user_get_by_access_token(access_token)? else {
+    let Some(user): Option<User> = state.repo.user_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -59,7 +59,7 @@ pub async fn app_auth_middleware(
 }
 
 pub async fn owner_auth_middleware(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -68,7 +68,7 @@ pub async fn owner_auth_middleware(
         return Err(Error::Unauthorized("owner_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(owner): Option<Owner> = repo.owner_get_by_access_token(access_token)? else {
+    let Some(owner): Option<Owner> = state.repo.owner_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 
@@ -78,7 +78,7 @@ pub async fn owner_auth_middleware(
 }
 
 pub async fn chair_auth_middleware(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     jar: CookieJar,
     mut req: Request,
     next: Next,
@@ -87,7 +87,9 @@ pub async fn chair_auth_middleware(
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
     let access_token = c.value();
-    let Some(chair): Option<EffortlessChair> = repo.chair_get_by_access_token(access_token)? else {
+    let Some(chair): Option<EffortlessChair> =
+        state.repo.chair_get_by_access_token(access_token)?
+    else {
         return Err(Error::Unauthorized("invalid access token"));
     };
 

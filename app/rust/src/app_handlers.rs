@@ -87,7 +87,7 @@ async fn app_post_users(
 }
 
 async fn app_post_users_inner(
-    AppState { repo, .. }: &AppState,
+    state: &AppState,
     jar: &mut Option<CookieJar>,
     req: &AppPostUsersRequest,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
@@ -95,40 +95,45 @@ async fn app_post_users_inner(
     let access_token = crate::secure_random_str(32);
     let invitation_code = crate::secure_random_str(15);
 
-    repo.user_add(
-        &user_id,
-        &req.username,
-        &req.firstname,
-        &req.lastname,
-        &req.date_of_birth,
-        &access_token,
-        &invitation_code,
-    )
-    .await?;
+    state
+        .repo
+        .user_add(
+            &user_id,
+            &req.username,
+            &req.firstname,
+            &req.lastname,
+            &req.date_of_birth,
+            &access_token,
+            &invitation_code,
+        )
+        .await?;
 
     // 初回登録キャンペーンのクーポンを付与
-    repo.coupon_add(&user_id, "CP_NEW2024", 3000)?;
+    state.repo.coupon_add(&user_id, "CP_NEW2024", 3000)?;
 
     // 招待コードを使った登録
     if let Some(req_invitation_code) = req.invitation_code.as_ref() {
         if !req_invitation_code.is_empty() {
             let inv_prefixed_code = format!("INV_{req_invitation_code}");
             // 招待する側の招待数をチェック
-            let coupons = repo.coupon_get_count_by_code(&inv_prefixed_code)?;
+            let coupons = state.repo.coupon_get_count_by_code(&inv_prefixed_code)?;
             if coupons >= 3 {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             }
 
             // ユーザーチェック
-            let Some(inviter): Option<User> = repo.user_get_by_inv_code(req_invitation_code)?
+            let Some(inviter): Option<User> =
+                state.repo.user_get_by_inv_code(req_invitation_code)?
             else {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             };
 
             // 招待クーポン付与
-            repo.coupon_add(&user_id, &inv_prefixed_code, 1500)?;
+            state.repo.coupon_add(&user_id, &inv_prefixed_code, 1500)?;
             // 招待した人にもRewardを付与
-            repo.coupon_add(&inviter.id, &format!("RWD_{}", Id::<Coupon>::new()), 1000)?;
+            state
+                .repo
+                .coupon_add(&inviter.id, &format!("RWD_{}", Id::<Coupon>::new()), 1000)?;
         }
     }
 
@@ -155,11 +160,11 @@ struct AppPostPaymentMethodsRequest {
 }
 
 async fn app_post_payment_methods(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostPaymentMethodsRequest>,
 ) -> Result<StatusCode, Error> {
-    repo.payment_token_add(&user.id, &req.token).await?;
+    state.repo.payment_token_add(&user.id, &req.token).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -189,29 +194,30 @@ struct GetAppRidesResponseItemChair {
 }
 
 async fn app_get_rides(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
-    let rides: Vec<Ride> = repo.rides_by_user(&user.id).await?;
+    let rides: Vec<Ride> = state.repo.rides_by_user(&user.id).await?;
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = repo.ride_status_latest(&ride.id).await?;
+        let status = state.repo.ride_status_latest(&ride.id).await?;
         if status != RideStatusEnum::Completed {
             continue;
         }
 
         let fare = calculate_discounted_fare(
-            &repo,
+            &state.repo,
             &user.id,
             Some(&ride.id),
             ride.pickup_coord(),
             ride.destination_coord(),
         )?;
 
-        let chair = repo
+        let chair = state
+            .repo
             .chair_get_by_id_effortless(ride.chair_id.as_ref().unwrap())?
             .unwrap();
-        let owner: Owner = repo.owner_get_by_id(&chair.owner_id)?.unwrap();
+        let owner: Owner = state.repo.owner_get_by_id(&chair.owner_id)?.unwrap();
 
         items.push(GetAppRidesResponseItem {
             pickup_coordinate: ride.pickup_coord(),
@@ -246,32 +252,36 @@ struct AppPostRidesResponse {
 }
 
 async fn app_post_rides(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesRequest>,
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
     let ride_id = Id::new();
 
-    if repo.rides_user_ongoing(&user.id)? {
+    if state.repo.rides_user_ongoing(&user.id)? {
         return Err(Error::Conflict("ride already exists"));
     }
 
-    repo.rides_new_and_set_matching(
-        &ride_id,
-        &user.id,
-        req.pickup_coordinate,
-        req.destination_coordinate,
-    )
-    .await?;
+    state
+        .repo
+        .rides_new_and_set_matching(
+            &ride_id,
+            &user.id,
+            req.pickup_coordinate,
+            req.destination_coordinate,
+        )
+        .await?;
 
     let mut discount = 0;
-    let unused_coupons = repo.coupon_get_unused_order_by_created_at(&user.id)?;
+    let unused_coupons = state.repo.coupon_get_unused_order_by_created_at(&user.id)?;
     let coupon_candidate = unused_coupons
         .iter()
         .find(|x| x.code == "CP_NEW2024")
         .or(unused_coupons.first());
     if let Some(coupon) = coupon_candidate {
-        repo.coupon_set_used(&user.id, &coupon.code, &ride_id)?;
+        state
+            .repo
+            .coupon_set_used(&user.id, &coupon.code, &ride_id)?;
         discount = coupon.discount;
     }
 
@@ -300,12 +310,12 @@ struct AppPostRidesEstimatedFareResponse {
 }
 
 async fn app_post_rides_estimated_fare(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostRidesEstimatedFareRequest>,
 ) -> Result<axum::Json<AppPostRidesEstimatedFareResponse>, Error> {
     let discounted = calculate_discounted_fare(
-        &repo,
+        &state.repo,
         &user.id,
         None,
         req.pickup_coordinate,
@@ -331,9 +341,7 @@ struct AppPostRideEvaluationResponse {
 }
 
 async fn app_post_ride_evaluation(
-    State(AppState {
-        repo, pgw, client, ..
-    }): State<AppState>,
+    State(state): State<AppState>,
     Path((ride_id,)): Path<(Id<Ride>,)>,
     axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
 ) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
@@ -341,32 +349,33 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("evaluation must be between 1 and 5"));
     }
 
-    let Some(ride): Option<Ride> = repo.ride_get(&ride_id).await? else {
+    let Some(ride): Option<Ride> = state.repo.ride_get(&ride_id).await? else {
         return Err(Error::NotFound("ride not found"));
     };
 
-    let status = repo.ride_status_latest(&ride.id).await?;
+    let status = state.repo.ride_status_latest(&ride.id).await?;
     if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let Some(payment_token): Option<String> = repo.payment_token_get(&ride.user_id).await? else {
+    let Some(payment_token): Option<String> = state.repo.payment_token_get(&ride.user_id).await?
+    else {
         return Err(Error::BadRequest("payment token not registered"));
     };
 
     let fare = calculate_discounted_fare(
-        &repo,
+        &state.repo,
         &ride.user_id,
         Some(&ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
     )?;
 
-    let payment_gateway_url: String = repo.pgw_get()?;
+    let payment_gateway_url: String = state.repo.pgw_get()?;
 
     crate::payment_gateway::request_payment_gateway_post_payment(
-        &client,
-        &pgw,
+        &state.client,
+        &state.pgw,
         &payment_gateway_url,
         &payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
@@ -374,10 +383,13 @@ async fn app_post_ride_evaluation(
     .await?;
 
     let chair_id = ride.chair_id.as_ref().unwrap();
-    let updated_at = repo
+    let updated_at = state
+        .repo
         .rides_set_evaluation(&ride_id, chair_id, req.evaluation)
         .await?;
-    repo.ride_status_update(&ride_id, RideStatusEnum::Completed)
+    state
+        .repo
+        .ride_status_update(&ride_id, RideStatusEnum::Completed)
         .await?;
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
@@ -443,16 +455,16 @@ async fn app_get_notification(
 }
 
 async fn app_get_notification_inner(
-    AppState { repo, .. }: &AppState,
+    state: &AppState,
     user_id: &Id<User>,
     body: Option<NotificationBody>,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let Some(body) = body else { return Ok(None) };
-    let ride = repo.ride_get(&body.ride_id).await?.unwrap();
+    let ride = state.repo.ride_get(&body.ride_id).await?.unwrap();
     let status = body.status;
 
     let fare = calculate_discounted_fare(
-        repo,
+        &state.repo,
         user_id,
         Some(&ride.id),
         ride.pickup_coord(),
@@ -471,8 +483,8 @@ async fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair = repo.chair_get_by_id_effortless(&chair_id)?.unwrap();
-        let stats = repo.chair_get_stats(&chair.id)?;
+        let chair = state.repo.chair_get_by_id_effortless(&chair_id)?.unwrap();
+        let stats = state.repo.chair_get_stats(&chair.id)?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
@@ -508,7 +520,7 @@ pub struct AppGetNearbyChairsResponseChair {
 
 #[axum::debug_handler]
 async fn app_get_nearby_chairs(
-    State(AppState { repo, .. }): State<AppState>,
+    State(state): State<AppState>,
     Query(query): Query<AppGetNearbyChairsQuery>,
 ) -> Result<axum::Json<AppGetNearbyChairsResponse>, Error> {
     let distance = query.distance.unwrap_or(50);
@@ -518,7 +530,7 @@ async fn app_get_nearby_chairs(
     };
 
     Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs: repo.chair_huifhiubher(coordinate, distance)?,
+        chairs: state.repo.chair_huifhiubher(coordinate, distance)?,
         retrieved_at: Utc::now().timestamp(),
     }))
 }
