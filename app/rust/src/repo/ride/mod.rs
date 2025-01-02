@@ -647,7 +647,7 @@ impl Repository {
                     .iter()
                     .enumerate()
                     .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
-                    .min_by_key(|(_i, x)| x.coord.distance(ride.pickup))
+                    .max_by_key(|(_i, x)| x.coord.distance(ride.pickup))
                 else {
                     redu.push((ride, status_id));
                     continue;
