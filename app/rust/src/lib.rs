@@ -14,21 +14,12 @@ pub mod payment_gateway;
 pub mod repo;
 pub mod speed;
 
-use std::sync::{
-    atomic::{AtomicI64, AtomicUsize},
-    Arc, LazyLock,
-};
+use std::sync::{atomic::AtomicI64, Arc, LazyLock};
 
 use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
-use derivative::Derivative;
-use dl::DlSyncMutex;
 use lasso::{Spur, ThreadedRodeo};
-use models::{Chair, Id, User};
-use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
-use speed::SpeedStatistics;
-use std::time::Duration;
 
 pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
 pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
@@ -62,10 +53,10 @@ pub type AppState = Arc<AppStateInner>;
 pub struct AppStateInner {
     pub pool: sqlx::MySqlPool,
     pub repo: Arc<Repository>,
-    pub pgw: PaymentGatewayRestricter,
+
+    #[cfg(feature = "speed")]
     pub speed: SpeedStatistics,
-    pub chair_notification_stat: NotificationStatistics<Chair>,
-    pub user_notification_stat: NotificationStatistics<User>,
+
     pub client: reqwest::Client,
 }
 
@@ -135,101 +126,6 @@ const FARE_PER_DISTANCE: i32 = 100;
 pub fn calculate_fare(pickup: Coordinate, dest: Coordinate) -> i32 {
     let metered_fare = FARE_PER_DISTANCE * pickup.distance(dest);
     INITIAL_FARE + metered_fare
-}
-
-#[derive(Debug)]
-struct WithDelta {
-    total: AtomicUsize,
-    new_con: AtomicUsize,
-    dis_con: AtomicUsize,
-}
-impl WithDelta {
-    pub fn new() -> Self {
-        let t = || AtomicUsize::new(0);
-        Self {
-            total: t(),
-            new_con: t(),
-            dis_con: t(),
-        }
-    }
-    pub fn increment(&self) {
-        self.total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.new_con
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-    pub fn decrement(&self) {
-        self.total
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        self.dis_con
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-    pub fn take(&self) -> (usize, usize, usize) {
-        let total = self.total.load(std::sync::atomic::Ordering::Relaxed);
-        let new_con = self.new_con.swap(0, std::sync::atomic::Ordering::Relaxed);
-        let dis_con = self.dis_con.swap(0, std::sync::atomic::Ordering::Relaxed);
-        (total, new_con, dis_con)
-    }
-}
-
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""), Clone(bound = ""))]
-pub struct NotificationStatistics<T>(NotificationStatisticsInner<T>);
-
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""), Clone(bound = ""))]
-pub struct NotificationStatisticsInner<T> {
-    connections: Arc<WithDelta>,
-    writes: Arc<DlSyncMutex<HashSet<Id<T>>>>,
-}
-impl<T: 'static> NotificationStatistics<T> {
-    pub fn new() -> Self {
-        let inner = NotificationStatisticsInner {
-            connections: Arc::new(WithDelta::new()),
-            writes: Arc::new(DlSyncMutex::new(HashSet::default())),
-        };
-
-        tokio::spawn({
-            let inner = inner.clone();
-            async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(5000)).await;
-                    let (total, new, dis) = inner.connections.take();
-                    let writes = inner.writes.lock().drain().count();
-                    let tname = std::any::type_name::<T>();
-                    tracing::info!(
-                        "{tname} notifications: total={total} (writes: {writes}), +={new}, -={dis}"
-                    );
-                }
-            }
-        });
-
-        Self(inner)
-    }
-
-    #[must_use = "hold this until stream drops"]
-    pub fn on_create(&self) -> ConnectionProbe<T> {
-        ConnectionProbe::new(self.0.clone())
-    }
-
-    pub fn on_write(&self, id: Id<T>) {
-        self.0.writes.lock().insert(id);
-    }
-}
-
-#[derive(Derivative)]
-#[derivative(Debug(bound = ""))]
-pub struct ConnectionProbe<T>(NotificationStatisticsInner<T>);
-impl<T> ConnectionProbe<T> {
-    fn new(inner: NotificationStatisticsInner<T>) -> Self {
-        inner.connections.increment();
-        Self(inner)
-    }
-}
-impl<T> Drop for ConnectionProbe<T> {
-    fn drop(&mut self) {
-        self.0.connections.decrement();
-    }
 }
 
 macro_rules! conf_env {

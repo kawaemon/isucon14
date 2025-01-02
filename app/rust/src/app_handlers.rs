@@ -372,7 +372,6 @@ async fn app_post_ride_evaluation(
 
     crate::payment_gateway::request_payment_gateway_post_payment(
         &state.client,
-        &state.pgw,
         payment_gateway_url,
         payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
@@ -426,18 +425,14 @@ async fn app_get_notification(
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
     let ts = state.repo.user_get_next_notification_sse(user.id).unwrap();
 
-    let probe = state.user_notification_stat.on_create();
-
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
-            let _probe = &probe;
             let body = body.unwrap();
             let state = state.clone();
             let user = user.clone();
             async move {
                 let s = app_get_notification_inner(&state, user.id, body)?;
                 let s = serde_json::to_string(&s).unwrap();
-                state.user_notification_stat.on_write(user.id);
                 Ok(Event::default().data(s))
             }
         });

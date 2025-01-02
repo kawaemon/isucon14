@@ -1,10 +1,10 @@
 use axum::extract::State;
 use isuride::models::Symbol;
-use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
+#[cfg(feature = "speed")]
 use isuride::speed::SpeedStatistics;
+use isuride::AppStateInner;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
-use isuride::{AppStateInner, NotificationStatistics};
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let repo = Arc::new(Repository::new(&pool).await);
-    let pgw = PaymentGatewayRestricter::new();
+    #[cfg(feature = "speed")]
     let speed = SpeedStatistics::new();
     let client = reqwest::Client::builder()
         .tcp_keepalive(Duration::from_secs(10))
@@ -62,11 +62,9 @@ async fn main() -> anyhow::Result<()> {
     let app_state = Arc::new(AppStateInner {
         pool,
         repo,
-        pgw,
+        #[cfg(feature = "speed")]
         speed,
         client,
-        chair_notification_stat: NotificationStatistics::new(),
-        user_notification_stat: NotificationStatistics::new(),
     });
 
     spawn_matching_thread(app_state.clone());

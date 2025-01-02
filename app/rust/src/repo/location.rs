@@ -23,7 +23,7 @@ pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
 
 #[derive(Debug)]
 pub struct ChairLocationCacheInner {
-    cache: DlSyncRwLock<HashMap<Id<Chair>, Entry>>,
+    pub cache: DlSyncRwLock<HashMap<Id<Chair>, Entry>>,
     deferred: SimpleDeferred<ChairLocationDeferrable>,
 }
 
@@ -49,7 +49,7 @@ impl DeferrableSimple for ChairLocationDeferrable {
 }
 
 #[derive(Debug)]
-struct Entry(DlSyncRwLock<EntryInner>);
+pub struct Entry(DlSyncRwLock<EntryInner>);
 impl Entry {
     fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
         Self(DlSyncRwLock::new(EntryInner::new(coord, at)))
@@ -60,7 +60,7 @@ impl Entry {
     fn set_movement(&self, coord: Coordinate, next: RideStatusEnum, ride: Id<Ride>) {
         self.0.write().set_movement(coord, next, ride);
     }
-    fn latest(&self) -> Coordinate {
+    pub fn latest(&self) -> Coordinate {
         self.0.read().latest_coord
     }
     fn get_total(&self) -> (i64, DateTime<Utc>) {

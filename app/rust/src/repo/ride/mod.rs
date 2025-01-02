@@ -321,14 +321,18 @@ impl Repository {
         coord: Coordinate,
         dist: i32,
     ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
-        let cache = self.ride_cache.free_chairs_lv1.read();
+        let free_chair_cache = self.ride_cache.free_chairs_lv1.read();
+        let loc_cache = self.chair_location_cache.cache.read();
+        let chair_cache = self.chair_cache.by_id.read();
+
         let mut res = vec![];
-        for chair in cache.iter() {
-            let Some(chair_coord) = self.chair_location_get_latest(*chair)? else {
+        for chair in free_chair_cache.iter() {
+            let Some(chair_coord) = loc_cache.get(&*chair) else {
                 continue;
             };
-            if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id_effortless(*chair)?.unwrap();
+            let chair_coord = chair_coord.latest();
+            if chair_coord.distance(coord) <= dist {
+                let chair = chair_cache.get(&*chair).unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -401,18 +405,14 @@ impl Repository {
 
         let next = queue.get_next();
         tx.send(next.clone().map(|x| x.body)).unwrap();
-        let mut send = 1;
 
         if let Some(mut next) = next {
             while !next.sent {
                 self.ride_status_chair_notified(next.body.ride_status_id);
                 next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
-                send += 1;
             }
         }
-
-        tracing::debug!("chair sse beginning, sent to sync={send}");
 
         queue.0.lock().tx = Some(tx);
 
@@ -429,18 +429,14 @@ impl Repository {
 
         let next = queue.get_next();
         tx.send(next.clone().map(|x| x.body)).unwrap();
-        let mut send = 1;
 
         if let Some(mut next) = next {
             while !next.sent {
                 self.ride_status_app_notified(next.body.ride_status_id);
                 next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
-                send += 1;
             }
         }
-
-        tracing::debug!("app sse beginning, sent to sync={send}");
 
         queue.0.lock().tx = Some(tx);
 

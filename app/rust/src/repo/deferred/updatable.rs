@@ -1,7 +1,6 @@
-use std::{
-    future::Future,
-    time::{Duration, Instant},
-};
+use std::{future::Future, time::Duration};
+
+// use std::time::Instant;
 
 use derivative::Derivative;
 use sqlx::{MySql, Pool, Transaction};
@@ -82,22 +81,22 @@ impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
         });
     }
     async fn commit(set: ChangeSet<D>, pool: &Pool<MySql>) {
-        let begin = Instant::now();
+        // let begin = Instant::now();
         let mut inserts = set.inserts;
-        let inserts_len = inserts.len();
+        // let inserts_len = inserts.len();
         let updates = set.updates;
-        let updates_count_old = updates.len();
+        // let updates_count_old = updates.len();
 
         let actual_updates = D::summarize(&mut inserts, updates);
 
-        let updates_count_new = actual_updates.len();
+        // let updates_count_new = actual_updates.len();
 
         if inserts.is_empty() && actual_updates.is_empty() {
             return;
         }
 
-        let summarize_took = begin.elapsed().as_millis();
-        let begin = Instant::now();
+        // let summarize_took = begin.elapsed().as_millis();
+        // let begin = Instant::now();
 
         let mut tx = pool.begin().await.unwrap();
 
@@ -107,8 +106,8 @@ impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
             }
         }
 
-        let inserts_took = begin.elapsed().as_millis();
-        let begin = Instant::now();
+        // let inserts_took = begin.elapsed().as_millis();
+        // let begin = Instant::now();
 
         if !actual_updates.is_empty() {
             for update in actual_updates {
@@ -116,15 +115,15 @@ impl<D: DeferrableMayUpdated> UpdatableDeferred<D> {
             }
         }
 
-        let updates_took = begin.elapsed().as_millis();
-        let begin = Instant::now();
+        // let updates_took = begin.elapsed().as_millis();
+        // let begin = Instant::now();
         tx.commit().await.unwrap();
-        let commit_took = begin.elapsed().as_millis();
+        // let commit_took = begin.elapsed().as_millis();
 
-        let name = D::NAME;
-        tracing::debug!(
-            "{name}: {inserts_len} inserts and {updates_count_old}=>{updates_count_new} updates",
-        );
-        tracing::debug!("{name}: prep={summarize_took}ms, inserts={inserts_took}ms, updates={updates_took}ms, commit={commit_took}ms");
+        // let name = D::NAME;
+        // tracing::debug!(
+        //     "{name}: {inserts_len} inserts and {updates_count_old}=>{updates_count_new} updates",
+        // );
+        // tracing::debug!("{name}: prep={summarize_took}ms, inserts={inserts_took}ms, updates={updates_took}ms, commit={commit_took}ms");
     }
 }

@@ -145,14 +145,10 @@ async fn chair_get_notification(
         .chair_get_next_notification_sse(chair.id)
         .unwrap();
 
-    let probe = state.chair_notification_stat.on_create();
-
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).map(move |body| {
-            let _probe = &probe;
             let s = chair_get_notification_inner(&state, chair.id, body.unwrap())?;
             let s = serde_json::to_string(&s).unwrap();
-            state.chair_notification_stat.on_write(chair.id);
             Ok(Event::default().data(s))
         });
 

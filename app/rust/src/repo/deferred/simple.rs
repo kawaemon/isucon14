@@ -1,7 +1,6 @@
-use std::{
-    future::Future,
-    time::{Duration, Instant},
-};
+use std::{future::Future, time::Duration};
+
+// use std::time::Instant;
 
 use derivative::Derivative;
 use sqlx::{MySql, Pool, Transaction};
@@ -53,24 +52,24 @@ impl<D: DeferrableSimple> SimpleDeferred<D> {
         });
     }
     async fn commit(inserts: &[D::Insert], pool: &Pool<MySql>) {
-        let begin = Instant::now();
+        // let begin = Instant::now();
 
-        let inserts_len = inserts.len();
+        // let inserts_len = inserts.len();
         if inserts.is_empty() {
             return;
         }
 
-        let prep_took = begin.elapsed().as_millis();
+        // let prep_took = begin.elapsed().as_millis();
 
-        let begin = Instant::now();
+        // let begin = Instant::now();
         let mut tx = pool.begin().await.unwrap();
         for i in inserts.chunks(500) {
             D::exec_insert(&mut tx, i).await;
         }
         tx.commit().await.unwrap();
-        let took = begin.elapsed().as_millis();
+        // let took = begin.elapsed().as_millis();
 
-        let name = D::NAME;
-        tracing::debug!("{name}: {inserts_len} inserts, prep={prep_took}ms, insert={took}ms");
+        // let name = D::NAME;
+        // tracing::debug!("{name}: {inserts_len} inserts, prep={prep_took}ms, insert={took}ms");
     }
 }

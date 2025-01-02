@@ -118,7 +118,7 @@ impl ChairStat {
 
 #[derive(Debug)]
 pub struct ChairCacheInner {
-    by_id: DlSyncRwLock<HashMap<Id<Chair>, SharedChair>>,
+    pub by_id: DlSyncRwLock<HashMap<Id<Chair>, SharedChair>>,
     by_access_token: DlSyncRwLock<HashMap<Symbol, SharedChair>>,
     by_owner: DlSyncRwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
 
