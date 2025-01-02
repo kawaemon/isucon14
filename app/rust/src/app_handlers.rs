@@ -92,8 +92,8 @@ fn app_post_users_inner(
     req: &AppPostUsersRequest,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
     let user_id = Id::new();
-    let access_token = Symbol::new_from(crate::secure_random_str(32));
-    let invitation_code = Symbol::new_from(crate::secure_random_str(15));
+    let access_token = Symbol::new_from(crate::secure_random_str(8));
+    let invitation_code = Symbol::new_from(crate::secure_random_str(8));
 
     state.repo.user_add(
         user_id,

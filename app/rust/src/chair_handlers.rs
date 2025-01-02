@@ -69,7 +69,7 @@ async fn chair_post_chairs(
     };
 
     let chair_id = Id::new();
-    let access_token = Symbol::new_from(crate::secure_random_str(32));
+    let access_token = Symbol::new_from(crate::secure_random_str(8));
 
     state
         .repo
@@ -159,6 +159,11 @@ async fn chair_get_notification(
     Sse::new(stream)
 }
 
+crate::conf_env!(static CHAIR_MATCHING_DELAY_MS: u64 = {
+    from: "CHAIR_MATCHING_DELAY_MS",
+    default: "20",
+});
+
 fn chair_get_notification_inner(
     state: &AppState,
     chair_id: Id<Chair>,
@@ -174,7 +179,7 @@ fn chair_get_notification_inner(
         {
             let repo = state.repo.clone();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+                tokio::time::sleep(Duration::from_millis(*CHAIR_MATCHING_DELAY_MS)).await;
                 repo.ride_cache.on_chair_status_change(chair_id, false);
                 repo.push_free_chair(chair_id);
             });

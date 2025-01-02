@@ -41,8 +41,8 @@ async fn owner_post_owners(
     axum::Json(req): axum::Json<OwnerPostOwnersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<OwnerPostOwnersResponse>)), Error> {
     let owner_id = Id::new();
-    let access_token = Symbol::new_from(crate::secure_random_str(32));
-    let chair_register_token = Symbol::new_from(crate::secure_random_str(32));
+    let access_token = Symbol::new_from(crate::secure_random_str(8));
+    let chair_register_token = Symbol::new_from(crate::secure_random_str(8));
 
     state
         .repo
