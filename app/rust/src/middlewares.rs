@@ -3,7 +3,7 @@ use axum::middleware::Next;
 use axum::response::Response;
 use axum_extra::extract::CookieJar;
 
-use crate::models::{Owner, User};
+use crate::models::{Owner, Symbol, User};
 use crate::repo::chair::EffortlessChair;
 use crate::{AppState, Error};
 
@@ -43,7 +43,7 @@ pub async fn app_auth_middleware(
     let Some(c) = jar.get("app_session") else {
         return Err(Error::Unauthorized("app_session cookie is required"));
     };
-    let access_token = c.value();
+    let access_token = Symbol::new_from_ref(c.value());
     let Some(user): Option<User> = state.repo.user_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
@@ -62,7 +62,7 @@ pub async fn owner_auth_middleware(
     let Some(c) = jar.get("owner_session") else {
         return Err(Error::Unauthorized("owner_session cookie is required"));
     };
-    let access_token = c.value();
+    let access_token = Symbol::new_from_ref(c.value());
     let Some(owner): Option<Owner> = state.repo.owner_get_by_access_token(access_token)? else {
         return Err(Error::Unauthorized("invalid access token"));
     };
@@ -81,7 +81,7 @@ pub async fn chair_auth_middleware(
     let Some(c) = jar.get("chair_session") else {
         return Err(Error::Unauthorized("chair_session cookie is required"));
     };
-    let access_token = c.value();
+    let access_token = Symbol::new_from_ref(c.value());
     let Some(chair): Option<EffortlessChair> =
         state.repo.chair_get_by_access_token(access_token)?
     else {

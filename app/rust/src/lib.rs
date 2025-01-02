@@ -16,13 +16,14 @@ pub mod speed;
 
 use std::sync::{
     atomic::{AtomicI64, AtomicUsize},
-    Arc,
+    Arc, LazyLock,
 };
 
 use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use dl::DlSyncMutex;
+use lasso::{Spur, ThreadedRodeo};
 use models::{Chair, Id, User};
 use payment_gateway::PaymentGatewayRestricter;
 use repo::Repository;
@@ -33,6 +34,9 @@ pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
 pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
 pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
 pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
+
+pub static INTERNER: LazyLock<ThreadedRodeo<Spur, ahash::RandomState>> =
+    LazyLock::new(|| ThreadedRodeo::with_hasher(ahash::RandomState::default()));
 
 #[derive(Debug)]
 pub struct AtomicDateTime(AtomicI64);
@@ -208,8 +212,8 @@ impl<T: 'static> NotificationStatistics<T> {
         ConnectionProbe::new(self.0.clone())
     }
 
-    pub fn on_write(&self, id: &Id<T>) {
-        self.0.writes.lock().insert(id.clone());
+    pub fn on_write(&self, id: Id<T>) {
+        self.0.writes.lock().insert(id);
     }
 }
 

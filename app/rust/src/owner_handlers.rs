@@ -6,7 +6,7 @@ use axum_extra::extract::cookie::Cookie;
 use axum_extra::extract::CookieJar;
 use chrono::{DateTime, NaiveDate, Utc};
 
-use crate::models::{Chair, Id, Owner};
+use crate::models::{Chair, Id, Owner, Symbol};
 use crate::{AppState, Error};
 
 pub fn owner_routes(app_state: AppState) -> axum::Router<AppState> {
@@ -26,13 +26,13 @@ pub fn owner_routes(app_state: AppState) -> axum::Router<AppState> {
 
 #[derive(Debug, serde::Deserialize)]
 struct OwnerPostOwnersRequest {
-    name: String,
+    name: Symbol,
 }
 
 #[derive(Debug, serde::Serialize)]
 struct OwnerPostOwnersResponse {
     id: Id<Owner>,
-    chair_register_token: String,
+    chair_register_token: Symbol,
 }
 
 async fn owner_post_owners(
@@ -41,14 +41,14 @@ async fn owner_post_owners(
     axum::Json(req): axum::Json<OwnerPostOwnersRequest>,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<OwnerPostOwnersResponse>)), Error> {
     let owner_id = Id::new();
-    let access_token = crate::secure_random_str(32);
-    let chair_register_token = crate::secure_random_str(32);
+    let access_token = Symbol::new_from(crate::secure_random_str(32));
+    let chair_register_token = Symbol::new_from(crate::secure_random_str(32));
 
     state
         .repo
-        .owner_add(&owner_id, &req.name, &access_token, &chair_register_token)?;
+        .owner_add(owner_id, req.name, access_token, chair_register_token)?;
 
-    let jar = jar.add(Cookie::build(("owner_session", access_token)).path("/"));
+    let jar = jar.add(Cookie::build(("owner_session", access_token.resolve())).path("/"));
 
     Ok((
         jar,
@@ -65,13 +65,13 @@ async fn owner_post_owners(
 #[derive(Debug, serde::Serialize)]
 pub struct ChairSales {
     pub id: Id<Chair>,
-    pub name: String,
+    pub name: Symbol,
     pub sales: i32,
 }
 
 #[derive(Debug, serde::Serialize)]
 struct ModelSales {
-    model: String,
+    model: Symbol,
     sales: i32,
 }
 
@@ -120,7 +120,7 @@ async fn owner_get_sales(
 
     for chair in state
         .repo
-        .chair_sale_stats_by_owner(&owner.id, since, until)?
+        .chair_sale_stats_by_owner(owner.id, since, until)?
     {
         res.total_sales += chair.sales;
         *model_sales_by_model.entry(chair.model).or_insert(0) += chair.sales;
@@ -187,8 +187,8 @@ struct OwnerGetChairResponse {
 #[derive(Debug, serde::Serialize)]
 struct OwnerGetChairResponseChair {
     id: Id<Chair>,
-    name: String,
-    model: String,
+    name: Symbol,
+    model: Symbol,
     active: bool,
     registered_at: i64,
     total_distance: i64,
@@ -200,13 +200,13 @@ async fn owner_get_chairs(
     State(state): State<AppState>,
     axum::Extension(owner): axum::Extension<Owner>,
 ) -> Result<axum::Json<OwnerGetChairResponse>, Error> {
-    let chairs = state.repo.chair_get_by_owner(&owner.id)?;
+    let chairs = state.repo.chair_get_by_owner(owner.id)?;
 
     let mut res = vec![];
     for chair in chairs {
         let (total_distance, total_distance_updated_at) = state
             .repo
-            .chair_total_distance(&chair.id)?
+            .chair_total_distance(chair.id)?
             .map(|x| (x.0, Some(x.1.timestamp_millis())))
             .unwrap_or((0, None));
 

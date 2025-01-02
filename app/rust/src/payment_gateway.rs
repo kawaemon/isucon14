@@ -1,7 +1,10 @@
 use reqwest::StatusCode;
 use tokio::sync::Semaphore;
 
-use crate::{models::Id, Error};
+use crate::{
+    models::{Id, Symbol},
+    Error,
+};
 use std::{
     sync::{atomic::AtomicUsize, Arc},
     time::Duration,
@@ -97,8 +100,8 @@ impl PaymentGatewayRestricter {
 pub async fn request_payment_gateway_post_payment(
     client: &reqwest::Client,
     pgw: &PaymentGatewayRestricter,
-    payment_gateway_url: &str,
-    token: &str,
+    payment_gateway_url: Symbol,
+    token: Symbol,
     param: &PaymentGatewayPostPaymentRequest,
 ) -> Result<(), Error> {
     let _permit = pgw.sema.acquire().await.unwrap();
@@ -106,13 +109,16 @@ pub async fn request_payment_gateway_post_payment(
 
     let key = Id::<()>::new();
 
+    let pgw_url = payment_gateway_url.resolve();
+    let token = token.resolve();
+
     pgw.on_begin();
 
     let mut retry = 0;
     loop {
         let result: Result<(), Error> = async {
             let res = client
-                .post(format!("{payment_gateway_url}/payments"))
+                .post(format!("{pgw_url}/payments"))
                 .bearer_auth(token)
                 .header("Idempotency-Key", &key)
                 .json(param)

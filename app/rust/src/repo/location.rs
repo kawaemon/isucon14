@@ -38,8 +38,8 @@ impl DeferrableSimple for ChairLocationDeferrable {
             "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
         );
         query.push_values(inserts, |mut b, e: &ChairLocation| {
-            b.push_bind(&e.id)
-                .push_bind(&e.chair_id)
+            b.push_bind(e.id)
+                .push_bind(e.chair_id)
                 .push_bind(e.latitude)
                 .push_bind(e.longitude)
                 .push_bind(e.created_at);
@@ -126,10 +126,7 @@ impl ChairLocationCacheInit {
             if let Some(c) = res.get_mut(&loc.chair_id) {
                 c.update(loc.coord(), loc.created_at);
             } else {
-                res.insert(
-                    loc.chair_id.clone(),
-                    Entry::new(loc.coord(), loc.created_at),
-                );
+                res.insert(loc.chair_id, Entry::new(loc.coord(), loc.created_at));
             }
         }
 
@@ -139,7 +136,7 @@ impl ChairLocationCacheInit {
         let mut statuses = HashMap::default();
         for status in &init.ride_statuses {
             statuses
-                .entry(status.ride_id.clone())
+                .entry(status.ride_id)
                 .or_insert_with(Vec::new)
                 .push(status.clone());
         }
@@ -156,7 +153,7 @@ impl ChairLocationCacheInit {
                         loc_entry.set_movement(
                             ride.pickup_coord(),
                             RideStatusEnum::Pickup,
-                            ride.id.clone(),
+                            ride.id,
                         );
                     }
                     RideStatusEnum::Pickup => {
@@ -168,7 +165,7 @@ impl ChairLocationCacheInit {
                         loc_entry.set_movement(
                             ride.destination_coord(),
                             RideStatusEnum::Arrived,
-                            ride.id.clone(),
+                            ride.id,
                         );
                     }
                     RideStatusEnum::Arrived => {
@@ -205,9 +202,9 @@ impl Repository {
 }
 
 impl Repository {
-    pub fn chair_location_get_latest(&self, id: &Id<Chair>) -> Result<Option<Coordinate>> {
+    pub fn chair_location_get_latest(&self, id: Id<Chair>) -> Result<Option<Coordinate>> {
         let cache = self.chair_location_cache.cache.read();
-        let Some(cache) = cache.get(id) else {
+        let Some(cache) = cache.get(&id) else {
             return Ok(None);
         };
         Ok(Some(cache.latest()))
@@ -215,10 +212,10 @@ impl Repository {
 
     pub fn chair_total_distance(
         &self,
-        chair_id: &Id<Chair>,
+        chair_id: Id<Chair>,
     ) -> Result<Option<(i64, DateTime<Utc>)>> {
         let cache = self.chair_location_cache.cache.read();
-        let Some(cache) = cache.get(chair_id) else {
+        let Some(cache) = cache.get(&chair_id) else {
             return Ok(None);
         };
         Ok(Some(cache.get_total()))
@@ -226,26 +223,26 @@ impl Repository {
 
     pub fn chair_set_movement(
         &self,
-        chair_id: &Id<Chair>,
+        chair_id: Id<Chair>,
         coord: Coordinate,
         next: RideStatusEnum,
-        ride: &Id<Ride>,
+        ride: Id<Ride>,
     ) {
         let cache = self.chair_location_cache.cache.read();
-        let cache = cache.get(chair_id).unwrap();
-        cache.set_movement(coord, next, ride.clone());
+        let cache = cache.get(&chair_id).unwrap();
+        cache.set_movement(coord, next, ride);
     }
 
     pub fn chair_location_update(
         &self,
-        chair_id: &Id<Chair>,
+        chair_id: Id<Chair>,
         coord: Coordinate,
     ) -> Result<DateTime<Utc>> {
         let created_at = Utc::now();
 
         let c = ChairLocation {
             id: Id::new(),
-            chair_id: chair_id.clone(),
+            chair_id,
             latitude: coord.latitude,
             longitude: coord.longitude,
             created_at,
@@ -255,14 +252,14 @@ impl Repository {
 
         {
             let (hit, update) = 'upd: {
-                if let Some(c) = self.chair_location_cache.cache.read().get(chair_id) {
+                if let Some(c) = self.chair_location_cache.cache.read().get(&chair_id) {
                     break 'upd (true, c.update(coord, created_at));
                 }
                 (false, None)
             };
 
             if let Some((ride, status)) = update {
-                self.ride_status_update(&ride, status).unwrap();
+                self.ride_status_update(ride, status).unwrap();
             }
 
             if hit {
@@ -271,7 +268,7 @@ impl Repository {
         }
 
         let mut cache = self.chair_location_cache.cache.write();
-        cache.insert(chair_id.clone(), Entry::new(coord, created_at));
+        cache.insert(chair_id, Entry::new(coord, created_at));
 
         Ok(created_at)
     }

@@ -1,4 +1,4 @@
-use crate::{dl::DlSyncRwLock, ConcurrentHashMap};
+use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentHashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -18,8 +18,8 @@ type SharedUser = Arc<User>;
 #[derive(Debug)]
 pub struct UserCacheInner {
     by_id: Arc<DlSyncRwLock<ConcurrentHashMap<Id<User>, SharedUser>>>,
-    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<String, SharedUser>>>,
-    by_inv_code: Arc<DlSyncRwLock<ConcurrentHashMap<String, SharedUser>>>,
+    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedUser>>>,
+    by_inv_code: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedUser>>>,
     deferred: SimpleDeferred<UserDeferrable>,
 }
 
@@ -37,8 +37,8 @@ impl UserCacheInner {
 
 pub struct UserCacheInit {
     by_id: ConcurrentHashMap<Id<User>, SharedUser>,
-    by_token: ConcurrentHashMap<String, SharedUser>,
-    by_inv_code: ConcurrentHashMap<String, SharedUser>,
+    by_token: ConcurrentHashMap<Symbol, SharedUser>,
+    by_inv_code: ConcurrentHashMap<Symbol, SharedUser>,
 }
 impl UserCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
@@ -47,9 +47,9 @@ impl UserCacheInit {
         let inv = ConcurrentHashMap::default();
         for user in &init.users {
             let user = Arc::new(user.clone());
-            id.insert(user.id.clone(), Arc::clone(&user));
-            t.insert(user.access_token.clone(), Arc::clone(&user));
-            inv.insert(user.invitation_code.clone(), Arc::clone(&user));
+            id.insert(user.id, Arc::clone(&user));
+            t.insert(user.access_token, Arc::clone(&user));
+            inv.insert(user.invitation_code, Arc::clone(&user));
         }
         Self {
             by_id: id,
@@ -90,23 +90,23 @@ impl Repository {
 }
 
 impl Repository {
-    pub fn user_get_by_access_token(&self, token: &str) -> Result<Option<User>> {
+    pub fn user_get_by_access_token(&self, token: Symbol) -> Result<Option<User>> {
         let cache = self.user_cache.by_token.read();
-        let Some(entry) = cache.get(token) else {
+        let Some(entry) = cache.get(&token) else {
             return Ok(None);
         };
         Ok(Some(User::clone(&*entry)))
     }
-    pub fn user_get_by_id(&self, id: &Id<User>) -> Result<Option<User>> {
+    pub fn user_get_by_id(&self, id: Id<User>) -> Result<Option<User>> {
         let cache = self.user_cache.by_id.read();
-        let Some(entry) = cache.get(id) else {
+        let Some(entry) = cache.get(&id) else {
             return Ok(None);
         };
         Ok(Some(User::clone(&*entry)))
     }
-    pub fn user_get_by_inv_code(&self, code: &str) -> Result<Option<User>> {
+    pub fn user_get_by_inv_code(&self, code: Symbol) -> Result<Option<User>> {
         let cache = self.user_cache.by_inv_code.read();
-        let Some(entry) = cache.get(code) else {
+        let Some(entry) = cache.get(&code) else {
             return Ok(None);
         };
         Ok(Some(User::clone(&*entry)))
@@ -115,18 +115,18 @@ impl Repository {
     #[allow(clippy::too_many_arguments)]
     pub fn user_add(
         &self,
-        id: &Id<User>,
-        username: &str,
-        first: &str,
-        last: &str,
-        dob: &str,
-        token: &str,
-        inv_code: &str,
+        id: Id<User>,
+        username: Symbol,
+        first: Symbol,
+        last: Symbol,
+        dob: Symbol,
+        token: Symbol,
+        inv_code: Symbol,
     ) -> Result<()> {
         let now = Utc::now();
 
         let u = User {
-            id: id.clone(),
+            id,
             username: username.to_owned(),
             firstname: first.to_owned(),
             lastname: last.to_owned(),
@@ -155,13 +155,13 @@ impl DeferrableSimple for UserDeferrable {
                 (id, username, firstname, lastname, date_of_birth, access_token, invitation_code, created_at, updated_at)
         ");
         builder.push_values(inserts, |mut b, i| {
-            b.push_bind(&i.id)
-                .push_bind(&i.username)
-                .push_bind(&i.firstname)
-                .push_bind(&i.lastname)
-                .push_bind(&i.date_of_birth)
-                .push_bind(&i.access_token)
-                .push_bind(&i.invitation_code)
+            b.push_bind(i.id)
+                .push_bind(i.username)
+                .push_bind(i.firstname)
+                .push_bind(i.lastname)
+                .push_bind(i.date_of_birth)
+                .push_bind(i.access_token)
+                .push_bind(i.invitation_code)
                 .push_bind(i.created_at)
                 .push_bind(i.updated_at);
         });

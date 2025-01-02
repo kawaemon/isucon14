@@ -1,7 +1,7 @@
 use sqlx::{MySql, Pool, QueryBuilder, Transaction};
 
-use crate::dl::DlSyncRwLock;
 use crate::ConcurrentHashMap;
+use crate::{dl::DlSyncRwLock, models::Symbol};
 use std::sync::Arc;
 
 use crate::models::{Id, User};
@@ -16,16 +16,16 @@ pub type PtCache = Arc<PtCacheInner>;
 
 #[derive(Debug)]
 pub struct PtCacheInner {
-    cache: DlSyncRwLock<ConcurrentHashMap<Id<User>, String>>,
+    cache: DlSyncRwLock<ConcurrentHashMap<Id<User>, Symbol>>,
     deferred: SimpleDeferred<PaymentTokenDeferrable>,
 }
 
-pub type PtCacheInit = ConcurrentHashMap<Id<User>, String>;
+pub type PtCacheInit = ConcurrentHashMap<Id<User>, Symbol>;
 
 fn init(init: &mut CacheInit) -> PtCacheInit {
     let res = ConcurrentHashMap::default();
     for t in &init.pt {
-        res.insert(t.user_id.clone(), t.token.clone());
+        res.insert(t.user_id, t.token);
     }
     res
 }
@@ -43,18 +43,15 @@ impl Repository {
 }
 
 impl Repository {
-    pub fn payment_token_get(&self, user: &Id<User>) -> Result<Option<String>> {
+    pub fn payment_token_get(&self, user: Id<User>) -> Result<Option<Symbol>> {
         let cache = self.pt_cache.cache.read();
-        Ok(cache.get(user).map(|x| x.clone()))
+        Ok(cache.get(&user).map(|x| *x))
     }
 
-    pub fn payment_token_add(&self, user: &Id<User>, token: &str) -> Result<()> {
-        self.pt_cache
-            .cache
-            .write()
-            .insert(user.clone(), token.to_owned());
+    pub fn payment_token_add(&self, user: Id<User>, token: Symbol) -> Result<()> {
+        self.pt_cache.cache.write().insert(user, token.to_owned());
         self.pt_cache.deferred.insert(TokenInsert {
-            id: user.clone(),
+            id: user,
             token: token.to_owned(),
         });
         Ok(())
@@ -64,7 +61,7 @@ impl Repository {
 #[derive(Debug)]
 pub struct TokenInsert {
     id: Id<User>,
-    token: String,
+    token: Symbol,
 }
 
 pub struct PaymentTokenDeferrable;
@@ -76,7 +73,7 @@ impl DeferrableSimple for PaymentTokenDeferrable {
     async fn exec_insert(tx: &mut Transaction<'static, MySql>, inserts: &[Self::Insert]) {
         let mut builder = QueryBuilder::new("INSERT INTO payment_tokens (user_id, token) ");
         builder.push_values(inserts, |mut b, i| {
-            b.push_bind(&i.id).push_bind(&i.token);
+            b.push_bind(i.id).push_bind(i.token);
         });
         builder.build().execute(&mut **tx).await.unwrap();
     }

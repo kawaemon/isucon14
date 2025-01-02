@@ -5,7 +5,7 @@ use crate::dl::DlSyncRwLock;
 use crate::{ConcurrentHashMap, HashMap};
 use std::sync::Arc;
 
-use crate::models::{Coupon, Id, Ride, User};
+use crate::models::{Coupon, Id, Ride, Symbol, User};
 
 use super::{
     cache_init::CacheInit,
@@ -18,7 +18,7 @@ pub type CouponCache = Arc<CouponCacheInner>;
 #[derive(Debug)]
 struct CouponEntry {
     user_id: Id<User>,
-    code: String,
+    code: Symbol,
     discount: i32,
     created_at: DateTime<Utc>,
     used_by: DlSyncRwLock<Option<Id<Ride>>>,
@@ -26,20 +26,20 @@ struct CouponEntry {
 impl CouponEntry {
     fn new(c: &Coupon) -> Self {
         Self {
-            user_id: c.user_id.clone(),
-            code: c.code.clone(),
+            user_id: c.user_id,
+            code: c.code,
             discount: c.discount,
             created_at: c.created_at,
-            used_by: DlSyncRwLock::new(c.used_by.clone()),
+            used_by: DlSyncRwLock::new(c.used_by),
         }
     }
     fn coupon(&self) -> Coupon {
         Coupon {
-            user_id: self.user_id.clone(),
-            code: self.code.clone(),
+            user_id: self.user_id,
+            code: self.code,
             discount: self.discount,
             created_at: self.created_at,
-            used_by: self.used_by.read().clone(),
+            used_by: *self.used_by.read(),
         }
     }
 }
@@ -48,7 +48,7 @@ type SharedCoupon = Arc<CouponEntry>;
 
 #[derive(Debug)]
 pub struct CouponCacheInner {
-    by_code: DlSyncRwLock<ConcurrentHashMap<String, DlSyncRwLock<Vec<SharedCoupon>>>>,
+    by_code: DlSyncRwLock<ConcurrentHashMap<Symbol, DlSyncRwLock<Vec<SharedCoupon>>>>,
     by_usedby: DlSyncRwLock<ConcurrentHashMap<Id<Ride>, SharedCoupon>>,
     user_queue: DlSyncRwLock<ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<SharedCoupon>>>>,
 
@@ -56,7 +56,7 @@ pub struct CouponCacheInner {
 }
 
 struct Init {
-    by_code: ConcurrentHashMap<String, DlSyncRwLock<Vec<SharedCoupon>>>,
+    by_code: ConcurrentHashMap<Symbol, DlSyncRwLock<Vec<SharedCoupon>>>,
     by_usedby: ConcurrentHashMap<Id<Ride>, SharedCoupon>,
 
     user_queue: ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<SharedCoupon>>>,
@@ -71,18 +71,15 @@ impl Init {
 
         for coupon in &init.coupon {
             let e = Arc::new(CouponEntry::new(coupon));
-            all.insert(
-                (coupon.user_id.clone(), coupon.code.clone()),
-                Arc::clone(&e),
-            );
+            all.insert((coupon.user_id, coupon.code), Arc::clone(&e));
 
-            code.entry(coupon.code.clone())
+            code.entry(coupon.code)
                 .or_insert_with(|| DlSyncRwLock::new(Vec::new()))
                 .write()
                 .push(Arc::clone(&e));
 
-            if let Some(u) = coupon.used_by.as_ref() {
-                usedby.insert(u.clone(), Arc::clone(&e));
+            if let Some(u) = coupon.used_by {
+                usedby.insert(u, Arc::clone(&e));
             }
         }
 
@@ -91,11 +88,9 @@ impl Init {
             if coupon.used_by.is_some() {
                 continue;
             }
-            let e = all
-                .get(&(coupon.user_id.clone(), coupon.code.clone()))
-                .unwrap();
+            let e = all.get(&(coupon.user_id, coupon.code)).unwrap();
             user_queue
-                .entry(coupon.user_id.clone())
+                .entry(coupon.user_id)
                 .or_insert_with(|| DlSyncRwLock::new(Vec::new()))
                 .write()
                 .push(Arc::clone(&*e));
@@ -140,24 +135,24 @@ impl Repository {
 }
 
 impl Repository {
-    pub fn coupon_get_count_by_code(&self, code: &str) -> Result<usize> {
+    pub fn coupon_get_count_by_code(&self, code: Symbol) -> Result<usize> {
         let cache = self.coupon_cache.by_code.read();
-        let Some(c) = cache.get(code) else {
+        let Some(c) = cache.get(&code) else {
             return Ok(0);
         };
         let c = c.read();
         Ok(c.len())
     }
-    pub fn coupon_get_by_usedby(&self, ride: &Id<Ride>) -> Result<Option<Coupon>> {
+    pub fn coupon_get_by_usedby(&self, ride: Id<Ride>) -> Result<Option<Coupon>> {
         let cache = self.coupon_cache.by_usedby.read();
-        let Some(c) = cache.get(ride) else {
+        let Some(c) = cache.get(&ride) else {
             return Ok(None);
         };
         Ok(Some(c.coupon()))
     }
-    pub fn coupon_get_unused_order_by_created_at(&self, user_id: &Id<User>) -> Result<Vec<Coupon>> {
+    pub fn coupon_get_unused_order_by_created_at(&self, user_id: Id<User>) -> Result<Vec<Coupon>> {
         let cache = self.coupon_cache.user_queue.read();
-        let Some(c) = cache.get(user_id) else {
+        let Some(c) = cache.get(&user_id) else {
             return Ok(vec![]);
         };
         let mut res = vec![];
@@ -169,9 +164,9 @@ impl Repository {
 
     // writes
 
-    pub fn coupon_add(&self, user: &Id<User>, code: &str, amount: i32) -> Result<()> {
+    pub fn coupon_add(&self, user: Id<User>, code: Symbol, amount: i32) -> Result<()> {
         let c = Coupon {
-            user_id: user.clone(),
+            user_id: user,
             code: code.to_owned(),
             discount: amount,
             created_at: Utc::now(),
@@ -189,7 +184,7 @@ impl Repository {
         {
             let user_cache = self.coupon_cache.user_queue.read();
             user_cache
-                .entry(user.clone())
+                .entry(user)
                 .or_insert_with(|| DlSyncRwLock::new(Vec::new()))
                 .write()
                 .push(Arc::clone(&e));
@@ -199,10 +194,10 @@ impl Repository {
         Ok(())
     }
 
-    pub fn coupon_set_used(&self, user: &Id<User>, code: &str, ride: &Id<Ride>) -> Result<()> {
+    pub fn coupon_set_used(&self, user: Id<User>, code: Symbol, ride: Id<Ride>) -> Result<()> {
         {
             let user_cache = self.coupon_cache.user_queue.read();
-            let user_cache = user_cache.get(user).unwrap();
+            let user_cache = user_cache.get(&user).unwrap();
 
             let entry = {
                 let mut user_cache = user_cache.write();
@@ -211,14 +206,14 @@ impl Repository {
             };
 
             let cache = self.coupon_cache.by_usedby.read();
-            let res = cache.insert(ride.clone(), entry);
+            let res = cache.insert(ride, entry);
             assert!(res.is_none());
         }
 
         self.coupon_cache.deferred.update(CouponUpdate {
-            user_id: user.clone(),
+            user_id: user,
             code: code.to_owned(),
-            used_by: ride.clone(),
+            used_by: ride,
         });
         Ok(())
     }
@@ -227,7 +222,7 @@ impl Repository {
 #[derive(Debug)]
 struct CouponUpdate {
     user_id: Id<User>,
-    code: String,
+    code: Symbol,
     used_by: Id<Ride>,
 }
 
@@ -245,12 +240,12 @@ impl DeferrableMayUpdated for DeferrableCoupons {
     ) -> Vec<Self::UpdateQuery> {
         let mut inserts = inserts
             .iter_mut()
-            .map(|x| ((x.user_id.clone(), x.code.clone()), x))
+            .map(|x| ((x.user_id, x.code), x))
             .collect::<HashMap<_, _>>();
         let mut new_updates: Vec<CouponUpdate> = vec![];
 
         for u in updates {
-            let Some(i) = inserts.get_mut(&(u.user_id.clone(), u.code.clone())) else {
+            let Some(i) = inserts.get_mut(&(u.user_id, u.code)) else {
                 new_updates.push(u);
                 continue;
             };
@@ -269,11 +264,11 @@ impl DeferrableMayUpdated for DeferrableCoupons {
             QueryBuilder::new("insert into coupons(user_id, code, discount, created_at, used_by) ");
 
         builder.push_values(inserts, |mut b, i| {
-            b.push_bind(&i.user_id)
-                .push_bind(&i.code)
+            b.push_bind(i.user_id)
+                .push_bind(i.code)
                 .push_bind(i.discount)
                 .push_bind(i.created_at)
-                .push_bind(&i.user_id);
+                .push_bind(i.user_id);
         });
 
         builder.build().execute(&mut **tx).await.unwrap();
@@ -284,9 +279,9 @@ impl DeferrableMayUpdated for DeferrableCoupons {
         update: &Self::UpdateQuery,
     ) {
         sqlx::query("UPDATE coupons SET used_by = ? WHERE user_id = ? AND code = ?")
-            .bind(&update.user_id)
-            .bind(&update.user_id)
-            .bind(&update.code)
+            .bind(update.user_id)
+            .bind(update.user_id)
+            .bind(update.code)
             .execute(&mut **tx)
             .await
             .unwrap();

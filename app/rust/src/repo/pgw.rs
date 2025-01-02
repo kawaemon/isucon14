@@ -1,16 +1,17 @@
-use crate::dl::DlSyncRwLock;
+use crate::{dl::DlSyncRwLock, models::Symbol};
 use sqlx::{MySql, Pool};
 use std::sync::Arc;
 
 use super::{Repository, Result};
 
-pub type PgwCache = Arc<DlSyncRwLock<String>>;
+pub type PgwCache = Arc<DlSyncRwLock<Symbol>>;
 
-async fn init(pool: &Pool<MySql>) -> String {
-    sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'")
+async fn init(pool: &Pool<MySql>) -> Symbol {
+    let s = sqlx::query_scalar("SELECT value FROM settings WHERE name = 'payment_gateway_url'")
         .fetch_one(pool)
         .await
-        .unwrap()
+        .unwrap();
+    Symbol::new_from(s)
 }
 
 impl Repository {
@@ -23,8 +24,8 @@ impl Repository {
 }
 
 impl Repository {
-    pub async fn pgw_set(&self, s: &str) -> Result<()> {
-        *self.pgw_cache.write() = s.to_owned();
+    pub async fn pgw_set(&self, s: Symbol) -> Result<()> {
+        *self.pgw_cache.write() = s;
         sqlx::query("UPDATE settings SET value = ? WHERE name = 'payment_gateway_url'")
             .bind(s)
             .execute(&self.pool)
@@ -32,7 +33,7 @@ impl Repository {
         Ok(())
     }
 
-    pub fn pgw_get(&self) -> Result<String> {
-        Ok(self.pgw_cache.read().clone())
+    pub fn pgw_get(&self) -> Result<Symbol> {
+        Ok(*self.pgw_cache.read())
     }
 }

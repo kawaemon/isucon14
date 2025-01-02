@@ -12,30 +12,30 @@ use super::{NotificationBody, RideEntry};
 
 // rides
 impl Repository {
-    pub fn ride_get(&self, id: &Id<Ride>) -> Result<Option<Ride>> {
+    pub fn ride_get(&self, id: Id<Ride>) -> Result<Option<Ride>> {
         let cache = self.ride_cache.ride_cache.read();
-        let Some(e) = cache.get(id) else {
+        let Some(e) = cache.get(&id) else {
             return Ok(None);
         };
         Ok(Some(e.ride()))
     }
 
     // COMPLETED
-    pub fn rides_user_ongoing(&self, user: &Id<User>) -> Result<bool> {
+    pub fn rides_user_ongoing(&self, user: Id<User>) -> Result<bool> {
         let s = self
             .ride_cache
             .user_has_ride
             .read()
-            .get(user)
+            .get(&user)
             .map(|x| x.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(false);
         Ok(s)
     }
 
-    pub fn rides_by_user(&self, id: &Id<User>) -> Result<Vec<Ride>> {
+    pub fn rides_by_user(&self, id: Id<User>) -> Result<Vec<Ride>> {
         let mut res = vec![];
         let cache = self.ride_cache.user_rides.read();
-        let cache = cache.get(id).unwrap();
+        let cache = cache.get(&id).unwrap();
         let cache = cache.read();
         for c in cache.iter() {
             res.push(c.ride());
@@ -44,9 +44,9 @@ impl Repository {
         Ok(res)
     }
 
-    pub fn rides_count_by_user(&self, id: &Id<User>) -> Result<usize> {
+    pub fn rides_count_by_user(&self, id: Id<User>) -> Result<usize> {
         let cache = self.ride_cache.user_rides.read();
-        let len = cache.get(id).unwrap().read().len();
+        let len = cache.get(&id).unwrap().read().len();
         Ok(len)
     }
 
@@ -54,16 +54,16 @@ impl Repository {
 
     pub fn rides_new_and_set_matching(
         &self,
-        id: &Id<Ride>,
-        user: &Id<User>,
+        id: Id<Ride>,
+        user: Id<User>,
         pickup: Coordinate,
         dest: Coordinate,
     ) -> Result<()> {
         let now = Utc::now();
 
         self.ride_cache.ride_deferred.insert(Ride {
-            id: id.clone(),
-            user_id: user.clone(),
+            id,
+            user_id: user,
             chair_id: None,
             pickup_latitude: pickup.latitude,
             pickup_longitude: pickup.longitude,
@@ -76,8 +76,8 @@ impl Repository {
 
         {
             let r = Arc::new(RideEntry {
-                id: id.clone(),
-                user_id: user.clone(),
+                id,
+                user_id: user,
                 pickup,
                 destination: dest,
                 created_at: now,
@@ -87,9 +87,9 @@ impl Repository {
                 latest_status: DlSyncRwLock::new(RideStatusEnum::Matching),
             });
             let cache = self.ride_cache.ride_cache.read();
-            cache.insert(id.clone(), Arc::clone(&r));
+            cache.insert(id, Arc::clone(&r));
             let cache = self.ride_cache.user_rides.read();
-            let cache = cache.get(user).unwrap();
+            let cache = cache.get(&user).unwrap();
             let mut cache = cache.write();
             cache.push(Arc::clone(&r));
         }
@@ -101,36 +101,34 @@ impl Repository {
 
     pub fn rides_assign(
         &self,
-        ride_id: &Id<Ride>,
-        status_id: &Id<RideStatus>,
-        chair_id: &Id<Chair>,
+        ride_id: Id<Ride>,
+        status_id: Id<RideStatus>,
+        chair_id: Id<Chair>,
     ) -> Result<()> {
         let now = Utc::now();
         {
             let cache = self.ride_cache.ride_cache.read();
-            let e = cache.get_mut(ride_id).unwrap();
+            let e = cache.get_mut(&ride_id).unwrap();
             e.set_chair_id(chair_id, now);
         }
 
         self.ride_cache.on_chair_status_change(chair_id, true);
 
         self.ride_cache.ride_deferred.update(RideUpdate {
-            id: ride_id.clone(),
+            id: ride_id,
             updated_at: now,
-            content: RideUpdateContent::Assign {
-                chair_id: chair_id.clone(),
-            },
+            content: RideUpdateContent::Assign { chair_id },
         });
 
         let b = NotificationBody {
-            ride_id: ride_id.clone(),
-            ride_status_id: status_id.clone(),
+            ride_id,
+            ride_status_id: status_id,
             status: RideStatusEnum::Matching,
         };
         {
             let mark_sent = {
                 let cache = self.ride_cache.chair_notification.read();
-                let cache = cache.get(chair_id).unwrap();
+                let cache = cache.get(&chair_id).unwrap();
                 cache.push(b, false)
             };
             if mark_sent {
@@ -142,21 +140,21 @@ impl Repository {
 
     pub fn rides_set_evaluation(
         &self,
-        id: &Id<Ride>,
-        chair_id: &Id<Chair>,
+        id: Id<Ride>,
+        chair_id: Id<Chair>,
         eval: i32,
     ) -> Result<DateTime<Utc>> {
         let now = Utc::now();
 
         self.ride_cache.ride_deferred.update(RideUpdate {
-            id: id.clone(),
+            id,
             updated_at: now,
             content: RideUpdateContent::Eval { eval },
         });
 
         let sales = {
             let cache = self.ride_cache.ride_cache.read();
-            let ride = cache.get(id).unwrap();
+            let ride = cache.get(&id).unwrap();
             ride.set_evaluation(eval, now);
             crate::calculate_fare(ride.pickup, ride.destination)
         };
@@ -201,20 +199,18 @@ impl DeferrableMayUpdated for RideDeferred {
     ) -> Vec<Self::UpdateQuery> {
         let mut inserts = inserts
             .iter_mut()
-            .map(|x| (x.id.clone(), x))
+            .map(|x| (x.id, x))
             .collect::<HashMap<_, _>>();
         let mut new_updates = HashMap::default();
 
         for u in updates {
             let Some(i) = inserts.get_mut(&u.id) else {
-                let r = new_updates
-                    .entry(u.id.clone())
-                    .or_insert_with(|| RideUpdateQuery {
-                        id: u.id.clone(),
-                        chair_id: None,
-                        eval: None,
-                        updated_at: u.updated_at,
-                    });
+                let r = new_updates.entry(u.id).or_insert_with(|| RideUpdateQuery {
+                    id: u.id,
+                    chair_id: None,
+                    eval: None,
+                    updated_at: u.updated_at,
+                });
                 r.updated_at = u.updated_at;
                 match u.content {
                     RideUpdateContent::Assign { chair_id } => r.chair_id = Some(chair_id),
@@ -243,15 +239,15 @@ impl DeferrableMayUpdated for RideDeferred {
                 updated_at, chair_id, evaluation
             )");
         builder.push_values(inserts, |mut b, i| {
-            b.push_bind(&i.id)
-                .push_bind(&i.user_id)
+            b.push_bind(i.id)
+                .push_bind(i.user_id)
                 .push_bind(i.pickup_latitude)
                 .push_bind(i.pickup_longitude)
                 .push_bind(i.destination_latitude)
                 .push_bind(i.destination_longitude)
                 .push_bind(i.created_at)
                 .push_bind(i.updated_at)
-                .push_bind(&i.chair_id)
+                .push_bind(i.chair_id)
                 .push_bind(i.evaluation);
         });
         builder.build().execute(&mut **tx).await.unwrap();
@@ -279,7 +275,7 @@ impl DeferrableMayUpdated for RideDeferred {
             builder.push_bind(e);
         }
         builder.push(" where id = ");
-        builder.push_bind(&update.id);
+        builder.push_bind(update.id);
         builder.build().execute(&mut **tx).await.unwrap();
     }
 }

@@ -1,11 +1,12 @@
-use std::{marker::PhantomData, str::FromStr, sync::atomic::AtomicUsize};
+use std::{marker::PhantomData, str::FromStr};
 
 use chrono::{DateTime, Utc};
 use derivative::Derivative;
+use lasso::Spur;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
-use crate::Coordinate;
+use crate::{Coordinate, INTERNER};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -82,24 +83,15 @@ impl FromStr for RideStatusEnum {
 #[derivative(
     Debug(bound = ""),
     Clone(bound = ""),
+    Copy(bound = ""),
     Hash(bound = ""),
     PartialEq(bound = ""),
     Eq(bound = "")
 )]
-pub struct Id<T>(String, PhantomData<fn() -> T>);
-impl<T> AsRef<str> for Id<T> {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-impl<T> std::fmt::Display for Id<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
+pub struct Id<T>(Symbol, PhantomData<fn() -> T>);
 impl<T> From<&Id<T>> for reqwest::header::HeaderValue {
     fn from(val: &Id<T>) -> Self {
-        reqwest::header::HeaderValue::from_str(&val.0).unwrap()
+        reqwest::header::HeaderValue::from_str(val.resolve()).unwrap()
     }
 }
 impl<T> serde::Serialize for Id<T> {
@@ -109,7 +101,7 @@ impl<T> serde::Serialize for Id<T> {
 }
 impl<'de, T> serde::Deserialize<'de> for Id<T> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Self(String::deserialize(deserializer)?, PhantomData))
+        Ok(Self::new_from(Symbol::deserialize(deserializer)?))
     }
 }
 impl<'r, T> sqlx::Encode<'r, MySql> for Id<T> {
@@ -117,13 +109,12 @@ impl<'r, T> sqlx::Encode<'r, MySql> for Id<T> {
         &self,
         buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
     ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        self.0.encode_by_ref(buf)
+        self.resolve().encode_by_ref(buf)
     }
 }
 impl<'r, T> sqlx::Decode<'r, MySql> for Id<T> {
     fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        let s = <String as sqlx::Decode<MySql>>::decode(value)?;
-        Ok(Id::from_string(s))
+        Ok(Id::new_from(Symbol::decode(value)?))
     }
 }
 impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
@@ -136,10 +127,63 @@ impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
 }
 impl<T> Id<T> {
     pub fn new() -> Self {
-        Id(ulid::Ulid::new().to_string(), PhantomData)
+        Self::new_from(Symbol::new_from(ulid::Ulid::new().to_string()))
     }
-    pub fn from_string(id: impl Into<String>) -> Self {
-        Self(id.into(), PhantomData)
+    pub fn new_from(s: Symbol) -> Self {
+        Id(s, PhantomData)
+    }
+    pub fn resolve(&self) -> &'static str {
+        self.0.resolve()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Symbol(Spur);
+impl Symbol {
+    pub fn new_from_ref(s: &str) -> Self {
+        Symbol(INTERNER.get_or_intern(s))
+    }
+    pub fn new_from(s: String) -> Self {
+        Symbol(INTERNER.get_or_intern(s))
+    }
+    pub fn new_from_static(s: &'static str) -> Self {
+        Symbol(INTERNER.get_or_intern_static(s))
+    }
+    pub fn resolve(&self) -> &'static str {
+        INTERNER.resolve(&self.0)
+    }
+}
+impl serde::Serialize for Symbol {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.resolve().serialize(serializer)
+    }
+}
+impl<'de> serde::Deserialize<'de> for Symbol {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = <&str>::deserialize(deserializer)?;
+        Ok(Self::new_from_ref(s))
+    }
+}
+impl sqlx::Type<sqlx::MySql> for Symbol {
+    fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
+        <&str>::type_info()
+    }
+    fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
+        <&str>::compatible(ty)
+    }
+}
+impl<'r> sqlx::Encode<'r, MySql> for Symbol {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        self.resolve().encode_by_ref(buf)
+    }
+}
+impl<'r> sqlx::Decode<'r, MySql> for Symbol {
+    fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        let s = <&str as sqlx::Decode<MySql>>::decode(value)?;
+        Ok(Self::new_from_ref(s))
     }
 }
 
@@ -147,9 +191,9 @@ impl<T> Id<T> {
 pub struct Chair {
     pub id: Id<Chair>,
     pub owner_id: Id<Owner>,
-    pub name: String,
-    pub access_token: String,
-    pub model: String,
+    pub name: Symbol,
+    pub access_token: Symbol,
+    pub model: Symbol,
     pub is_active: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -175,12 +219,12 @@ impl ChairLocation {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct User {
     pub id: Id<User>,
-    pub username: String,
-    pub firstname: String,
-    pub lastname: String,
-    pub date_of_birth: String,
-    pub access_token: String,
-    pub invitation_code: String,
+    pub username: Symbol,
+    pub firstname: Symbol,
+    pub lastname: Symbol,
+    pub date_of_birth: Symbol,
+    pub access_token: Symbol,
+    pub invitation_code: Symbol,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -188,7 +232,7 @@ pub struct User {
 #[derive(Debug, sqlx::FromRow)]
 pub struct PaymentToken {
     pub user_id: Id<User>,
-    pub token: String,
+    pub token: Symbol,
     pub created_at: DateTime<Utc>,
 }
 
@@ -239,9 +283,9 @@ pub struct RideStatus {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Owner {
     pub id: Id<Owner>,
-    pub name: String,
-    pub access_token: String,
-    pub chair_register_token: String,
+    pub name: Symbol,
+    pub access_token: Symbol,
+    pub chair_register_token: Symbol,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -249,7 +293,7 @@ pub struct Owner {
 #[derive(Debug, sqlx::FromRow)]
 pub struct Coupon {
     pub user_id: Id<User>,
-    pub code: String,
+    pub code: Symbol,
     pub discount: i32,
     pub created_at: DateTime<Utc>,
     pub used_by: Option<Id<Ride>>,

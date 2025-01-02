@@ -1,4 +1,4 @@
-use crate::{dl::DlSyncRwLock, HashMap};
+use crate::{dl::DlSyncRwLock, models::Symbol, HashMap};
 use std::sync::Arc;
 
 use sqlx::{MySql, Pool};
@@ -9,18 +9,18 @@ pub type ChairModelCache = Arc<Inner>;
 
 #[derive(Debug)]
 pub struct Inner {
-    pub speed: DlSyncRwLock<HashMap<String, i32>>,
+    pub speed: DlSyncRwLock<HashMap<Symbol, i32>>,
 }
 
 #[derive(Debug)]
 struct Init {
-    cache: HashMap<String, i32>,
+    cache: HashMap<Symbol, i32>,
 }
 impl Init {
     async fn fetch(pool: &Pool<MySql>) -> Self {
         #[derive(sqlx::FromRow)]
         struct Query {
-            name: String,
+            name: Symbol,
             speed: i32,
         }
         let res: Vec<Query> = sqlx::query_as("select * from chair_models")

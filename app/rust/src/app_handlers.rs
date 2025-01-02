@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -9,7 +9,7 @@ use chrono::Utc;
 use futures::Stream;
 use tokio_stream::StreamExt;
 
-use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, User};
+use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, Symbol, User};
 use crate::repo::ride::NotificationBody;
 use crate::repo::Repository;
 use crate::{AppState, Coordinate, Error};
@@ -52,17 +52,17 @@ pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
 
 #[derive(Debug, serde::Deserialize)]
 struct AppPostUsersRequest {
-    username: String,
-    firstname: String,
-    lastname: String,
-    date_of_birth: String,
-    invitation_code: Option<String>,
+    username: Symbol,
+    firstname: Symbol,
+    lastname: Symbol,
+    date_of_birth: Symbol,
+    invitation_code: Option<Symbol>,
 }
 
 #[derive(Debug, serde::Serialize)]
 struct AppPostUsersResponse {
     id: Id<User>,
-    invitation_code: String,
+    invitation_code: Symbol,
 }
 
 async fn app_post_users(
@@ -92,28 +92,29 @@ fn app_post_users_inner(
     req: &AppPostUsersRequest,
 ) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
     let user_id = Id::new();
-    let access_token = crate::secure_random_str(32);
-    let invitation_code = crate::secure_random_str(15);
+    let access_token = Symbol::new_from(crate::secure_random_str(32));
+    let invitation_code = Symbol::new_from(crate::secure_random_str(15));
 
     state.repo.user_add(
-        &user_id,
-        &req.username,
-        &req.firstname,
-        &req.lastname,
-        &req.date_of_birth,
-        &access_token,
-        &invitation_code,
+        user_id,
+        req.username,
+        req.firstname,
+        req.lastname,
+        req.date_of_birth,
+        access_token,
+        invitation_code,
     )?;
 
     // 初回登録キャンペーンのクーポンを付与
-    state.repo.coupon_add(&user_id, "CP_NEW2024", 3000)?;
+    state.repo.coupon_add(user_id, *CP_NEW2024, 3000)?;
 
     // 招待コードを使った登録
-    if let Some(req_invitation_code) = req.invitation_code.as_ref() {
-        if !req_invitation_code.is_empty() {
-            let inv_prefixed_code = format!("INV_{req_invitation_code}");
+    if let Some(req_invitation_code) = req.invitation_code {
+        let r_str = req_invitation_code.resolve();
+        if !r_str.is_empty() {
+            let inv_prefixed_code = Symbol::new_from(format!("INV_{r_str}"));
             // 招待する側の招待数をチェック
-            let coupons = state.repo.coupon_get_count_by_code(&inv_prefixed_code)?;
+            let coupons = state.repo.coupon_get_count_by_code(inv_prefixed_code)?;
             if coupons >= 3 {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             }
@@ -126,18 +127,20 @@ fn app_post_users_inner(
             };
 
             // 招待クーポン付与
-            state.repo.coupon_add(&user_id, &inv_prefixed_code, 1500)?;
+            state.repo.coupon_add(user_id, inv_prefixed_code, 1500)?;
             // 招待した人にもRewardを付与
-            state
-                .repo
-                .coupon_add(&inviter.id, &format!("RWD_{}", Id::<Coupon>::new()), 1000)?;
+            state.repo.coupon_add(
+                inviter.id,
+                Symbol::new_from(format!("RWD_{}", Id::<Coupon>::new().resolve())),
+                1000,
+            )?;
         }
     }
 
-    let jar = jar
-        .take()
-        .unwrap()
-        .add(axum_extra::extract::cookie::Cookie::build(("app_session", access_token)).path("/"));
+    let jar = jar.take().unwrap().add(
+        axum_extra::extract::cookie::Cookie::build(("app_session", access_token.resolve()))
+            .path("/"),
+    );
 
     Ok((
         jar,
@@ -153,7 +156,7 @@ fn app_post_users_inner(
 
 #[derive(Debug, serde::Deserialize)]
 struct AppPostPaymentMethodsRequest {
-    token: String,
+    token: Symbol,
 }
 
 async fn app_post_payment_methods(
@@ -161,7 +164,7 @@ async fn app_post_payment_methods(
     axum::Extension(user): axum::Extension<User>,
     axum::Json(req): axum::Json<AppPostPaymentMethodsRequest>,
 ) -> Result<StatusCode, Error> {
-    state.repo.payment_token_add(&user.id, &req.token)?;
+    state.repo.payment_token_add(user.id, req.token)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -185,36 +188,36 @@ struct GetAppRidesResponseItem {
 #[derive(Debug, serde::Serialize)]
 struct GetAppRidesResponseItemChair {
     id: Id<Chair>,
-    owner: String,
-    name: String,
-    model: String,
+    owner: Symbol,
+    name: Symbol,
+    model: Symbol,
 }
 
 async fn app_get_rides(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Result<axum::Json<GetAppRidesResponse>, Error> {
-    let rides: Vec<Ride> = state.repo.rides_by_user(&user.id)?;
+    let rides: Vec<Ride> = state.repo.rides_by_user(user.id)?;
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
-        let status = state.repo.ride_status_latest(&ride.id)?;
+        let status = state.repo.ride_status_latest(ride.id)?;
         if status != RideStatusEnum::Completed {
             continue;
         }
 
         let fare = calculate_discounted_fare(
             &state.repo,
-            &user.id,
-            Some(&ride.id),
+            user.id,
+            Some(ride.id),
             ride.pickup_coord(),
             ride.destination_coord(),
         )?;
 
         let chair = state
             .repo
-            .chair_get_by_id_effortless(ride.chair_id.as_ref().unwrap())?
+            .chair_get_by_id_effortless(ride.chair_id.unwrap())?
             .unwrap();
-        let owner: Owner = state.repo.owner_get_by_id(&chair.owner_id)?.unwrap();
+        let owner: Owner = state.repo.owner_get_by_id(chair.owner_id)?.unwrap();
 
         items.push(GetAppRidesResponseItem {
             pickup_coordinate: ride.pickup_coord(),
@@ -248,6 +251,8 @@ struct AppPostRidesResponse {
     fare: i32,
 }
 
+static CP_NEW2024: LazyLock<Symbol> = LazyLock::new(|| Symbol::new_from_static("CP_NEW2024"));
+
 async fn app_post_rides(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
@@ -255,27 +260,26 @@ async fn app_post_rides(
 ) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
     let ride_id = Id::new();
 
-    if state.repo.rides_user_ongoing(&user.id)? {
+    if state.repo.rides_user_ongoing(user.id)? {
         return Err(Error::Conflict("ride already exists"));
     }
 
     state.repo.rides_new_and_set_matching(
-        &ride_id,
-        &user.id,
+        ride_id,
+        user.id,
         req.pickup_coordinate,
         req.destination_coordinate,
     )?;
 
     let mut discount = 0;
-    let unused_coupons = state.repo.coupon_get_unused_order_by_created_at(&user.id)?;
+    let unused_coupons = state.repo.coupon_get_unused_order_by_created_at(user.id)?;
+
     let coupon_candidate = unused_coupons
         .iter()
-        .find(|x| x.code == "CP_NEW2024")
+        .find(|x| x.code == *CP_NEW2024)
         .or(unused_coupons.first());
     if let Some(coupon) = coupon_candidate {
-        state
-            .repo
-            .coupon_set_used(&user.id, &coupon.code, &ride_id)?;
+        state.repo.coupon_set_used(user.id, coupon.code, ride_id)?;
         discount = coupon.discount;
     }
 
@@ -310,7 +314,7 @@ async fn app_post_rides_estimated_fare(
 ) -> Result<axum::Json<AppPostRidesEstimatedFareResponse>, Error> {
     let discounted = calculate_discounted_fare(
         &state.repo,
-        &user.id,
+        user.id,
         None,
         req.pickup_coordinate,
         req.destination_coordinate,
@@ -343,45 +347,45 @@ async fn app_post_ride_evaluation(
         return Err(Error::BadRequest("evaluation must be between 1 and 5"));
     }
 
-    let Some(ride): Option<Ride> = state.repo.ride_get(&ride_id)? else {
+    let Some(ride): Option<Ride> = state.repo.ride_get(ride_id)? else {
         return Err(Error::NotFound("ride not found"));
     };
 
-    let status = state.repo.ride_status_latest(&ride.id)?;
+    let status = state.repo.ride_status_latest(ride.id)?;
     if status != RideStatusEnum::Arrived {
         return Err(Error::BadRequest("not arrived yet"));
     }
 
-    let Some(payment_token): Option<String> = state.repo.payment_token_get(&ride.user_id)? else {
+    let Some(payment_token): Option<Symbol> = state.repo.payment_token_get(ride.user_id)? else {
         return Err(Error::BadRequest("payment token not registered"));
     };
 
     let fare = calculate_discounted_fare(
         &state.repo,
-        &ride.user_id,
-        Some(&ride.id),
+        ride.user_id,
+        Some(ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
     )?;
 
-    let payment_gateway_url: String = state.repo.pgw_get()?;
+    let payment_gateway_url = state.repo.pgw_get()?;
 
     crate::payment_gateway::request_payment_gateway_post_payment(
         &state.client,
         &state.pgw,
-        &payment_gateway_url,
-        &payment_token,
+        payment_gateway_url,
+        payment_token,
         &crate::payment_gateway::PaymentGatewayPostPaymentRequest { amount: fare },
     )
     .await?;
 
-    let chair_id = ride.chair_id.as_ref().unwrap();
+    let chair_id = ride.chair_id.unwrap();
     let updated_at = state
         .repo
-        .rides_set_evaluation(&ride_id, chair_id, req.evaluation)?;
+        .rides_set_evaluation(ride_id, chair_id, req.evaluation)?;
     state
         .repo
-        .ride_status_update(&ride_id, RideStatusEnum::Completed)?;
+        .ride_status_update(ride_id, RideStatusEnum::Completed)?;
 
     Ok(axum::Json(AppPostRideEvaluationResponse {
         fare,
@@ -405,8 +409,8 @@ struct AppGetNotificationResponseData {
 #[derive(Debug, serde::Serialize)]
 struct AppGetNotificationResponseChair {
     id: Id<Chair>,
-    name: String,
-    model: String,
+    name: Symbol,
+    model: Symbol,
     stats: ChairStats,
 }
 
@@ -420,7 +424,7 @@ async fn app_get_notification(
     State(state): State<AppState>,
     axum::Extension(user): axum::Extension<User>,
 ) -> Sse<impl Stream<Item = Result<Event, Error>>> {
-    let ts = state.repo.user_get_next_notification_sse(&user.id).unwrap();
+    let ts = state.repo.user_get_next_notification_sse(user.id).unwrap();
 
     let probe = state.user_notification_stat.on_create();
 
@@ -431,9 +435,9 @@ async fn app_get_notification(
             let state = state.clone();
             let user = user.clone();
             async move {
-                let s = app_get_notification_inner(&state, &user.id, body)?;
+                let s = app_get_notification_inner(&state, user.id, body)?;
                 let s = serde_json::to_string(&s).unwrap();
-                state.user_notification_stat.on_write(&user.id);
+                state.user_notification_stat.on_write(user.id);
                 Ok(Event::default().data(s))
             }
         });
@@ -443,17 +447,17 @@ async fn app_get_notification(
 
 fn app_get_notification_inner(
     state: &AppState,
-    user_id: &Id<User>,
+    user_id: Id<User>,
     body: Option<NotificationBody>,
 ) -> Result<Option<AppGetNotificationResponseData>, Error> {
     let Some(body) = body else { return Ok(None) };
-    let ride = state.repo.ride_get(&body.ride_id)?.unwrap();
+    let ride = state.repo.ride_get(body.ride_id)?.unwrap();
     let status = body.status;
 
     let fare = calculate_discounted_fare(
         &state.repo,
         user_id,
-        Some(&ride.id),
+        Some(ride.id),
         ride.pickup_coord(),
         ride.destination_coord(),
     )?;
@@ -470,8 +474,8 @@ fn app_get_notification_inner(
     };
 
     if let Some(chair_id) = ride.chair_id {
-        let chair = state.repo.chair_get_by_id_effortless(&chair_id)?.unwrap();
-        let stats = state.repo.chair_get_stats(&chair.id)?;
+        let chair = state.repo.chair_get_by_id_effortless(chair_id)?.unwrap();
+        let stats = state.repo.chair_get_stats(chair.id)?;
 
         data.chair = Some(AppGetNotificationResponseChair {
             id: chair.id,
@@ -500,8 +504,8 @@ struct AppGetNearbyChairsResponse {
 #[derive(Debug, serde::Serialize)]
 pub struct AppGetNearbyChairsResponseChair {
     pub id: Id<Chair>,
-    pub name: String,
-    pub model: String,
+    pub name: Symbol,
+    pub model: Symbol,
     pub current_coordinate: Coordinate,
 }
 
@@ -524,8 +528,8 @@ async fn app_get_nearby_chairs(
 
 fn calculate_discounted_fare(
     repo: &Arc<Repository>,
-    user_id: &Id<User>,
-    ride_id: Option<&Id<Ride>>,
+    user_id: Id<User>,
+    ride_id: Option<Id<Ride>>,
     pickup: Coordinate,
     dest: Coordinate,
 ) -> Result<i32, Error> {
@@ -537,7 +541,7 @@ fn calculate_discounted_fare(
         } else {
             // 初回利用クーポンを最優先で使う
             let unused_coupons = repo.coupon_get_unused_order_by_created_at(user_id)?;
-            if let Some(coupon) = unused_coupons.iter().find(|x| x.code == "CP_NEW2024") {
+            if let Some(coupon) = unused_coupons.iter().find(|x| x.code == *CP_NEW2024) {
                 coupon.discount
             } else {
                 // 無いなら他のクーポンを付与された順番に使う

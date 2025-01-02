@@ -1,4 +1,5 @@
 use axum::extract::State;
+use isuride::models::Symbol;
 use isuride::payment_gateway::PaymentGatewayRestricter;
 use isuride::repo::Repository;
 use isuride::speed::SpeedStatistics;
@@ -98,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Debug, serde::Deserialize)]
 struct PostInitializeRequest {
-    payment_server: String,
+    payment_server: Symbol,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -123,7 +124,7 @@ async fn post_initialize(
     }
 
     state.repo.reinit().await;
-    state.repo.pgw_set(&req.payment_server).await?;
+    state.repo.pgw_set(req.payment_server).await?;
 
     Ok(axum::Json(PostInitializeResponse { language: "rust" }))
 }

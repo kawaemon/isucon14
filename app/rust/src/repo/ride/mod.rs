@@ -68,7 +68,7 @@ impl RideCacheInit {
         let statuses = ConcurrentHashMap::default();
         for status in &init.ride_statuses {
             statuses
-                .entry(status.ride_id.clone())
+                .entry(status.ride_id)
                 .or_insert_with(Vec::new)
                 .push(status.clone());
         }
@@ -78,7 +78,7 @@ impl RideCacheInit {
         //
         let latest_ride_stat = ConcurrentHashMap::default();
         for stat in &init.ride_statuses {
-            latest_ride_stat.insert(stat.ride_id.clone(), stat.status);
+            latest_ride_stat.insert(stat.ride_id, stat.status);
         }
 
         //
@@ -86,15 +86,15 @@ impl RideCacheInit {
         //
         let user_notification = ConcurrentHashMap::default();
         for user in &init.users {
-            user_notification.insert(user.id.clone(), NotificationQueue::new());
+            user_notification.insert(user.id, NotificationQueue::new());
         }
         for ride in &init.rides {
             let queue = user_notification.get_mut(&ride.user_id).unwrap();
             let st = statuses.get(&ride.id).unwrap();
             for status in st.iter() {
                 let b = NotificationBody {
-                    ride_id: ride.id.clone(),
-                    ride_status_id: status.id.clone(),
+                    ride_id: ride.id,
+                    ride_status_id: status.id,
                     status: status.status,
                 };
                 let mark_sent = queue.push(b, status.app_sent_at.is_some());
@@ -107,7 +107,7 @@ impl RideCacheInit {
         //
         let chair_notification = ConcurrentHashMap::default();
         for chair in &init.chairs {
-            chair_notification.insert(chair.id.clone(), NotificationQueue::new());
+            chair_notification.insert(chair.id, NotificationQueue::new());
         }
         for status in &init.ride_statuses {
             if status.status != RideStatusEnum::Enroute {
@@ -119,8 +119,8 @@ impl RideCacheInit {
                 .unwrap();
             for status in statuses.get(&status.ride_id).unwrap().iter() {
                 let b = NotificationBody {
-                    ride_id: ride.id.clone(),
-                    ride_status_id: status.id.clone(),
+                    ride_id: ride.id,
+                    ride_status_id: status.id,
                     status: status.status,
                 };
                 let mark_sent = queue.push(b, status.chair_sent_at.is_some());
@@ -134,14 +134,14 @@ impl RideCacheInit {
         let rides = ConcurrentHashMap::default();
         for ride in &init.rides {
             rides.insert(
-                ride.id.clone(),
+                ride.id,
                 Arc::new(RideEntry {
-                    id: ride.id.clone(),
-                    user_id: ride.user_id.clone(),
+                    id: ride.id,
+                    user_id: ride.user_id,
                     pickup: ride.pickup_coord(),
                     destination: ride.destination_coord(),
                     created_at: ride.created_at,
-                    chair_id: DlSyncRwLock::new(ride.chair_id.clone()),
+                    chair_id: DlSyncRwLock::new(ride.chair_id),
                     evaluation: DlSyncRwLock::new(ride.evaluation),
                     updated_at: DlSyncRwLock::new(ride.updated_at),
                     latest_status: DlSyncRwLock::new(*latest_ride_stat.get(&ride.id).unwrap()),
@@ -161,18 +161,18 @@ impl RideCacheInit {
                 match status.status {
                     RideStatusEnum::Matching => {
                         user_has_ride
-                            .entry(ride.user_id.clone())
+                            .entry(ride.user_id)
                             .or_insert_with(|| AtomicBool::new(true))
                             .store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     RideStatusEnum::Enroute => {
-                        chair_movement_cache.insert(chair_id.unwrap().clone(), Arc::clone(&*ride));
+                        chair_movement_cache.insert(chair_id.unwrap(), Arc::clone(&*ride));
                     }
                     RideStatusEnum::Pickup => {
                         chair_movement_cache.remove(chair_id.unwrap()).unwrap();
                     }
                     RideStatusEnum::Carrying => {
-                        chair_movement_cache.insert(chair_id.unwrap().clone(), Arc::clone(&*ride));
+                        chair_movement_cache.insert(chair_id.unwrap(), Arc::clone(&*ride));
                     }
                     RideStatusEnum::Arrived => {
                         chair_movement_cache.remove(chair_id.unwrap()).unwrap();
@@ -198,7 +198,7 @@ impl RideCacheInit {
                 assert_eq!(status.len(), 1);
                 assert_eq!(status[0].status, RideStatusEnum::Matching);
                 let ride = rides.get(&ride.id).unwrap();
-                waiting_rides.push_back((Arc::clone(&*ride), status[0].id.clone()));
+                waiting_rides.push_back((Arc::clone(&*ride), status[0].id));
             }
         }
 
@@ -224,7 +224,7 @@ impl RideCacheInit {
                 unreachable!()
             }
             if lv1 {
-                free_chairs_lv1.insert(chair.id.clone());
+                free_chairs_lv1.insert(chair.id);
             }
 
             // active かつ最後の通知が Completed でそれが送信済みであればいい
@@ -234,7 +234,7 @@ impl RideCacheInit {
                     .as_ref()
                     .is_none_or(|x| x.status == RideStatusEnum::Completed);
             if lv2 {
-                free_chairs_lv2.push(chair.id.clone());
+                free_chairs_lv2.push(chair.id);
             }
         }
 
@@ -243,7 +243,7 @@ impl RideCacheInit {
         //
         let user_rides = ConcurrentHashMap::default();
         for user in &init.users {
-            user_rides.insert(user.id.clone(), DlSyncRwLock::new(Vec::new()));
+            user_rides.insert(user.id, DlSyncRwLock::new(Vec::new()));
         }
         for ride in &init.rides {
             let r = Arc::clone(&*rides.get(&ride.id).unwrap());
@@ -325,11 +325,11 @@ impl Repository {
         let cache = self.ride_cache.free_chairs_lv1.read();
         let mut res = vec![];
         for chair in cache.iter() {
-            let Some(chair_coord) = self.chair_location_get_latest(&chair)? else {
+            let Some(chair_coord) = self.chair_location_get_latest(*chair)? else {
                 continue;
             };
             if coord.distance(chair_coord) <= dist {
-                let chair = self.chair_get_by_id_effortless(&chair)?.unwrap();
+                let chair = self.chair_get_by_id_effortless(*chair)?.unwrap();
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -348,10 +348,10 @@ crate::conf_env!(static MATCHING_CHAIR_THRESHOLD: usize = {
 });
 
 impl Repository {
-    pub fn push_free_chair(&self, id: &Id<Chair>) {
+    pub fn push_free_chair(&self, id: Id<Chair>) {
         let len = {
             let mut cache = self.ride_cache.free_chairs_lv2.lock();
-            cache.push(id.clone());
+            cache.push(id);
             cache.len()
         };
         if len == *MATCHING_CHAIR_THRESHOLD {
@@ -364,25 +364,23 @@ impl Repository {
 }
 
 impl RideCacheInner {
-    pub fn on_user_add(&self, id: &Id<User>) {
+    pub fn on_user_add(&self, id: Id<User>) {
         self.user_notification
             .read()
-            .insert(id.clone(), NotificationQueue::new());
-        self.user_rides
-            .read()
-            .insert(id.clone(), DlSyncRwLock::new(vec![]));
+            .insert(id, NotificationQueue::new());
+        self.user_rides.read().insert(id, DlSyncRwLock::new(vec![]));
     }
-    pub fn on_chair_add(&self, id: &Id<Chair>) {
+    pub fn on_chair_add(&self, id: Id<Chair>) {
         self.chair_notification
             .read()
-            .insert(id.clone(), NotificationQueue::new());
+            .insert(id, NotificationQueue::new());
     }
-    pub fn on_chair_status_change(&self, id: &Id<Chair>, on_duty: bool) {
+    pub fn on_chair_status_change(&self, id: Id<Chair>, on_duty: bool) {
         let cache = self.free_chairs_lv1.read();
         if on_duty {
-            cache.remove(id);
+            cache.remove(&id);
         } else {
-            cache.insert(id.clone());
+            cache.insert(id);
         }
     }
 }
@@ -395,10 +393,10 @@ pub struct NotificationTransceiver {
 impl Repository {
     pub fn chair_get_next_notification_sse(
         &self,
-        id: &Id<Chair>,
+        id: Id<Chair>,
     ) -> Result<NotificationTransceiver> {
         let cache = self.ride_cache.chair_notification.read();
-        let queue = cache.get(id).unwrap();
+        let queue = cache.get(&id).unwrap();
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
@@ -408,7 +406,7 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
-                self.ride_status_chair_notified(&next.body.ride_status_id);
+                self.ride_status_chair_notified(next.body.ride_status_id);
                 next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
@@ -424,9 +422,9 @@ impl Repository {
         })
     }
 
-    pub fn user_get_next_notification_sse(&self, id: &Id<User>) -> Result<NotificationTransceiver> {
+    pub fn user_get_next_notification_sse(&self, id: Id<User>) -> Result<NotificationTransceiver> {
         let cache = self.ride_cache.user_notification.read();
-        let queue = cache.get(id).unwrap();
+        let queue = cache.get(&id).unwrap();
 
         let (tx, rx) = tokio::sync::broadcast::channel(8);
 
@@ -436,7 +434,7 @@ impl Repository {
 
         if let Some(mut next) = next {
             while !next.sent {
-                self.ride_status_app_notified(&next.body.ride_status_id);
+                self.ride_status_app_notified(next.body.ride_status_id);
                 next = queue.get_next().unwrap();
                 tx.send(Some(next.body.clone())).unwrap();
                 send += 1;
@@ -571,9 +569,9 @@ pub struct RideEntry {
 impl RideEntry {
     pub fn ride(&self) -> Ride {
         Ride {
-            id: self.id.clone(),
-            user_id: self.user_id.clone(),
-            chair_id: self.chair_id.read().clone(),
+            id: self.id,
+            user_id: self.user_id,
+            chair_id: *self.chair_id.read(),
             pickup_latitude: self.pickup.latitude,
             pickup_longitude: self.pickup.longitude,
             destination_latitude: self.destination.latitude,
@@ -583,8 +581,8 @@ impl RideEntry {
             updated_at: *self.updated_at.read(),
         }
     }
-    pub fn set_chair_id(&self, chair_id: &Id<Chair>, now: DateTime<Utc>) {
-        *self.chair_id.write() = Some(chair_id.clone());
+    pub fn set_chair_id(&self, chair_id: Id<Chair>, now: DateTime<Utc>) {
+        *self.chair_id.write() = Some(chair_id);
         *self.updated_at.write() = now;
     }
     pub fn set_evaluation(&self, eval: i32, now: DateTime<Utc>) {
@@ -617,15 +615,15 @@ impl Repository {
 
             // stupid
             let mut chair_pos = HashMap::default();
-            for chair in free_chairs.iter() {
+            for &chair in free_chairs.iter() {
                 let loc = self.chair_location_get_latest(chair).unwrap();
-                chair_pos.insert(chair.clone(), loc);
+                chair_pos.insert(chair, loc);
             }
             let mut chair_speed = HashMap::default();
-            for chair in free_chairs.iter() {
+            for &chair in free_chairs.iter() {
                 let c = self.chair_get_by_id_effortless(chair).unwrap().unwrap();
                 let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
-                chair_speed.insert(chair.clone(), speed);
+                chair_speed.insert(chair, speed);
             }
 
             struct Pair {
@@ -636,7 +634,7 @@ impl Repository {
             let mut pairs = vec![];
 
             for (ride, status_id) in waiting_rides {
-                let best = free_chairs
+                let best = *free_chairs
                     .iter()
                     .min_by_key(|&cid| {
                         let Some(chair_pos) = chair_pos.get(cid).unwrap() else {
@@ -647,12 +645,11 @@ impl Repository {
                         let speed = chair_speed.get(cid).unwrap();
                         travel_distance / speed
                     })
-                    .unwrap()
-                    .clone();
+                    .unwrap();
                 free_chairs.remove(&best);
                 pairs.push(Pair {
                     chair_id: best,
-                    ride_id: ride.id.clone(),
+                    ride_id: ride.id,
                     status_id,
                 });
             }
@@ -667,7 +664,7 @@ impl Repository {
 
         let pairs_len = pairs.len();
         for pair in pairs {
-            self.rides_assign(&pair.ride_id, &pair.status_id, &pair.chair_id)
+            self.rides_assign(pair.ride_id, pair.status_id, pair.chair_id)
                 .unwrap();
         }
 

@@ -1,4 +1,4 @@
-use crate::{dl::DlSyncRwLock, ConcurrentHashMap};
+use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentHashMap};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -18,8 +18,8 @@ type SharedOwner = Arc<Owner>;
 #[derive(Debug)]
 pub struct OwnerCacheInner {
     by_id: Arc<DlSyncRwLock<ConcurrentHashMap<Id<Owner>, SharedOwner>>>,
-    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<String, SharedOwner>>>,
-    by_crt: Arc<DlSyncRwLock<ConcurrentHashMap<String, SharedOwner>>>,
+    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedOwner>>>,
+    by_crt: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedOwner>>>,
     deferred: SimpleDeferred<OwnerDeferrable>,
 }
 
@@ -37,8 +37,8 @@ impl OwnerCacheInner {
 
 struct OwnerCacheInit {
     by_id: ConcurrentHashMap<Id<Owner>, SharedOwner>,
-    by_token: ConcurrentHashMap<String, SharedOwner>,
-    by_crt: ConcurrentHashMap<String, SharedOwner>,
+    by_token: ConcurrentHashMap<Symbol, SharedOwner>,
+    by_crt: ConcurrentHashMap<Symbol, SharedOwner>,
 }
 impl OwnerCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
@@ -47,9 +47,9 @@ impl OwnerCacheInit {
         let crt = ConcurrentHashMap::default();
         for owner in &init.owners {
             let owner = Arc::new(owner.clone());
-            id.insert(owner.id.clone(), Arc::clone(&owner));
-            t.insert(owner.access_token.clone(), Arc::clone(&owner));
-            crt.insert(owner.chair_register_token.clone(), Arc::clone(&owner));
+            id.insert(owner.id, Arc::clone(&owner));
+            t.insert(owner.access_token, Arc::clone(&owner));
+            crt.insert(owner.chair_register_token, Arc::clone(&owner));
         }
         Self {
             by_id: id,
@@ -89,23 +89,23 @@ impl Repository {
 }
 
 impl Repository {
-    pub fn owner_get_by_access_token(&self, token: &str) -> Result<Option<Owner>> {
+    pub fn owner_get_by_access_token(&self, token: Symbol) -> Result<Option<Owner>> {
         let cache = self.owner_cache.by_token.read();
-        let Some(entry) = cache.get(token) else {
+        let Some(entry) = cache.get(&token) else {
             return Ok(None);
         };
         Ok(Some(Owner::clone(&*entry)))
     }
-    pub fn owner_get_by_id(&self, id: &Id<Owner>) -> Result<Option<Owner>> {
+    pub fn owner_get_by_id(&self, id: Id<Owner>) -> Result<Option<Owner>> {
         let cache = self.owner_cache.by_id.read();
-        let Some(entry) = cache.get(id) else {
+        let Some(entry) = cache.get(&id) else {
             return Ok(None);
         };
         Ok(Some(Owner::clone(&*entry)))
     }
-    pub fn owner_get_by_chair_register_token(&self, crt: &str) -> Result<Option<Owner>> {
+    pub fn owner_get_by_chair_register_token(&self, crt: Symbol) -> Result<Option<Owner>> {
         let cache = self.owner_cache.by_crt.read();
-        let Some(entry) = cache.get(crt) else {
+        let Some(entry) = cache.get(&crt) else {
             return Ok(None);
         };
         Ok(Some(Owner::clone(&*entry)))
@@ -115,14 +115,14 @@ impl Repository {
 
     pub fn owner_add(
         &self,
-        id: &Id<Owner>,
-        name: &str,
-        token: &str,
-        chair_reg_token: &str,
+        id: Id<Owner>,
+        name: Symbol,
+        token: Symbol,
+        chair_reg_token: Symbol,
     ) -> Result<()> {
         let now = Utc::now();
         let o = Owner {
-            id: id.clone(),
+            id,
             name: name.to_owned(),
             access_token: token.to_owned(),
             chair_register_token: chair_reg_token.to_owned(),
@@ -152,10 +152,10 @@ impl DeferrableSimple for OwnerDeferrable {
         ");
 
         builder.push_values(inserts, |mut b, i| {
-            b.push_bind(&i.id)
-                .push_bind(&i.name)
-                .push_bind(&i.access_token)
-                .push_bind(&i.chair_register_token)
+            b.push_bind(i.id)
+                .push_bind(i.name)
+                .push_bind(i.access_token)
+                .push_bind(i.chair_register_token)
                 .push_bind(i.created_at)
                 .push_bind(i.updated_at);
         });

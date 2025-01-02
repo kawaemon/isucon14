@@ -1,4 +1,4 @@
-use crate::HashMap as HashMap;
+use crate::HashMap;
 
 use chrono::{DateTime, Utc};
 use sqlx::{MySql, QueryBuilder};
@@ -43,15 +43,15 @@ impl DeferrableMayUpdated for RideStatusDeferrable {
     ) -> Vec<Self::UpdateQuery> {
         let mut inserts = inserts
             .iter_mut()
-            .map(|x| (x.id.clone(), x))
+            .map(|x| (x.id, x))
             .collect::<HashMap<_, _>>();
         let mut actual_updates: HashMap<Id<RideStatus>, UpdateQuery> = HashMap::default();
         for u in updates {
             let Some(i) = inserts.get_mut(&u.status_id) else {
                 let r = actual_updates
-                    .entry(u.status_id.clone())
+                    .entry(u.status_id)
                     .or_insert_with(|| UpdateQuery {
-                        id: u.status_id.clone(),
+                        id: u.status_id,
                         app: None,
                         chair: None,
                     });
@@ -76,8 +76,8 @@ impl DeferrableMayUpdated for RideStatusDeferrable {
         );
 
         insert_query.push_values(inserts, |mut b, i| {
-            b.push_bind(&i.id)
-                .push_bind(&i.ride_id)
+            b.push_bind(i.id)
+                .push_bind(i.ride_id)
                 .push_bind(i.status)
                 .push_bind(i.created_at)
                 .push_bind(i.app_sent_at)
@@ -103,7 +103,7 @@ impl DeferrableMayUpdated for RideStatusDeferrable {
             update_query.push_bind(app);
         }
         update_query.push(" where id = ");
-        update_query.push_bind(&update.id);
+        update_query.push_bind(update.id);
         update_query.build().execute(&mut **tx).await.unwrap();
     }
 }

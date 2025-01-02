@@ -26,6 +26,7 @@ derivative = "2"
 futures = "0.3"
 hashbrown = { version = "0.15.2", features = ["inline-more", "serde"] }
 hex = "0.4"
+lasso = { version = "0.7.3", features = ["multi-threaded", "inline-more"] }
 listenfd = "1"
 num-traits = "0.2"
 parking_lot = "0.12"
