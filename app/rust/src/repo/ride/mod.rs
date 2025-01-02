@@ -4,7 +4,6 @@ use crate::dl::DlSyncRwLock;
 use crate::ConcurrentHashMap;
 use crate::ConcurrentHashSet;
 use crate::HashMap;
-use crate::HashSet;
 use chrono::{DateTime, Utc};
 use ride::RideDeferred;
 use sqlx::MySql;
@@ -596,34 +595,42 @@ impl RideEntry {
 
 impl Repository {
     pub fn do_matching(&self) {
-        let (pairs, waiting, free) = {
+        let (pairs, waiting, free, (s1, s2)) = {
             let _lock = self.ride_cache.matching_lock.lock();
 
             let free_chairs = {
                 let mut c = self.ride_cache.free_chairs_lv2.lock();
                 std::mem::take(&mut *c)
             };
-            let mut free_chairs = HashSet::from_iter(free_chairs);
+
             let free_chairs_len = free_chairs.len();
 
             let (waiting_rides_len, waiting_rides) = {
                 let mut l = self.ride_cache.waiting_rides.lock();
-                let r = 0..l.len().min(free_chairs_len);
-                (l.len(), l.drain(r).collect::<Vec<_>>())
+                (l.len(), std::mem::take(&mut *l))
             };
             let chair_speed_cache = self.chair_model_cache.speed.read();
 
-            // stupid
-            let mut chair_pos = HashMap::default();
-            for &chair in free_chairs.iter() {
-                let loc = self.chair_location_get_latest(chair).unwrap();
-                chair_pos.insert(chair, loc);
+            struct AvailableChair {
+                speed: i32,
+                chair: Id<Chair>,
+                coord: Coordinate,
             }
-            let mut chair_speed = HashMap::default();
-            for &chair in free_chairs.iter() {
-                let c = self.chair_get_by_id_effortless(chair).unwrap().unwrap();
-                let speed: i32 = *chair_speed_cache.get(&c.model).unwrap();
-                chair_speed.insert(chair, speed);
+
+            let mut avail = vec![];
+
+            // stupid
+            for chair in free_chairs {
+                let Some(loc) = self.chair_location_get_latest(chair).unwrap() else {
+                    continue;
+                };
+                let chair = self.chair_get_by_id_effortless(chair).unwrap().unwrap();
+                let speed: i32 = *chair_speed_cache.get(&chair.model).unwrap();
+                avail.push(AvailableChair {
+                    speed,
+                    chair: chair.id,
+                    coord: loc,
+                });
             }
 
             struct Pair {
@@ -632,34 +639,64 @@ impl Repository {
                 status_id: Id<RideStatus>,
             }
             let mut pairs = vec![];
+            let mut redu = vec![];
+            let mut stage1 = 0;
 
             for (ride, status_id) in waiting_rides {
-                let best = *free_chairs
+                let Some((best_index, best)) = avail
                     .iter()
-                    .min_by_key(|&cid| {
-                        let Some(chair_pos) = chair_pos.get(cid).unwrap() else {
-                            return 99999999;
-                        };
-                        let travel_distance = chair_pos.distance(ride.pickup);
-                        // + ride.pickup.distance(ride.destination);
-                        let speed = chair_speed.get(cid).unwrap();
-                        travel_distance / speed
-                    })
-                    .unwrap();
-                free_chairs.remove(&best);
+                    .enumerate()
+                    .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
+                    .max_by_key(|(_i, x)| x.coord.distance(ride.pickup))
+                else {
+                    redu.push((ride, status_id));
+                    continue;
+                };
+                let chair = best.chair;
+                avail.remove(best_index);
                 pairs.push(Pair {
-                    chair_id: best,
+                    chair_id: chair,
                     ride_id: ride.id,
                     status_id,
                 });
+                stage1 += 1;
             }
 
-            if !free_chairs.is_empty() {
+            let mut redu2 = vec![];
+
+            let mut stage2 = 0;
+            for (ride, status_id) in redu {
+                let Some((best_index, best)) = avail
+                    .iter()
+                    .enumerate()
+                    // しょうがないので最も利益を生むライドにアサイン・・・と行きたいところだが
+                    // さっさと初期のライドは終了して、評判で次のライドを爆発的に増やしたいのでサービス
+                    // .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
+                    .min_by_key(|(_i, x)| x.coord.distance(ride.pickup))
+                else {
+                    redu2.push((ride, status_id));
+                    continue;
+                };
+                let chair = best.chair;
+                avail.remove(best_index);
+                pairs.push(Pair {
+                    chair_id: chair,
+                    ride_id: ride.id,
+                    status_id,
+                });
+                stage2 += 1;
+            }
+
+            if !redu2.is_empty() {
+                let mut c = self.ride_cache.waiting_rides.lock();
+                c.extend(redu2);
+            }
+            if !avail.is_empty() {
                 let mut c = self.ride_cache.free_chairs_lv2.lock();
-                c.extend(free_chairs);
+                c.extend(avail.into_iter().map(|x| x.chair));
             }
 
-            (pairs, waiting_rides_len, free_chairs_len)
+            (pairs, waiting_rides_len, free_chairs_len, (stage1, stage2))
         };
 
         let pairs_len = pairs.len();
@@ -668,6 +705,8 @@ impl Repository {
                 .unwrap();
         }
 
-        tracing::info!("waiting = {waiting:3}, free = {free:3}, matches = {pairs_len:3}",);
+        tracing::info!(
+            "waiting={waiting:3}, free={free:3}, matches={pairs_len:3}, stage1={s1}, stage2={s2}",
+        );
     }
 }

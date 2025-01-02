@@ -201,7 +201,7 @@ pub struct Chair {
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct ChairLocation {
-    pub id: Id<ChairLocation>,
+    pub id: String,
     pub chair_id: Id<Chair>,
     pub latitude: i32,
     pub longitude: i32,

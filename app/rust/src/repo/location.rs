@@ -38,7 +38,7 @@ impl DeferrableSimple for ChairLocationDeferrable {
             "insert into chair_locations(id, chair_id, latitude, longitude, created_at) ",
         );
         query.push_values(inserts, |mut b, e: &ChairLocation| {
-            b.push_bind(e.id)
+            b.push_bind(&e.id)
                 .push_bind(e.chair_id)
                 .push_bind(e.latitude)
                 .push_bind(e.longitude)
@@ -241,7 +241,7 @@ impl Repository {
         let created_at = Utc::now();
 
         let c = ChairLocation {
-            id: Id::new(),
+            id: ulid::Ulid::new().to_string(),
             chair_id,
             latitude: coord.latitude,
             longitude: coord.longitude,
