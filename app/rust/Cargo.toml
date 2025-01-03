@@ -15,21 +15,26 @@ parking_lot = ["tokio/parking_lot"]
 [dependencies]
 ahash = "0.8"
 anyhow = { version = "1", features = ["backtrace"] }
-axum = { version = "0.7", features = ["macros"] }
-axum-extra = { version = "0.9", features = ["cookie"] }
 backtrace = "0.3"
+bytes = "1.9.0"
 cfg-if = "1"
 chrono = "0.4"
-console-subscriber = "0.4"
+cookie = { version = "0.18.1", features = ["percent-encode"] }
 dashmap = { version = "6", features = ["inline"] }
 derivative = "2"
 futures = "0.3"
 hashbrown = { version = "0.15.2", features = ["inline-more", "serde"] }
 hex = "0.4"
+http-body-util = "0.1.2"
+hyper = { version = "1.5.2", features = ["full"] }
+hyper-util = { version = "0.1.10", features = ["full"] }
 lasso = { version = "0.7.3", features = ["multi-threaded", "inline-more"] }
-listenfd = "1"
+memchr = "2.7.4"
+mime = "0.3.17"
 num-traits = "0.2"
 parking_lot = "0.12"
+pin-project = "1.1.7"
+querystring = "1.1.0"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
@@ -46,6 +51,7 @@ sqlx = { version = "0.8", default-features = false, features = [
     "chrono",
     "rust_decimal",
 ] }
+sync_wrapper = "1.0.2"
 thiserror = "2"
 tokio = { version = "1", features = [
     "fs",

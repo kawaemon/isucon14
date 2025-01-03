@@ -1,64 +1,43 @@
+use crate::fw::Controller;
 use crate::HashMap;
 
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum_extra::extract::cookie::Cookie;
-use axum_extra::extract::CookieJar;
 use chrono::{DateTime, NaiveDate, Utc};
+use cookie::Cookie;
+use hyper::StatusCode;
+use serde::Serialize;
 
 use crate::models::{Chair, Id, Owner, Symbol};
-use crate::{AppState, Error};
+use crate::Error;
 
-pub fn owner_routes(app_state: AppState) -> axum::Router<AppState> {
-    let routes =
-        axum::Router::new().route("/api/owner/owners", axum::routing::post(owner_post_owners));
+pub async fn owner_post_owners(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        name: Symbol,
+    }
 
-    let authed_routes = axum::Router::new()
-        .route("/api/owner/sales", axum::routing::get(owner_get_sales))
-        .route("/api/owner/chairs", axum::routing::get(owner_get_chairs))
-        .route_layer(axum::middleware::from_fn_with_state(
-            app_state.clone(),
-            crate::middlewares::owner_auth_middleware,
-        ));
+    let req: Req = c.body().await?;
 
-    routes.merge(authed_routes)
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct OwnerPostOwnersRequest {
-    name: Symbol,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct OwnerPostOwnersResponse {
-    id: Id<Owner>,
-    chair_register_token: Symbol,
-}
-
-async fn owner_post_owners(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    axum::Json(req): axum::Json<OwnerPostOwnersRequest>,
-) -> Result<(CookieJar, (StatusCode, axum::Json<OwnerPostOwnersResponse>)), Error> {
     let owner_id = Id::new();
     let access_token = Symbol::new_from(crate::secure_random_str(8));
     let chair_register_token = Symbol::new_from(crate::secure_random_str(8));
 
-    state
+    c.state()
         .repo
         .owner_add(owner_id, req.name, access_token, chair_register_token)?;
 
-    let jar = jar.add(Cookie::build(("owner_session", access_token.resolve())).path("/"));
+    c.cookie_add(Cookie::build(("owner_session", access_token.resolve())).path("/"));
 
+    #[derive(serde::Serialize)]
+    struct Res {
+        id: Id<Owner>,
+        chair_register_token: Symbol,
+    }
     Ok((
-        jar,
-        (
-            StatusCode::CREATED,
-            axum::Json(OwnerPostOwnersResponse {
-                id: owner_id,
-                chair_register_token,
-            }),
-        ),
+        StatusCode::CREATED,
+        Res {
+            id: owner_id,
+            chair_register_token,
+        },
     ))
 }
 
@@ -82,23 +61,18 @@ struct OwnerGetSalesResponse {
     models: Vec<ModelSales>,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct GetOwnerSalesQuery {
+pub fn owner_get_sales(
+    c: &mut Controller,
     since: Option<i64>,
     until: Option<i64>,
-}
-
-async fn owner_get_sales(
-    State(state): State<AppState>,
-    axum::Extension(owner): axum::Extension<Owner>,
-    Query(query): Query<GetOwnerSalesQuery>,
-) -> Result<axum::Json<OwnerGetSalesResponse>, Error> {
-    let since = if let Some(since) = query.since {
+) -> Result<impl Serialize, Error> {
+    let owner = c.auth_owner()?;
+    let since = if let Some(since) = since {
         DateTime::from_timestamp_millis(since).unwrap()
     } else {
         DateTime::from_timestamp_millis(0).unwrap()
     };
-    let until = if let Some(until) = query.until {
+    let until = if let Some(until) = until {
         DateTime::from_timestamp_millis(until).unwrap()
     } else {
         DateTime::from_naive_utc_and_offset(
@@ -118,7 +92,8 @@ async fn owner_get_sales(
 
     let mut model_sales_by_model = HashMap::default();
 
-    for chair in state
+    for chair in c
+        .state()
         .repo
         .chair_sale_stats_by_owner(owner.id, since, until)?
     {
@@ -135,7 +110,7 @@ async fn owner_get_sales(
         res.models.push(ModelSales { model, sales });
     }
 
-    Ok(axum::Json(res))
+    Ok(res)
 }
 
 /// MySQL で COUNT()、SUM() 等を使って DECIMAL 型の値になったものを i64 に変換するための構造体。
@@ -196,10 +171,9 @@ struct OwnerGetChairResponseChair {
     total_distance_updated_at: Option<i64>,
 }
 
-async fn owner_get_chairs(
-    State(state): State<AppState>,
-    axum::Extension(owner): axum::Extension<Owner>,
-) -> Result<axum::Json<OwnerGetChairResponse>, Error> {
+pub fn owner_get_chairs(c: &mut Controller) -> Result<impl Serialize, Error> {
+    let owner = c.auth_owner()?;
+    let state = c.state();
     let chairs = state.repo.chair_get_by_owner(owner.id)?;
 
     let mut res = vec![];
@@ -221,5 +195,5 @@ async fn owner_get_chairs(
         })
     }
 
-    Ok(axum::Json(OwnerGetChairResponse { chairs: res }))
+    Ok(OwnerGetChairResponse { chairs: res })
 }

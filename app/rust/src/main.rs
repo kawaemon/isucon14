@@ -1,15 +1,25 @@
-use axum::extract::State;
+use bytes::Bytes;
+use http_body_util::{Either, Full};
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{header, Method, Request, Response, StatusCode};
+use hyper_util::rt::{TokioIo, TokioTimer};
 use isuride::models::Symbol;
 use isuride::repo::Repository;
 #[cfg(feature = "speed")]
 use isuride::speed::SpeedStatistics;
 use isuride::AppStateInner;
 use isuride::{internal_handlers::spawn_matching_thread, AppState, Error};
+use serde::Serialize;
 use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
+
+use isuride::fw::{Controller, SseBody};
+use isuride::models::Id;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -69,47 +79,33 @@ async fn main() -> anyhow::Result<()> {
 
     spawn_matching_thread(app_state.clone());
 
-    let app = axum::Router::new()
-        .route("/api/initialize", axum::routing::post(post_initialize))
-        .merge(isuride::app_handlers::app_routes(app_state.clone()))
-        .merge(isuride::owner_handlers::owner_routes(app_state.clone()))
-        .merge(isuride::chair_handlers::chair_routes(app_state.clone()))
-        .merge(isuride::internal_handlers::internal_routes())
-        .with_state(app_state.clone())
-        .layer(tower_http::trace::TraceLayer::new_for_http());
-
-    #[cfg(feature = "speed")]
-    let app = app.layer(axum::middleware::from_fn_with_state(
-        app_state,
-        isuride::middlewares::log_slow_requests,
-    ));
-
-    let tcp_listener =
-        if let Some(std_listener) = listenfd::ListenFd::from_env().take_tcp_listener(0)? {
-            TcpListener::from_std(std_listener)?
-        } else {
-            TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], 8080))).await?
-        };
-    axum::serve(tcp_listener, app).await?;
-
-    Ok(())
+    let listener = TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], 8080))).await?;
+    loop {
+        let app_state = Arc::clone(&app_state);
+        let (stream, _) = listener.accept().await?;
+        let io = TokioIo::new(stream);
+        tokio::task::spawn(async move {
+            if let Err(_err) = http1::Builder::new()
+                .timer(TokioTimer::new())
+                .keep_alive(true)
+                .serve_connection(io, service_fn(|x| service(Arc::clone(&app_state), x)))
+                .await
+            {
+                // eprintln!("Error serving connection: {}", err);
+            }
+        });
+    }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct PostInitializeRequest {
-    payment_server: Symbol,
-}
+async fn post_initialize(c: &mut Controller) -> Result<impl Serialize, Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        payment_server: Symbol,
+    }
 
-#[derive(Debug, serde::Serialize)]
-struct PostInitializeResponse {
-    language: &'static str,
-}
+    let req: Req = c.body().await?;
+    let state = c.state();
 
-#[axum::debug_handler]
-async fn post_initialize(
-    State(state): State<AppState>,
-    axum::Json(req): axum::Json<PostInitializeRequest>,
-) -> Result<axum::Json<PostInitializeResponse>, Error> {
     let status = tokio::process::Command::new("../sql/init.sh")
         .stdout(Stdio::inherit())
         .status()
@@ -124,5 +120,212 @@ async fn post_initialize(
     state.repo.reinit().await;
     state.repo.pgw_set(req.payment_server).await?;
 
-    Ok(axum::Json(PostInitializeResponse { language: "rust" }))
+    #[derive(serde::Serialize)]
+    struct Res {
+        language: &'static str,
+    }
+    Ok(Res { language: "rust" })
+}
+
+type HyperRes = Either<Full<Bytes>, SseBody>;
+
+pub async fn service(state: AppState, req: Request<Incoming>) -> Result<Response<HyperRes>, Error> {
+    match response(state, req).await {
+        Ok(o) => Ok(o),
+        Err(e) => {
+            tracing::error!("tracing error: {e:?}");
+            Err(e)
+        }
+    }
+}
+
+pub async fn response(
+    state: AppState,
+    req: Request<Incoming>,
+) -> Result<Response<HyperRes>, Error> {
+    #[inline(always)]
+    fn json<B: serde::Serialize>(body: impl Into<Option<B>>) -> HyperRes {
+        Either::Left(Full::new(body.into().map_or_else(Bytes::new, |x| {
+            Bytes::from(serde_json::to_string(&x).unwrap())
+        })))
+    }
+    let empty = || json::<()>(None);
+
+    let method = req.method().clone();
+    let uri = req.uri().to_owned();
+
+    let mut c = Controller::new(req, state);
+
+    let param;
+    let (code, body) = {
+        let path = uri.path();
+        if let Some(app_path) = path.strip_prefix("/api/app") {
+            use isuride::app_handlers::*;
+            match (method, app_path) {
+                (Method::POST, "/users") => {
+                    let (code, res) = app_post_users(&mut c).await?;
+                    (code, json(res))
+                }
+                (Method::POST, "/payment-methods") => {
+                    let code = app_post_payment_methods(&mut c).await?;
+                    (code, empty())
+                }
+                (Method::GET, "/rides") => {
+                    let res = app_get_rides(&mut c)?;
+                    (StatusCode::OK, json(res))
+                }
+                (Method::POST, "/rides") => {
+                    let (code, res) = app_post_rides(&mut c).await?;
+                    (code, json(res))
+                }
+                (Method::POST, "/rides/estimated-fare") => {
+                    let res = app_post_rides_estimated_fare(&mut c).await?;
+                    (StatusCode::OK, json(res))
+                }
+                // POST /api/app/rides/:ride_id/evaluation
+                (Method::POST, s)
+                    if {
+                        param = s
+                            .strip_prefix("/rides/")
+                            .and_then(|x| x.strip_suffix("/evaluation"));
+                        param.is_some()
+                    } =>
+                {
+                    let param = param.unwrap();
+                    let param = Id::new_from(Symbol::new_from_ref(param));
+                    let res = app_post_ride_evaluation(&mut c, param).await?;
+                    (StatusCode::OK, json(res))
+                }
+                (Method::GET, "/notification") => {
+                    let stream = app_get_notification(&mut c)?;
+                    (StatusCode::OK, Either::Right(SseBody::new(stream)))
+                }
+                (Method::GET, "/nearby-chairs") => {
+                    let Some((dist, lat, long)) = ('query: {
+                        let Some(q) = uri.query().map(querystring::querify) else {
+                            break 'query None;
+                        };
+                        let f = |t: &str| q.iter().find(|&&(k, _)| k == t).map(|(_, v)| v.parse());
+                        match (f("distance").transpose(), f("latitude"), f("longitude")) {
+                            (Ok(dist), Some(Ok(lat)), Some(Ok(long))) => Some((dist, lat, long)),
+                            _ => None,
+                        }
+                    }) else {
+                        return Err(Error::BadRequest("bad querystring"));
+                    };
+                    let res = app_get_nearby_chairs(&mut c, dist, lat, long)?;
+                    (StatusCode::OK, json(res))
+                }
+                _ => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(empty())
+                        .unwrap())
+                }
+            }
+        } else if let Some(chair_path) = path.strip_prefix("/api/chair") {
+            use isuride::chair_handlers::*;
+            let param;
+            match (method, chair_path) {
+                (Method::POST, "/chairs") => {
+                    let (code, res) = chair_post_chairs(&mut c).await?;
+                    (code, json(res))
+                }
+                (Method::POST, "/activity") => {
+                    let code = chair_post_activity(&mut c).await?;
+                    (code, empty())
+                }
+                (Method::POST, "/coordinate") => {
+                    let res = chair_post_coordinate(&mut c).await?;
+                    (StatusCode::OK, json(res))
+                }
+                (Method::GET, "/notification") => {
+                    let stream = chair_get_notification(&mut c)?;
+                    (StatusCode::OK, Either::Right(SseBody::new(stream)))
+                }
+                (Method::POST, p)
+                    if {
+                        param = p
+                            .strip_prefix("/rides/")
+                            .and_then(|x| x.strip_suffix("/status"));
+                        param.is_some()
+                    } =>
+                {
+                    let param = param.unwrap();
+                    let param = Id::new_from(Symbol::new_from_ref(param));
+                    let code = chair_post_ride_status(&mut c, param).await?;
+                    (code, empty())
+                }
+                _ => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(empty())
+                        .unwrap())
+                }
+            }
+        } else if let Some(owner_path) = path.strip_prefix("/api/owner") {
+            use isuride::owner_handlers::*;
+            match (method, owner_path) {
+                (Method::POST, "/owners") => {
+                    let (code, res) = owner_post_owners(&mut c).await?;
+                    (code, json(res))
+                }
+                (Method::GET, "/sales") => {
+                    let Some((since, until)) = ('query: {
+                        let Some(q) = uri.query().map(querystring::querify) else {
+                            break 'query None;
+                        };
+                        let f = |t: &str| q.iter().find(|&&(k, _)| k == t).map(|(_, v)| v.parse());
+                        match (f("since").transpose(), f("until").transpose()) {
+                            (Ok(since), Ok(until)) => Some((since, until)),
+                            _ => None,
+                        }
+                    }) else {
+                        return Err(Error::BadRequest("bad querystring"));
+                    };
+                    let res = owner_get_sales(&mut c, since, until)?;
+                    (StatusCode::OK, json(res))
+                }
+                (Method::GET, "/chairs") => {
+                    let res = owner_get_chairs(&mut c)?;
+                    (StatusCode::OK, json(res))
+                }
+                _ => {
+                    return Ok(Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(empty())
+                        .unwrap())
+                }
+            }
+        } else if path == "/api/initialize" {
+            let res = post_initialize(&mut c).await?;
+            (StatusCode::OK, json(res))
+        } else {
+            return Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(empty())
+                .unwrap());
+        }
+    };
+
+    let is_stream = matches!(body, Either::Right(_));
+
+    let mut res = Response::new(body);
+    *res.status_mut() = code;
+    c.cookie_encode(res.headers_mut());
+
+    let headers = res.headers_mut();
+    headers.append(header::CACHE_CONTROL, "no-cache".parse().unwrap());
+    headers.append(
+        header::CONTENT_TYPE,
+        if is_stream {
+            mime::TEXT_EVENT_STREAM.as_ref()
+        } else {
+            mime::APPLICATION_JSON.as_ref()
+        }
+        .parse()
+        .unwrap(),
+    );
+
+    Ok(res)
 }

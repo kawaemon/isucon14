@@ -1,96 +1,29 @@
 use std::sync::{Arc, LazyLock};
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
-use axum::response::sse::Event;
-use axum::response::Sse;
-use axum_extra::extract::CookieJar;
 use chrono::Utc;
-use futures::Stream;
+use cookie::Cookie;
+use hyper::StatusCode;
+use serde::Serialize;
 use tokio_stream::StreamExt;
 
+use crate::fw::{BoxStream, Controller, Event};
 use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, Symbol, User};
 use crate::repo::ride::NotificationBody;
 use crate::repo::Repository;
 use crate::{AppState, Coordinate, Error};
 
-pub fn app_routes(app_state: AppState) -> axum::Router<AppState> {
-    let routes = axum::Router::new().route("/api/app/users", axum::routing::post(app_post_users));
-
-    let authed_routes = axum::Router::new()
-        .route(
-            "/api/app/payment-methods",
-            axum::routing::post(app_post_payment_methods),
-        )
-        .route(
-            "/api/app/rides",
-            axum::routing::get(app_get_rides).post(app_post_rides),
-        )
-        .route(
-            "/api/app/rides/estimated-fare",
-            axum::routing::post(app_post_rides_estimated_fare),
-        )
-        .route(
-            "/api/app/rides/:ride_id/evaluation",
-            axum::routing::post(app_post_ride_evaluation),
-        )
-        .route(
-            "/api/app/notification",
-            axum::routing::get(app_get_notification),
-        )
-        .route(
-            "/api/app/nearby-chairs",
-            axum::routing::get(app_get_nearby_chairs),
-        )
-        .route_layer(axum::middleware::from_fn_with_state(
-            app_state.clone(),
-            crate::middlewares::app_auth_middleware,
-        ));
-
-    routes.merge(authed_routes)
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct AppPostUsersRequest {
-    username: Symbol,
-    firstname: Symbol,
-    lastname: Symbol,
-    date_of_birth: Symbol,
-    invitation_code: Option<Symbol>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct AppPostUsersResponse {
-    id: Id<User>,
-    invitation_code: Symbol,
-}
-
-async fn app_post_users(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    axum::Json(req): axum::Json<AppPostUsersRequest>,
-) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
-    let mut jar = Some(jar);
-    for retry in 1.. {
-        match app_post_users_inner(&state, &mut jar, &req) {
-            Ok(t) => return Ok(t),
-            Err(Error::Sqlx(sqlx::Error::Database(e)))
-                if e.code().is_some_and(|x| x == "40001") =>
-            {
-                tracing::warn!("user post deadlock; retrying {retry}");
-                continue;
-            }
-            Err(e) => return Err(e),
-        }
+pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+    #[derive(Debug, serde::Deserialize)]
+    struct Req {
+        username: Symbol,
+        firstname: Symbol,
+        lastname: Symbol,
+        date_of_birth: Symbol,
+        invitation_code: Option<Symbol>,
     }
-    unreachable!()
-}
+    let req: Req = c.body().await?;
+    let state = &c.state();
 
-fn app_post_users_inner(
-    state: &AppState,
-    jar: &mut Option<CookieJar>,
-    req: &AppPostUsersRequest,
-) -> Result<(CookieJar, (StatusCode, axum::Json<AppPostUsersResponse>)), Error> {
     let user_id = Id::new();
     let access_token = Symbol::new_from(crate::secure_random_str(8));
     let invitation_code = Symbol::new_from(crate::secure_random_str(8));
@@ -137,34 +70,30 @@ fn app_post_users_inner(
         }
     }
 
-    let jar = jar.take().unwrap().add(
-        axum_extra::extract::cookie::Cookie::build(("app_session", access_token.resolve()))
-            .path("/"),
-    );
+    c.cookie_add(Cookie::build(("app_session", access_token.resolve())).path("/"));
 
+    #[derive(Debug, serde::Serialize)]
+    struct Res {
+        id: Id<User>,
+        invitation_code: Symbol,
+    }
     Ok((
-        jar,
-        (
-            StatusCode::CREATED,
-            axum::Json(AppPostUsersResponse {
-                id: user_id,
-                invitation_code,
-            }),
-        ),
+        StatusCode::CREATED,
+        Res {
+            id: user_id,
+            invitation_code,
+        },
     ))
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct AppPostPaymentMethodsRequest {
-    token: Symbol,
-}
-
-async fn app_post_payment_methods(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<User>,
-    axum::Json(req): axum::Json<AppPostPaymentMethodsRequest>,
-) -> Result<StatusCode, Error> {
-    state.repo.payment_token_add(user.id, req.token)?;
+pub async fn app_post_payment_methods(c: &mut Controller) -> Result<StatusCode, Error> {
+    #[derive(Debug, serde::Deserialize)]
+    struct Req {
+        token: Symbol,
+    }
+    let req: Req = c.body().await?;
+    let user = c.auth_app()?;
+    c.state().repo.payment_token_add(user.id, req.token)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -193,10 +122,10 @@ struct GetAppRidesResponseItemChair {
     model: Symbol,
 }
 
-async fn app_get_rides(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<User>,
-) -> Result<axum::Json<GetAppRidesResponse>, Error> {
+pub fn app_get_rides(c: &mut Controller) -> Result<impl Serialize, Error> {
+    let user = c.auth_app()?;
+    let state = &c.state();
+
     let rides: Vec<Ride> = state.repo.rides_by_user(user.id)?;
     let mut items = Vec::with_capacity(rides.len());
     for ride in rides {
@@ -236,13 +165,7 @@ async fn app_get_rides(
         });
     }
 
-    Ok(axum::Json(GetAppRidesResponse { rides: items }))
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct AppPostRidesRequest {
-    pickup_coordinate: Coordinate,
-    destination_coordinate: Coordinate,
+    Ok(GetAppRidesResponse { rides: items })
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -253,11 +176,16 @@ struct AppPostRidesResponse {
 
 static CP_NEW2024: LazyLock<Symbol> = LazyLock::new(|| Symbol::new_from_static("CP_NEW2024"));
 
-async fn app_post_rides(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<User>,
-    axum::Json(req): axum::Json<AppPostRidesRequest>,
-) -> Result<(StatusCode, axum::Json<AppPostRidesResponse>), Error> {
+pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+    #[derive(Debug, serde::Deserialize)]
+    struct Req {
+        pickup_coordinate: Coordinate,
+        destination_coordinate: Coordinate,
+    }
+
+    let req: Req = c.body().await?;
+    let user = c.auth_app()?;
+    let state = &c.state();
     let ride_id = Id::new();
 
     if state.repo.rides_user_ongoing(user.id)? {
@@ -289,29 +217,19 @@ async fn app_post_rides(
 
     let fare = crate::INITIAL_FARE + discounted_metered_fare;
 
-    Ok((
-        StatusCode::ACCEPTED,
-        axum::Json(AppPostRidesResponse { ride_id, fare }),
-    ))
+    Ok((StatusCode::ACCEPTED, AppPostRidesResponse { ride_id, fare }))
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct AppPostRidesEstimatedFareRequest {
-    pickup_coordinate: Coordinate,
-    destination_coordinate: Coordinate,
-}
+pub async fn app_post_rides_estimated_fare(c: &mut Controller) -> Result<impl Serialize, Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        pickup_coordinate: Coordinate,
+        destination_coordinate: Coordinate,
+    }
 
-#[derive(Debug, serde::Serialize)]
-struct AppPostRidesEstimatedFareResponse {
-    fare: i32,
-    discount: i32,
-}
-
-async fn app_post_rides_estimated_fare(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<User>,
-    axum::Json(req): axum::Json<AppPostRidesEstimatedFareRequest>,
-) -> Result<axum::Json<AppPostRidesEstimatedFareResponse>, Error> {
+    let user = c.auth_app()?;
+    let req: Req = c.body().await?;
+    let state = &c.state();
     let discounted = calculate_discounted_fare(
         &state.repo,
         user.id,
@@ -320,29 +238,29 @@ async fn app_post_rides_estimated_fare(
         req.destination_coordinate,
     )?;
 
-    Ok(axum::Json(AppPostRidesEstimatedFareResponse {
+    #[derive(Serialize)]
+    struct Res {
+        fare: i32,
+        discount: i32,
+    }
+    Ok(Res {
         fare: discounted,
         discount: crate::calculate_fare(req.pickup_coordinate, req.destination_coordinate)
             - discounted,
-    }))
+    })
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct AppPostRideEvaluationRequest {
-    evaluation: i32,
-}
+pub async fn app_post_ride_evaluation(
+    c: &mut Controller,
+    ride_id: Id<Ride>,
+) -> Result<impl Serialize, Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        evaluation: i32,
+    }
+    let req: Req = c.body().await?;
+    let state = &c.state();
 
-#[derive(Debug, serde::Serialize)]
-struct AppPostRideEvaluationResponse {
-    fare: i32,
-    completed_at: i64,
-}
-
-async fn app_post_ride_evaluation(
-    State(state): State<AppState>,
-    Path((ride_id,)): Path<(Id<Ride>,)>,
-    axum::Json(req): axum::Json<AppPostRideEvaluationRequest>,
-) -> Result<axum::Json<AppPostRideEvaluationResponse>, Error> {
     if req.evaluation < 1 || req.evaluation > 5 {
         return Err(Error::BadRequest("evaluation must be between 1 and 5"));
     }
@@ -386,10 +304,15 @@ async fn app_post_ride_evaluation(
         .repo
         .ride_status_update(ride_id, RideStatusEnum::Completed)?;
 
-    Ok(axum::Json(AppPostRideEvaluationResponse {
+    #[derive(serde::Serialize)]
+    struct Res {
+        fare: i32,
+        completed_at: i64,
+    }
+    Ok(Res {
         fare,
         completed_at: updated_at.timestamp_millis(),
-    }))
+    })
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -419,25 +342,18 @@ pub struct ChairStats {
     pub total_evaluation_avg: f64,
 }
 
-async fn app_get_notification(
-    State(state): State<AppState>,
-    axum::Extension(user): axum::Extension<User>,
-) -> Sse<impl Stream<Item = Result<Event, Error>>> {
+pub fn app_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
+    let user = c.auth_app()?;
+    let state = c.state().clone();
     let ts = state.repo.user_get_next_notification_sse(user.id).unwrap();
 
     let stream =
-        tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).then(move |body| {
-            let body = body.unwrap();
-            let state = state.clone();
-            let user = user.clone();
-            async move {
-                let s = app_get_notification_inner(&state, user.id, body)?;
-                let s = serde_json::to_string(&s).unwrap();
-                Ok(Event::default().data(s))
-            }
+        tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).map(move |body| {
+            let s = app_get_notification_inner(&state, user.id, body.unwrap())?;
+            Ok(Event::new(s))
         });
 
-    Sse::new(stream)
+    Ok(Box::new(stream))
 }
 
 fn app_get_notification_inner(
@@ -483,13 +399,6 @@ fn app_get_notification_inner(
     Ok(Some(data))
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct AppGetNearbyChairsQuery {
-    latitude: i32,
-    longitude: i32,
-    distance: Option<i32>,
-}
-
 #[derive(Debug, serde::Serialize)]
 struct AppGetNearbyChairsResponse {
     chairs: Vec<AppGetNearbyChairsResponseChair>,
@@ -504,21 +413,22 @@ pub struct AppGetNearbyChairsResponseChair {
     pub current_coordinate: Coordinate,
 }
 
-#[axum::debug_handler]
-async fn app_get_nearby_chairs(
-    State(state): State<AppState>,
-    Query(query): Query<AppGetNearbyChairsQuery>,
-) -> Result<axum::Json<AppGetNearbyChairsResponse>, Error> {
-    let distance = query.distance.unwrap_or(50);
+pub fn app_get_nearby_chairs(
+    c: &mut Controller,
+    distance: Option<i32>,
+    latitude: i32,
+    longitude: i32,
+) -> Result<impl Serialize, Error> {
+    let distance = distance.unwrap_or(50);
     let coordinate = Coordinate {
-        latitude: query.latitude,
-        longitude: query.longitude,
+        latitude,
+        longitude,
     };
 
-    Ok(axum::Json(AppGetNearbyChairsResponse {
-        chairs: state.repo.chair_huifhiubher(coordinate, distance)?,
+    Ok(AppGetNearbyChairsResponse {
+        chairs: c.state().repo.chair_huifhiubher(coordinate, distance)?,
         retrieved_at: Utc::now().timestamp(),
-    }))
+    })
 }
 
 fn calculate_discounted_fare(

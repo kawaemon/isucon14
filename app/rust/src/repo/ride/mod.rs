@@ -347,7 +347,7 @@ impl Repository {
 
 crate::conf_env!(static MATCHING_CHAIR_THRESHOLD: usize = {
     from: "MATCHING_CHAIR_THRESHOLD",
-    default: "30",
+    default: "100",
 });
 
 impl Repository {

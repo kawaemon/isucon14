@@ -1,66 +1,26 @@
 use std::time::Duration;
 
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::response::sse::Event;
-use axum::response::Sse;
-use axum_extra::extract::cookie::Cookie;
-use axum_extra::extract::CookieJar;
-use futures::Stream;
+use cookie::Cookie;
+use hyper::StatusCode;
+use serde::Serialize;
 use tokio_stream::StreamExt;
 
+use crate::fw::{BoxStream, Controller, Event};
 use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, Symbol, User};
-use crate::repo::chair::EffortlessChair;
 use crate::repo::ride::NotificationBody;
 use crate::{AppState, Coordinate, Error};
 
-pub fn chair_routes(app_state: AppState) -> axum::Router<AppState> {
-    let routes =
-        axum::Router::new().route("/api/chair/chairs", axum::routing::post(chair_post_chairs));
+pub async fn chair_post_chairs(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        name: Symbol,
+        model: Symbol,
+        chair_register_token: Symbol,
+    }
 
-    let authed_routes = axum::Router::new()
-        .route(
-            "/api/chair/activity",
-            axum::routing::post(chair_post_activity),
-        )
-        .route(
-            "/api/chair/coordinate",
-            axum::routing::post(chair_post_coordinate),
-        )
-        .route(
-            "/api/chair/notification",
-            axum::routing::get(chair_get_notification),
-        )
-        .route(
-            "/api/chair/rides/:ride_id/status",
-            axum::routing::post(chair_post_ride_status),
-        )
-        .route_layer(axum::middleware::from_fn_with_state(
-            app_state.clone(),
-            crate::middlewares::chair_auth_middleware,
-        ));
+    let req: Req = c.body().await?;
+    let state = c.state();
 
-    routes.merge(authed_routes)
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct ChairPostChairsRequest {
-    name: Symbol,
-    model: Symbol,
-    chair_register_token: Symbol,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct ChairPostChairsResponse {
-    id: Id<Chair>,
-    owner_id: Id<Owner>,
-}
-
-async fn chair_post_chairs(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    axum::Json(req): axum::Json<ChairPostChairsRequest>,
-) -> Result<(CookieJar, (StatusCode, axum::Json<ChairPostChairsResponse>)), Error> {
     let Some(owner): Option<Owner> = state
         .repo
         .owner_get_by_chair_register_token(req.chair_register_token)?
@@ -75,50 +35,47 @@ async fn chair_post_chairs(
         .repo
         .chair_add(chair_id, owner.id, req.name, req.model, false, access_token)?;
 
-    let jar = jar.add(Cookie::build(("chair_session", access_token.resolve())).path("/"));
+    c.cookie_add(Cookie::build(("chair_session", access_token.resolve())).path("/"));
 
+    #[derive(serde::Serialize)]
+    struct Res {
+        id: Id<Chair>,
+        owner_id: Id<Owner>,
+    }
     Ok((
-        jar,
-        (
-            StatusCode::CREATED,
-            axum::Json(ChairPostChairsResponse {
-                id: chair_id,
-                owner_id: owner.id,
-            }),
-        ),
+        StatusCode::CREATED,
+        Res {
+            id: chair_id,
+            owner_id: owner.id,
+        },
     ))
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct PostChairActivityRequest {
-    is_active: bool,
-}
-
-#[axum::debug_handler]
-async fn chair_post_activity(
-    State(state): State<AppState>,
-    axum::Extension(chair): axum::Extension<EffortlessChair>,
-    axum::Json(req): axum::Json<PostChairActivityRequest>,
-) -> Result<StatusCode, Error> {
-    state.repo.chair_update_is_active(chair.id, req.is_active)?;
+pub async fn chair_post_activity(c: &mut Controller) -> Result<StatusCode, Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        is_active: bool,
+    }
+    let req: Req = c.body().await?;
+    let chair = c.auth_chair()?;
+    c.state()
+        .repo
+        .chair_update_is_active(chair.id, req.is_active)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, serde::Serialize)]
-struct ChairPostCoordinateResponse {
-    recorded_at: i64,
-}
+pub async fn chair_post_coordinate(c: &mut Controller) -> Result<impl Serialize, Error> {
+    let req: Coordinate = c.body().await?;
+    let chair = c.auth_chair()?;
+    let created_at = c.state().repo.chair_location_update(chair.id, req)?;
 
-#[axum::debug_handler]
-async fn chair_post_coordinate(
-    State(state): State<AppState>,
-    axum::Extension(chair): axum::Extension<EffortlessChair>,
-    axum::Json(req): axum::Json<Coordinate>,
-) -> Result<axum::Json<ChairPostCoordinateResponse>, Error> {
-    let created_at = state.repo.chair_location_update(chair.id, req)?;
-    Ok(axum::Json(ChairPostCoordinateResponse {
+    #[derive(serde::Serialize)]
+    struct Res {
+        recorded_at: i64,
+    }
+    Ok(Res {
         recorded_at: created_at.timestamp_millis(),
-    }))
+    })
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -136,10 +93,10 @@ struct ChairGetNotificationResponseData {
     status: RideStatusEnum,
 }
 
-async fn chair_get_notification(
-    State(state): State<AppState>,
-    axum::Extension(chair): axum::Extension<EffortlessChair>,
-) -> Sse<impl Stream<Item = Result<Event, Error>>> {
+pub fn chair_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
+    let chair = c.auth_chair()?;
+    let state = c.state().clone();
+
     let ts = state
         .repo
         .chair_get_next_notification_sse(chair.id)
@@ -148,16 +105,15 @@ async fn chair_get_notification(
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).map(move |body| {
             let s = chair_get_notification_inner(&state, chair.id, body.unwrap())?;
-            let s = serde_json::to_string(&s).unwrap();
-            Ok(Event::default().data(s))
+            Ok(Event::new(s))
         });
 
-    Sse::new(stream)
+    Ok(Box::new(stream))
 }
 
 crate::conf_env!(static CHAIR_MATCHING_DELAY_MS: u64 = {
     from: "CHAIR_MATCHING_DELAY_MS",
-    default: "20",
+    default: "10",
 });
 
 fn chair_get_notification_inner(
@@ -194,17 +150,19 @@ fn chair_get_notification_inner(
     }))
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct PostChairRidesRideIDStatusRequest {
-    status: RideStatusEnum,
-}
-
-async fn chair_post_ride_status(
-    State(state): State<AppState>,
-    axum::Extension(chair): axum::Extension<EffortlessChair>,
-    Path((ride_id,)): Path<(Id<Ride>,)>,
-    axum::Json(req): axum::Json<PostChairRidesRideIDStatusRequest>,
+pub async fn chair_post_ride_status(
+    c: &mut Controller,
+    ride_id: Id<Ride>,
 ) -> Result<StatusCode, Error> {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        status: RideStatusEnum,
+    }
+
+    let chair = c.auth_chair()?;
+    let req: Req = c.body().await?;
+    let state = c.state();
+
     let Some(ride): Option<Ride> = state.repo.ride_get(ride_id)? else {
         return Err(Error::NotFound("rides not found"));
     };

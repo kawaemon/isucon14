@@ -160,8 +160,8 @@ impl serde::Serialize for Symbol {
 }
 impl<'de> serde::Deserialize<'de> for Symbol {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = <&str>::deserialize(deserializer)?;
-        Ok(Self::new_from_ref(s))
+        let s = <String>::deserialize(deserializer)?;
+        Ok(Self::new_from_ref(&s))
     }
 }
 impl sqlx::Type<sqlx::MySql> for Symbol {

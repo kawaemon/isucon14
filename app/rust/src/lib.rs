@@ -6,8 +6,9 @@
 pub mod app_handlers;
 pub mod chair_handlers;
 pub mod dl;
+pub mod fw;
 pub mod internal_handlers;
-pub mod middlewares;
+// pub mod middlewares;
 pub mod models;
 pub mod owner_handlers;
 pub mod payment_gateway;
@@ -16,7 +17,6 @@ pub mod speed;
 
 use std::sync::{atomic::AtomicI64, Arc, LazyLock};
 
-use axum::{http::StatusCode, response::Response};
 use chrono::{DateTime, Utc};
 use lasso::{Spur, ThreadedRodeo};
 use repo::Repository;
@@ -64,6 +64,10 @@ pub struct AppStateInner {
 pub enum Error {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("I/O error(hyper): {0}")]
+    Hyper(#[from] hyper::Error),
+    #[error("JSON decode: {0}")]
+    SerdeJson(#[from] serde_json::Error),
     #[error("SQLx error: {0}")]
     Sqlx(#[from] sqlx::Error),
     #[error("failed to initialize: stdout={stdout} stderr={stderr}")]
@@ -79,27 +83,27 @@ pub enum Error {
     #[error("{0}")]
     Conflict(&'static str),
 }
-impl axum::response::IntoResponse for Error {
-    fn into_response(self) -> Response {
-        let status = match self {
-            Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-            Self::NotFound(_) => StatusCode::NOT_FOUND,
-            Self::Conflict(_) => StatusCode::CONFLICT,
-            Self::PaymentGateway(_) => StatusCode::BAD_GATEWAY,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        };
-
-        #[derive(Debug, serde::Serialize)]
-        struct ErrorBody {
-            message: String,
-        }
-        let message = self.to_string();
-        tracing::error!("{message}");
-
-        (status, axum::Json(ErrorBody { message })).into_response()
-    }
-}
+// impl axum::response::IntoResponse for Error {
+//     fn into_response(self) -> Response {
+//         let status = match self {
+//             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+//             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+//             Self::NotFound(_) => StatusCode::NOT_FOUND,
+//             Self::Conflict(_) => StatusCode::CONFLICT,
+//             Self::PaymentGateway(_) => StatusCode::BAD_GATEWAY,
+//             _ => StatusCode::INTERNAL_SERVER_ERROR,
+//         };
+//
+//         #[derive(Debug, serde::Serialize)]
+//         struct ErrorBody {
+//             message: String,
+//         }
+//         let message = self.to_string();
+//         tracing::error!("{message}");
+//
+//         (status, axum::Json(ErrorBody { message })).into_response()
+//     }
+// }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Coordinate {
