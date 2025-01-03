@@ -150,7 +150,24 @@ impl Body for SseBody {
 pub struct Event {
     buf: Bytes,
 }
+
 impl Event {
+    pub fn new_raw(s: &str) -> Self {
+        let mut buf = vec![];
+
+        // json_data
+        buf.extend_from_slice(b"data: ");
+        buf.extend_from_slice(s.as_bytes());
+        buf.push(b'\n');
+
+        // finalize
+        buf.push(b'\n');
+
+        Self {
+            buf: Bytes::from(buf),
+        }
+    }
+
     pub fn new(data: impl Serialize) -> Self {
         let mut buf = vec![];
 

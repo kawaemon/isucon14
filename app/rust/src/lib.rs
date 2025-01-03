@@ -133,6 +133,7 @@ pub fn calculate_fare(pickup: Coordinate, dest: Coordinate) -> i32 {
     INITIAL_FARE + metered_fare
 }
 
+#[macro_export]
 macro_rules! conf_env {
     (static $name:ident: $ty:ty = {from: $env:expr, default: $def:expr,}) => {
         static $name: std::sync::LazyLock<$ty> = std::sync::LazyLock::new(|| {
@@ -145,4 +146,3 @@ macro_rules! conf_env {
         });
     };
 }
-use conf_env;

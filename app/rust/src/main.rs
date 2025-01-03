@@ -63,8 +63,6 @@ async fn main() -> anyhow::Result<()> {
         .await?;
 
     let repo = Arc::new(Repository::new(&pool).await);
-    #[cfg(feature = "speed")]
-    let speed = SpeedStatistics::new();
     let client = reqwest::Client::builder()
         .tcp_keepalive(Duration::from_secs(10))
         .build()
@@ -80,7 +78,12 @@ async fn main() -> anyhow::Result<()> {
 
     spawn_matching_thread(app_state.clone());
 
-    let listener = TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], 8080))).await?;
+    let port = std::env::var("PORT")
+        .unwrap_or_else(|_| "8080".to_owned())
+        .parse()
+        .expect("failed to parse PORT");
+
+    let listener = TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], port))).await?;
     loop {
         let app_state = Arc::clone(&app_state);
         let (stream, _) = listener.accept().await?;
