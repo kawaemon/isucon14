@@ -19,8 +19,10 @@ popd
 ulimit -n 65536
 sudo sysctl -w kernel.perf_event_paranoid=1
 
-cargo build --release --bin isuride
-sudo perf record -F 150 --call-graph dwarf ./target/release/isuride || true
+export PORT=7890
+
+cargo build --release --bin nginx
+sudo perf record -F 150 --call-graph dwarf ./target/release/nginx || true
 
 sudo PATH=$addr2line/target/release:$PATH perf script > perf.data.scripted
 cat ./perf.data.scripted | $graph/stackcollapse-perf.pl --all > perf.data.collapsed

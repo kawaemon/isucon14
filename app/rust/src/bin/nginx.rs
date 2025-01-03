@@ -20,6 +20,7 @@ use tokio::net::TcpListener;
 
 use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer},
+    server::ServerSessionMemoryCache,
     ServerConfig,
 };
 use tokio_rustls::TlsAcceptor;
@@ -60,10 +61,11 @@ async fn main() {
     let incoming = TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], port)))
         .await
         .unwrap();
-    let server_config = ServerConfig::builder()
+    let mut server_config = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .unwrap();
+    server_config.session_storage = ServerSessionMemoryCache::new(9999999);
     let tls_acceptor = TlsAcceptor::from(Arc::new(server_config));
 
     tracing::info!("upstream = {}", *UPSTREAM);
