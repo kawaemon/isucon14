@@ -1,8 +1,6 @@
-use std::io::Cursor;
 use std::pin::Pin;
 use std::task::Poll;
 
-use bytes::Buf;
 use bytes::Bytes;
 use cookie::Cookie;
 use futures::Stream;
@@ -56,8 +54,8 @@ impl Controller {
     }
     pub async fn body<T: DeserializeOwned>(&mut self) -> Result<T, Error> {
         let b = self.body.take().expect("body was already taken");
-        let b = b.collect().await?.aggregate().reader();
-        let b = serde_json::from_reader(b)?;
+        let b = b.collect().await?.to_bytes(); // TODO: lets see here
+        let b = unsafe { sonic_rs::from_slice_unchecked(&b)? };
         Ok(b)
     }
     pub fn cookie_get(&self, k: &str) -> Option<&str> {
@@ -158,34 +156,15 @@ impl Event {
 
         // json_data
         buf.extend_from_slice(b"data: ");
-        let pos = buf.len();
-        let mut cursor = Cursor::new(&mut buf);
-        cursor.set_position(pos as _);
-        serde_json::to_writer(IgnoreNewLines(cursor), &data).unwrap();
+        sonic_rs::to_writer(&mut buf, &data).unwrap();
+        debug_assert!(!buf.contains(&b'\n'));
         buf.push(b'\n');
 
         // finalize
         buf.push(b'\n');
 
-        return Self {
+        Self {
             buf: Bytes::from(buf),
-        };
-
-        struct IgnoreNewLines<W: std::io::Write>(W);
-        impl<W: std::io::Write> std::io::Write for IgnoreNewLines<W> {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                let mut last_split = 0;
-                for delimiter in memchr::memchr2_iter(b'\n', b'\r', buf) {
-                    self.0.write_all(&buf[last_split..delimiter])?;
-                    last_split = delimiter + 1;
-                }
-                self.0.write_all(&buf[last_split..])?;
-                Ok(buf.len())
-            }
-
-            fn flush(&mut self) -> std::io::Result<()> {
-                self.0.flush()
-            }
         }
     }
 }

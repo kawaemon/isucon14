@@ -146,7 +146,7 @@ pub async fn response(
     #[inline(always)]
     fn json<B: serde::Serialize>(body: impl Into<Option<B>>) -> HyperRes {
         Either::Left(Full::new(body.into().map_or_else(Bytes::new, |x| {
-            Bytes::from(serde_json::to_string(&x).unwrap())
+            Bytes::from(sonic_rs::to_string(&x).unwrap())
         })))
     }
     let empty = || json::<()>(None);

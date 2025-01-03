@@ -1,13 +1,12 @@
 use std::{hash::Hash, marker::PhantomData, str::FromStr, sync::LazyLock};
 
 use chrono::{DateTime, Utc};
-use dashmap::{DashMap, DashSet, SharedValue};
+use dashmap::SharedValue;
 use derivative::Derivative;
-use lasso::Spur;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
-use crate::{ConcurrentHashMap, ConcurrentHashSet, Coordinate, INTERNER};
+use crate::{ConcurrentHashSet, Coordinate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -152,8 +151,7 @@ impl PartialEq<Symbol> for Symbol {
 impl Eq for Symbol {}
 impl Hash for Symbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let d: u128 = unsafe { std::mem::transmute(self.0) };
-        d.hash(state)
+        std::ptr::hash(self.0, state)
     }
 }
 impl Symbol {

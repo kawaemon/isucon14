@@ -15,19 +15,20 @@ pub mod payment_gateway;
 pub mod repo;
 pub mod speed;
 
-use std::sync::{atomic::AtomicI64, Arc, LazyLock};
+use std::sync::{atomic::AtomicI64, Arc};
 
 use chrono::{DateTime, Utc};
-use lasso::{Spur, ThreadedRodeo};
 use repo::Repository;
 
-pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
-pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
-pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
-pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
-
-pub static INTERNER: LazyLock<ThreadedRodeo<Spur, ahash::RandomState>> =
-    LazyLock::new(|| ThreadedRodeo::with_hasher(ahash::RandomState::default()));
+// Symbol が fat-ptr なせいで Hash 衝突が増えている。。気がする？
+pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
+pub type HashSet<K> = hashbrown::HashSet<K>;
+pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V>;
+pub type ConcurrentHashSet<K> = dashmap::DashSet<K>;
+// pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
+// pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
+// pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
+// pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
 
 #[derive(Debug)]
 pub struct AtomicDateTime(AtomicI64);
@@ -67,7 +68,7 @@ pub enum Error {
     #[error("I/O error(hyper): {0}")]
     Hyper(#[from] hyper::Error),
     #[error("JSON decode: {0}")]
-    SerdeJson(#[from] serde_json::Error),
+    SerdeJson(#[from] sonic_rs::Error),
     #[error("SQLx error: {0}")]
     Sqlx(#[from] sqlx::Error),
     #[error("failed to initialize: stdout={stdout} stderr={stderr}")]

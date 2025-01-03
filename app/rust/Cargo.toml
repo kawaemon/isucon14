@@ -20,7 +20,7 @@ bytes = "1.9.0"
 cfg-if = "1"
 chrono = "0.4"
 cookie = { version = "0.18.1", features = ["percent-encode"] }
-dashmap = { version = "6", features = ["inline"] }
+dashmap = { version = "6", features = ["inline", "raw-api"] }
 derivative = "2"
 futures = "0.3"
 hashbrown = { version = "0.15.2", features = ["inline-more", "serde"] }
@@ -28,7 +28,6 @@ hex = "0.4"
 http-body-util = "0.1.2"
 hyper = { version = "1.5.2", features = ["full"] }
 hyper-util = { version = "0.1.10", features = ["full"] }
-lasso = { version = "0.7.3", features = ["multi-threaded", "inline-more"] }
 memchr = "2.7.4"
 mime = "0.3.17"
 num-traits = "0.2"
@@ -42,8 +41,8 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
 ] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 sha2 = "0.10"
+sonic-rs = "0.3.17"
 sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
     "mysql",
