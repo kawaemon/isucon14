@@ -6,6 +6,7 @@ use hyper::service::service_fn;
 use hyper::{header, Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use isuride::models::Symbol;
+use isuride::repo::deferred::COMMIT_CHAN;
 use isuride::repo::Repository;
 #[cfg(feature = "speed")]
 use isuride::speed::SpeedStatistics;
@@ -103,6 +104,9 @@ async fn post_initialize(c: &mut Controller) -> Result<impl Serialize, Error> {
         payment_server: Symbol,
     }
 
+    COMMIT_CHAN.0.send(()).unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
     let req: Req = c.body().await?;
     let state = c.state();
 
@@ -119,6 +123,12 @@ async fn post_initialize(c: &mut Controller) -> Result<impl Serialize, Error> {
 
     state.repo.reinit().await;
     state.repo.pgw_set(req.payment_server).await?;
+
+    tokio::spawn(async {
+        tracing::info!("scheduling commit after 1m30s");
+        tokio::time::sleep(Duration::from_secs(90)).await;
+        COMMIT_CHAN.0.send(()).unwrap();
+    });
 
     #[derive(serde::Serialize)]
     struct Res {

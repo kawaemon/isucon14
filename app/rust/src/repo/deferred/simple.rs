@@ -1,9 +1,11 @@
-use std::{future::Future, time::Duration};
+use std::future::Future;
 
-// use std::time::Instant;
+use std::time::Instant;
 
 use derivative::Derivative;
 use sqlx::{MySql, Pool, Transaction};
+
+use super::COMMIT_CHAN;
 
 pub trait DeferrableSimple: 'static {
     const NAME: &str;
@@ -39,9 +41,10 @@ impl<D: DeferrableSimple> SimpleDeferred<D> {
         tokio::spawn(async move {
             let mut buffer = vec![];
             loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
+                let mut crx = { COMMIT_CHAN.0.subscribe() };
+                crx.recv().await.unwrap();
 
-                rx.recv_many(&mut buffer, 9999999).await;
+                rx.recv_many(&mut buffer, 999999999).await;
                 if buffer.is_empty() {
                     continue;
                 }
@@ -52,24 +55,24 @@ impl<D: DeferrableSimple> SimpleDeferred<D> {
         });
     }
     async fn commit(inserts: &[D::Insert], pool: &Pool<MySql>) {
-        // let begin = Instant::now();
+        let begin = Instant::now();
 
-        // let inserts_len = inserts.len();
+        let inserts_len = inserts.len();
         if inserts.is_empty() {
             return;
         }
 
-        // let prep_took = begin.elapsed().as_millis();
+        let prep_took = begin.elapsed().as_millis();
 
-        // let begin = Instant::now();
+        let begin = Instant::now();
         let mut tx = pool.begin().await.unwrap();
         for i in inserts.chunks(500) {
             D::exec_insert(&mut tx, i).await;
         }
         tx.commit().await.unwrap();
-        // let took = begin.elapsed().as_millis();
+        let took = begin.elapsed().as_millis();
 
-        // let name = D::NAME;
-        // tracing::debug!("{name}: {inserts_len} inserts, prep={prep_took}ms, insert={took}ms");
+        let name = D::NAME;
+        tracing::info!("{name}: {inserts_len} inserts, prep={prep_took}ms, insert={took}ms");
     }
 }
