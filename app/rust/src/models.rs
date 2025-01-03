@@ -6,7 +6,7 @@ use derivative::Derivative;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
-use crate::{ConcurrentHashSet, Coordinate};
+use crate::{ConcurrentHashMap, ConcurrentHashSet, Coordinate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -137,12 +137,13 @@ impl<T> Id<T> {
     }
 }
 
-static STRING_TABLE: LazyLock<ConcurrentHashSet<&'static str>> = LazyLock::new(Default::default);
+static STRING_TABLE: LazyLock<ConcurrentHashMap<&'static str, u64 /* hash of str */>> =
+    LazyLock::new(Default::default);
 
 use std::borrow::Cow;
 
 #[derive(Debug, Clone, Copy)]
-pub struct Symbol(&'static str);
+pub struct Symbol(&'static str, u64 /* hash */);
 impl PartialEq<Symbol> for Symbol {
     fn eq(&self, other: &Symbol) -> bool {
         std::ptr::eq(self.0, other.0)
@@ -151,16 +152,16 @@ impl PartialEq<Symbol> for Symbol {
 impl Eq for Symbol {}
 impl Hash for Symbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        std::ptr::hash(self.0, state)
+        self.1.hash(state);
     }
 }
 impl Symbol {
     fn new_from_inner(s: Cow<'_, str>) -> Self {
         if let Some(st) = STRING_TABLE.get(s.as_ref()) {
-            return Symbol(*st);
+            return Symbol(st.key(), *st.value());
         }
 
-        let table: &ConcurrentHashSet<_> = &*STRING_TABLE;
+        let table: &ConcurrentHashMap<_, _> = &*STRING_TABLE;
 
         let hash = table.hash_usize(&s);
         let shard_key = table.determine_shard(hash);
@@ -175,13 +176,17 @@ impl Symbol {
                 // TODO: use arena
                 let stored: &'static str = String::leak(s.into_owned());
                 unsafe {
-                    shard.insert_in_slot(hash as u64, slot, (stored, SharedValue::new(())));
+                    shard.insert_in_slot(
+                        hash as u64,
+                        slot,
+                        (stored, SharedValue::new(hash as u64)),
+                    );
                 }
                 stored
             }
         };
 
-        Self(s)
+        Self(s, hash as u64)
     }
 
     pub fn new_from_ref(s: &str) -> Self {

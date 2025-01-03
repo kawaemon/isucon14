@@ -84,12 +84,14 @@ async fn main() -> anyhow::Result<()> {
     loop {
         let app_state = Arc::clone(&app_state);
         let (stream, _) = listener.accept().await?;
-        let io = TokioIo::new(stream);
         tokio::task::spawn(async move {
             if let Err(_err) = http1::Builder::new()
                 .timer(TokioTimer::new())
                 .keep_alive(true)
-                .serve_connection(io, service_fn(|x| service(Arc::clone(&app_state), x)))
+                .serve_connection(
+                    TokioIo::new(stream),
+                    service_fn(|x| service(Arc::clone(&app_state), x)),
+                )
                 .await
             {
                 // eprintln!("Error serving connection: {}", err);
