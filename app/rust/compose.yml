@@ -22,3 +22,16 @@ services:
     #   ]
     ports:
       - "3306:3306"
+
+  nginx:
+    image: nginx:latest
+    container_name: isuride-nginx
+    network_mode: host
+    ulimits:
+      nofile:
+        soft: 655360
+        hard: 655360
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/tls/:/tls:ro
+      - ../public/:/public
