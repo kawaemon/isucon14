@@ -174,7 +174,7 @@ struct AppPostRidesResponse {
     fare: i32,
 }
 
-static CP_NEW2024: LazyLock<Symbol> = LazyLock::new(|| Symbol::new_from_static("CP_NEW2024"));
+static CP_NEW2024: LazyLock<Symbol> = LazyLock::new(|| Symbol::new_from_ref("CP_NEW2024"));
 
 pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
     #[derive(Debug, serde::Deserialize)]

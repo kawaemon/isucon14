@@ -1,12 +1,13 @@
-use std::{marker::PhantomData, str::FromStr};
+use std::{hash::Hash, marker::PhantomData, str::FromStr, sync::LazyLock};
 
 use chrono::{DateTime, Utc};
+use dashmap::{DashMap, DashSet, SharedValue};
 use derivative::Derivative;
 use lasso::Spur;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
-use crate::{Coordinate, INTERNER};
+use crate::{ConcurrentHashMap, ConcurrentHashSet, Coordinate, INTERNER};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -137,20 +138,64 @@ impl<T> Id<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Symbol(Spur);
+static STRING_TABLE: LazyLock<ConcurrentHashSet<&'static str>> = LazyLock::new(Default::default);
+
+use std::borrow::Cow;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Symbol(&'static str);
+impl PartialEq<Symbol> for Symbol {
+    fn eq(&self, other: &Symbol) -> bool {
+        std::ptr::eq(self.0, other.0)
+    }
+}
+impl Eq for Symbol {}
+impl Hash for Symbol {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let d: u128 = unsafe { std::mem::transmute(self.0) };
+        d.hash(state)
+    }
+}
 impl Symbol {
+    fn new_from_inner(s: Cow<'_, str>) -> Self {
+        if let Some(st) = STRING_TABLE.get(s.as_ref()) {
+            return Symbol(*st);
+        }
+
+        let table: &ConcurrentHashSet<_> = &*STRING_TABLE;
+
+        let hash = table.hash_usize(&s);
+        let shard_key = table.determine_shard(hash);
+        let mut shard = table.shards().get(shard_key).unwrap().write();
+        let s = match shard.find_or_find_insert_slot(
+            hash as u64,
+            |&(ins, _)| ins == s,
+            |(ins, _)| table.hash_usize(ins) as u64,
+        ) {
+            Ok(bucket) => unsafe { bucket.as_ref().0 },
+            Err(slot) => {
+                // TODO: use arena
+                let stored: &'static str = String::leak(s.into_owned());
+                unsafe {
+                    shard.insert_in_slot(hash as u64, slot, (stored, SharedValue::new(())));
+                }
+                stored
+            }
+        };
+
+        Self(s)
+    }
+
     pub fn new_from_ref(s: &str) -> Self {
-        Symbol(INTERNER.get_or_intern(s))
+        Self::new_from_inner(s.into())
     }
     pub fn new_from(s: String) -> Self {
-        Symbol(INTERNER.get_or_intern(s))
+        Self::new_from_inner(s.into())
     }
-    pub fn new_from_static(s: &'static str) -> Self {
-        Symbol(INTERNER.get_or_intern_static(s))
-    }
+
+    #[inline(always)]
     pub fn resolve(&self) -> &'static str {
-        INTERNER.resolve(&self.0)
+        self.0
     }
 }
 impl serde::Serialize for Symbol {
