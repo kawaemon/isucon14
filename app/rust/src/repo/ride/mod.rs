@@ -615,7 +615,20 @@ impl std::fmt::Debug for Pair {
     }
 }
 
+crate::conf_env! {
+    static SCORE_TARGET: i32 = {
+        from: "SCORE_TARGET",
+        default: "200",
+    }
+}
+
 // これを最小化する
+#[inline(always)]
+fn score_for_target(chair: &AvailableChair, ride: &RideEntry) -> i32 {
+    let distance = chair.coord.distance(ride.pickup) * 10 + ride.pickup.distance(ride.destination);
+    let score = distance / chair.speed;
+    score.abs_diff(*SCORE_TARGET) as i32
+}
 #[inline(always)]
 fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
     let distance = chair.coord.distance(ride.pickup) * 10 + ride.pickup.distance(ride.destination);
@@ -788,7 +801,7 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
         let task = &jobs[y];
         let worker = &workers[x];
-        score(worker, &task.0)
+        score_for_target(worker, &task.0)
     });
 
     let mut transposed = false;
@@ -796,7 +809,7 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         weights.transpose();
         transposed = true;
     }
-    let (sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
+    let (_sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
 
     let mut worker_used = vec![false; workers.len()];
     let mut task_used = vec![false; jobs.len()];
@@ -835,6 +848,7 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         }
     }
 
+    let sum = res.iter().map(|x| x.score).sum();
     (redu_workers, redu_jobs, res, sum)
 }
 
@@ -885,8 +899,16 @@ impl Repository {
 
                 {
                     // let begin = Instant::now();
-                    let (a, b, c, _pf_score) =
-                        solve_pathfinding_isekai_joucho(avail, waiting_rides);
+                    let (a, b, c, pf_score) = solve_pathfinding_isekai_joucho(avail, waiting_rides);
+                    let pairs = c.len();
+                    let avg = {
+                        if pairs > 0 {
+                            pf_score as usize / pairs
+                        } else {
+                            0
+                        }
+                    };
+                    tracing::info!("pairs={pairs}, score={pf_score}, avg={avg}");
                     // tracing::info!("pf:{:#?}", pf.2);
                     // let l = c.len();
                     // let elap = begin.elapsed().as_millis();
