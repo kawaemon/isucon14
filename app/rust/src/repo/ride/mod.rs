@@ -7,15 +7,10 @@ use crate::HashMap;
 use chrono::TimeDelta;
 use chrono::{DateTime, Utc};
 use pathfinding::matrix::Matrix;
-use pyo3::types::PyAnyMethods;
-use pyo3::Py;
-use pyo3::PyAny;
-use pyo3::Python;
 use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
-use std::cmp::Reverse;
 use std::sync::atomic::AtomicBool;
 use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc};
@@ -683,7 +678,7 @@ fn solve_greedy(mut avail: Workers, waiting_rides: Jobs) -> (Workers, Jobs, Vec<
 fn solve_pathfinding_isekai_joucho(
     workers: Workers,
     jobs: Jobs,
-) -> Option<(Workers, Jobs, Vec<Pair>)> {
+) -> (Workers, Jobs, Vec<Pair>, i32) {
     // region を分けてその中でマッチングを行う
     // region 分けた方が多分 O(n^3)の n が減って計算早くなると思う
 
@@ -714,29 +709,33 @@ fn solve_pathfinding_isekai_joucho(
         }
     }
 
-    let (mut rw, mut rj, mut p) = solve_pathfinding_kaf(split_workers.0, split_jobs.0);
-    let (rw2, rj2, p2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1);
+    let (mut rw, mut rj, mut p, score) = solve_pathfinding_kaf(split_workers.0, split_jobs.0);
+    let (rw2, rj2, p2, score2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1);
 
     rw.extend(rw2);
     rj.extend(rj2);
     p.extend(p2);
 
-    Some((rw, rj, p))
+    (rw, rj, p, score + score2)
 }
 
-fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pair>) {
+fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pair>, i32) {
     if workers.is_empty() || jobs.is_empty() {
-        return (workers, jobs, vec![]);
+        return (workers, jobs, vec![], 0);
     }
 
     // 緊急のやつだけ先にやる
     let mut urgent_jobs = vec![];
     let mut ok_jobs = vec![];
     let now = Utc::now();
-    const URGENT_THRESHOLD: TimeDelta = TimeDelta::seconds(25);
+    crate::conf_env!(static URGENT_THRESHOLD_SEC: i64 = {
+        from: "URGENT_THRESHOLD_SEC",
+        default: "24",
+    });
+    let urgent_threshold = TimeDelta::seconds(*URGENT_THRESHOLD_SEC);
     for task in jobs {
         let elapsed = now - task.0.created_at;
-        if elapsed > URGENT_THRESHOLD {
+        if elapsed > urgent_threshold {
             urgent_jobs.push(task);
         } else {
             ok_jobs.push(task);
@@ -744,23 +743,23 @@ fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pa
     }
 
     let urgents = urgent_jobs.len();
-    let (rw, rj, p) = solve_pathfinding_rim(workers, urgent_jobs);
+    let (rw, rj, p, score) = solve_pathfinding_rim(workers, urgent_jobs);
 
-    if urgents > 0 {
+    if urgents > 0 && p.len() != urgents {
         tracing::warn!("urgents, found={urgents}, matched={}", p.len());
     }
 
-    let (rw, mut rj2, mut p2) = solve_pathfinding_rim(rw, ok_jobs);
+    let (rw, mut rj2, mut p2, score2) = solve_pathfinding_rim(rw, ok_jobs);
 
     rj2.extend(rj);
     p2.extend(p);
 
-    (rw, rj2, p2)
+    (rw, rj2, p2, score + score2)
 }
 
-fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs, Vec<Pair>) {
+fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs, Vec<Pair>, i32) {
     if workers.is_empty() || jobs.is_empty() {
-        return (workers, jobs, vec![]);
+        return (workers, jobs, vec![], 0);
     }
 
     // 横に長いのは OK なので横に椅子(worker)をおく
@@ -773,8 +772,6 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     // タスクの全体最適を取りたいが、長時間マッチングされない場合が存在する
     // とんでもなくマッチングされなかったライドを必ず拾う仕組みがいる？
     // ↑ _花譜で解決済み
-
-    let mut transposed = false;
 
     // tracing::info!("### workers ###");
     // for (i, w) in workers.iter().enumerate() {
@@ -794,12 +791,12 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         score(worker, &task.0)
     });
 
-    // let mut weights = Matrix::from_rows(weights).unwrap();
+    let mut transposed = false;
     if jobs.len() > workers.len() {
         weights.transpose();
         transposed = true;
     }
-    let (_sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
+    let (sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
 
     let mut worker_used = vec![false; workers.len()];
     let mut task_used = vec![false; jobs.len()];
@@ -838,12 +835,12 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         }
     }
 
-    (redu_workers, redu_jobs, res)
+    (redu_workers, redu_jobs, res, sum)
 }
 
 impl Repository {
     pub fn do_matching(&self) {
-        let (pairs, _waiting, _free) = {
+        let (pairs, waiting, free) = {
             let _lock = self.ride_cache.matching_lock.lock();
 
             let free_chairs = {
@@ -879,52 +876,29 @@ impl Repository {
                 use std::fmt::Write;
 
                 let begin = Instant::now();
-                let mut ret = solve_greedy(avail.clone(), waiting_rides.clone());
+                let mut gd = solve_greedy(avail.clone(), waiting_rides.clone());
                 // tracing::info!("gd:{:#?}", ret.2);
-                let mut ret_score: i32 = ret.2.iter().map(|x| x.score).sum();
-                let l = ret.2.len();
+                let ret_score: i32 = gd.2.iter().map(|x| x.score).sum();
+                let l = gd.2.len();
                 let elap = begin.elapsed().as_millis();
                 let mut log = format!("greedy({l:3}): {ret_score:5} in {elap}ms");
 
-                #[cfg(iojeoir)]
-                'or_tools: {
-                    if avail.len() * waiting_rides.len() < 5000 {
-                        let begin = Instant::now();
-                        let Some(or_tools) = solve_or_tools(avail.clone(), waiting_rides.clone())
-                        else {
-                            break 'or_tools;
-                        };
-                        // tracing::info!("ot:{:#?}", or_tools.2);
-                        let or_tools_score: i32 = or_tools.2.iter().map(|x| x.score).sum();
-                        let l = or_tools.2.len();
-                        let elap = begin.elapsed().as_millis();
-                        write!(log, ", or_tools({l:3}): {or_tools_score:5} in {elap}ms").unwrap();
-                        if or_tools_score < ret_score {
-                            ret = or_tools;
-                            ret_score = or_tools_score;
-                        }
-                    }
-                }
-
-                'pathfinding: {
+                {
                     let begin = Instant::now();
-                    let Some(pf) = solve_pathfinding_isekai_joucho(avail, waiting_rides) else {
-                        break 'pathfinding;
-                    };
+                    let (a, b, c, pf_score) = solve_pathfinding_isekai_joucho(avail, waiting_rides);
                     // tracing::info!("pf:{:#?}", pf.2);
-                    let pf_score: i32 = pf.2.iter().map(|x| x.score).sum();
-                    let l = pf.2.len();
+                    let l = c.len();
                     let elap = begin.elapsed().as_millis();
                     write!(log, ", pathfinding({l:3}): {pf_score:5} in {elap}ms").unwrap();
-                    #[allow(unused)]
                     if pf_score < ret_score {
-                        ret = pf;
-                        ret_score = pf_score;
+                        let win = ((ret_score as f64) / (pf_score as f64) * 100.0) as usize - 100;
+                        write!(log, " {win:}% win!").unwrap();
+                        gd = (a, b, c);
                     }
                 }
 
                 tracing::info!("{log}");
-                ret
+                gd
             };
 
             if !redu2.is_empty() {
@@ -945,6 +919,6 @@ impl Repository {
                 .unwrap();
         }
 
-        // tracing::info!("waiting={waiting:3}, free={free:3}, matches={pairs_len:3}");
+        tracing::info!("waiting={waiting:3}, free={free:3}, matches={pairs_len:3}");
     }
 }

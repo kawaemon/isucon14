@@ -8,14 +8,14 @@ publish = false
 default = ["parking_lot"]
 safety = ["dl", "speed"]
 
-dl = []
+dl = ["backtrace"]
 speed = []
 parking_lot = ["tokio/parking_lot"]
 
 [dependencies]
 ahash = "0.8"
 anyhow = { version = "1", features = ["backtrace"] }
-backtrace = "0.3"
+backtrace = { version = "0.3", optional = true }
 bytes = "1.9.0"
 cfg-if = "1"
 chrono = "0.4"
@@ -35,7 +35,6 @@ num-traits = "0.2"
 parking_lot = "0.12"
 pathfinding = "4.13.0"
 pin-project = "1.1.7"
-pyo3 = { version = "0.23.3", features = ["auto-initialize"] }
 querystring = "1.1.0"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [
@@ -43,7 +42,6 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
     "json",
 ] }
-reqwest-eventsource = "0.6.0"
 rustls = { version = "0.23.20", features = ["hashbrown", "ring"] }
 rustls-pemfile = "2.2.0"
 serde = { version = "1", features = ["derive"] }
@@ -73,7 +71,6 @@ tokio = { version = "1", features = [
 ] }
 tokio-rustls = { version = "0.26.1", features = ["ring"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
-tower-http = { version = "0.6", features = ["trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "1"
