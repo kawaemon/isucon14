@@ -873,32 +873,34 @@ impl Repository {
             }
 
             let (avail, redu2, pairs) = {
-                use std::fmt::Write;
+                // use std::fmt::Write;
 
-                let begin = Instant::now();
-                let mut gd = solve_greedy(avail.clone(), waiting_rides.clone());
-                // tracing::info!("gd:{:#?}", ret.2);
-                let ret_score: i32 = gd.2.iter().map(|x| x.score).sum();
-                let l = gd.2.len();
-                let elap = begin.elapsed().as_millis();
-                let mut log = format!("greedy({l:3}): {ret_score:5} in {elap}ms");
+                // let begin = Instant::now();
+                // let mut gd = solve_greedy(avail.clone(), waiting_rides.clone());
+                // // tracing::info!("gd:{:#?}", ret.2);
+                // let ret_score: i32 = gd.2.iter().map(|x| x.score).sum();
+                // let l = gd.2.len();
+                // let elap = begin.elapsed().as_millis();
+                // let mut log = format!("greedy({l:3}): {ret_score:5} in {elap}ms");
 
                 {
-                    let begin = Instant::now();
-                    let (a, b, c, pf_score) = solve_pathfinding_isekai_joucho(avail, waiting_rides);
+                    // let begin = Instant::now();
+                    let (a, b, c, _pf_score) =
+                        solve_pathfinding_isekai_joucho(avail, waiting_rides);
                     // tracing::info!("pf:{:#?}", pf.2);
-                    let l = c.len();
-                    let elap = begin.elapsed().as_millis();
-                    write!(log, ", pathfinding({l:3}): {pf_score:5} in {elap}ms").unwrap();
-                    if pf_score < ret_score {
-                        let win = ((ret_score as f64) / (pf_score as f64) * 100.0) as usize - 100;
-                        write!(log, " {win:}% win!").unwrap();
-                        gd = (a, b, c);
-                    }
+                    // let l = c.len();
+                    // let elap = begin.elapsed().as_millis();
+                    // write!(log, ", pathfinding({l:3}): {pf_score:5} in {elap}ms").unwrap();
+                    // if pf_score < ret_score {
+                    //     let win = ((ret_score as f64) / (pf_score as f64) * 100.0) as usize - 100;
+                    //     write!(log, " {win:}% win!").unwrap();
+                    //     gd = (a, b, c);
+                    // }
+                    (a, b, c)
                 }
 
-                tracing::info!("{log}");
-                gd
+                // tracing::info!("{log}");
+                // gd
             };
 
             if !redu2.is_empty() {
