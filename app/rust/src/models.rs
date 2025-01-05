@@ -215,7 +215,7 @@ impl serde::Serialize for Symbol {
 }
 impl<'de> serde::Deserialize<'de> for Symbol {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = <String>::deserialize(deserializer)?;
+        let s = <Cow<'_, str>>::deserialize(deserializer)?;
         Ok(Self::new_from_ref(&s))
     }
 }

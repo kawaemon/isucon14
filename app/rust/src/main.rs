@@ -58,7 +58,8 @@ async fn main() -> anyhow::Result<()> {
                 .port(port)
                 .username(&user)
                 .password(&password)
-                .database(&dbname),
+                .database(&dbname)
+                .ssl_mode(sqlx::mysql::MySqlSslMode::Disabled),
         )
         .await?;
 
