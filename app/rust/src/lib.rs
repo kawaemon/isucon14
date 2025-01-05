@@ -20,7 +20,7 @@ use std::sync::{atomic::AtomicI64, Arc};
 use chrono::{DateTime, Utc};
 use repo::Repository;
 
-// Symbol が fat-ptr なせいで Hash 衝突が増えている。。気がする？
+// Symbol が fat-ptr なせいで Hash 衝突が増えている。
 pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
 pub type HashSet<K> = hashbrown::HashSet<K>;
 pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V>;

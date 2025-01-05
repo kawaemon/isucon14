@@ -33,7 +33,9 @@ memchr = "2.7.4"
 mime = "0.3.17"
 num-traits = "0.2"
 parking_lot = "0.12"
+pathfinding = "4.13.0"
 pin-project = "1.1.7"
+pyo3 = { version = "0.23.3", features = ["auto-initialize"] }
 querystring = "1.1.0"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = [

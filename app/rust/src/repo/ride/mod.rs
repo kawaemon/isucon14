@@ -4,12 +4,20 @@ use crate::dl::DlSyncRwLock;
 use crate::ConcurrentHashMap;
 use crate::ConcurrentHashSet;
 use crate::HashMap;
+use chrono::TimeDelta;
 use chrono::{DateTime, Utc};
+use pathfinding::matrix::Matrix;
+use pyo3::types::PyAnyMethods;
+use pyo3::Py;
+use pyo3::PyAny;
+use pyo3::Python;
 use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
+use std::cmp::Reverse;
 use std::sync::atomic::AtomicBool;
+use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
@@ -31,7 +39,7 @@ pub struct RideCacheInner {
     ride_cache: DlSyncRwLock<ConcurrentHashMap<Id<Ride>, Arc<RideEntry>>>,
     user_rides: DlSyncRwLock<ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<Arc<RideEntry>>>>>,
 
-    waiting_rides: DlSyncMutex<VecDeque<(Arc<RideEntry>, Id<RideStatus>)>>,
+    waiting_rides: DlSyncMutex<Vec<(Arc<RideEntry>, Id<RideStatus>)>>,
     free_chairs_lv1: DlSyncRwLock<ConcurrentHashSet<Id<Chair>>>,
     free_chairs_lv2: DlSyncMutex<Vec<Id<Chair>>>,
 
@@ -50,7 +58,7 @@ struct RideCacheInit {
     ride_cache: ConcurrentHashMap<Id<Ride>, Arc<RideEntry>>,
     user_rides: ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<Arc<RideEntry>>>>,
 
-    waiting_rides: VecDeque<(Arc<RideEntry>, Id<RideStatus>)>,
+    waiting_rides: Vec<(Arc<RideEntry>, Id<RideStatus>)>,
     free_chairs_lv1: ConcurrentHashSet<Id<Chair>>,
     free_chairs_lv2: Vec<Id<Chair>>,
 
@@ -190,14 +198,14 @@ impl RideCacheInit {
         //
         // waiting_rides
         //
-        let mut waiting_rides = VecDeque::new();
+        let mut waiting_rides = Vec::new();
         for ride in &init.rides {
             if ride.chair_id.is_none() {
                 let status = statuses.get(&ride.id).unwrap();
                 assert_eq!(status.len(), 1);
                 assert_eq!(status[0].status, RideStatusEnum::Matching);
                 let ride = rides.get(&ride.id).unwrap();
-                waiting_rides.push_back((Arc::clone(&*ride), status[0].id));
+                waiting_rides.push((Arc::clone(&*ride), status[0].id));
             }
         }
 
@@ -589,9 +597,269 @@ impl RideEntry {
     }
 }
 
+#[derive(Clone)]
+struct AvailableChair {
+    speed: i32,
+    chair: Id<Chair>,
+    coord: Coordinate,
+}
+
+struct Pair {
+    chair_id: Id<Chair>,
+    ride_id: Id<Ride>,
+    status_id: Id<RideStatus>,
+    score: i32,
+}
+impl std::fmt::Debug for Pair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "chair{:?} <-{}-> ride{:?}",
+            self.chair_id, self.score, self.ride_id
+        )
+    }
+}
+
+// これを最小化する
+#[inline(always)]
+fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
+    let distance = chair.coord.distance(ride.pickup) * 10 + ride.pickup.distance(ride.destination);
+    distance / chair.speed
+}
+
+type Workers = Vec<AvailableChair>;
+type Jobs = Vec<(Arc<RideEntry>, Id<RideStatus>)>;
+fn solve_greedy(mut avail: Workers, waiting_rides: Jobs) -> (Workers, Jobs, Vec<Pair>) {
+    let mut pairs = vec![];
+    let mut redu = vec![];
+
+    for (ride, status_id) in waiting_rides {
+        let Some((best_index, best, score)) = avail
+            .iter()
+            .enumerate()
+            .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
+            .map(|(i, x)| (i, x, score(x, &ride)))
+            .min_by_key(|(_, _, d)| *d)
+        else {
+            redu.push((ride, status_id));
+            continue;
+        };
+        let chair = best.chair;
+        avail.remove(best_index);
+        pairs.push(Pair {
+            chair_id: chair,
+            ride_id: ride.id,
+            status_id,
+            score,
+        });
+    }
+
+    let mut redu2 = vec![];
+
+    for (ride, status_id) in redu {
+        let Some((best_index, best, score)) = avail
+            .iter()
+            .enumerate()
+            // .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
+            .map(|(i, x)| (i, x, score(x, &ride)))
+            .min_by_key(|(_, _, d)| *d)
+        else {
+            redu2.push((ride, status_id));
+            continue;
+        };
+        let chair = best.chair;
+        avail.remove(best_index);
+        pairs.push(Pair {
+            chair_id: chair,
+            ride_id: ride.id,
+            status_id,
+            score,
+        });
+    }
+
+    (avail, redu2, pairs)
+}
+
+fn solve_or_tools(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, Jobs, Vec<Pair>)> {
+    if workers.is_empty() || tasks.is_empty() {
+        return None;
+    }
+
+    let mut scores: Vec<Vec<usize>> = Vec::with_capacity(workers.len());
+    for worker in &workers {
+        let mut local = Vec::with_capacity(tasks.len());
+        for task in &tasks {
+            local.push(score(worker, &task.0) as usize);
+        }
+        scores.push(local);
+    }
+
+    let res: Vec<(usize, usize)> = Python::with_gil(|py| {
+        let entry = py.import("orstub.entry").unwrap();
+        let entry: Py<PyAny> = entry.getattr("entry").unwrap().into();
+        let res = entry.call1(py, (scores,)).unwrap();
+        res.extract::<Option<_>>(py).unwrap()
+    })?;
+
+    let mut pairs = Vec::with_capacity(res.len());
+    let mut workers_used = vec![false; workers.len()];
+    let mut tasks_used = vec![false; tasks.len()];
+
+    for (worker, task) in res {
+        workers_used[worker] = true;
+        tasks_used[task] = true;
+        let worker = &workers[worker];
+        let task = &tasks[task];
+        pairs.push(Pair {
+            chair_id: worker.chair,
+            ride_id: task.0.id,
+            status_id: task.1,
+            score: score(worker, &task.0),
+        });
+    }
+
+    for i in (0..workers.len()).rev() {
+        if workers_used[i] {
+            workers.remove(i);
+        }
+    }
+    for i in (0..tasks.len()).rev() {
+        if tasks_used[i] {
+            tasks.remove(i);
+        }
+    }
+
+    Some((workers, tasks, pairs))
+}
+
+fn solve_pathfinding_iuejrio(workers: Workers, tasks: Jobs) -> Option<(Workers, Jobs, Vec<Pair>)> {
+    // region を分けてその中でマッチングを行う
+    // region 分けた方が多分 O(n^3)の n が減って計算早くなると思う
+
+    const REGION_A: Coordinate = Coordinate {
+        latitude: 0,
+        longitude: 0,
+    };
+    const REGION_B: Coordinate = Coordinate {
+        latitude: 300,
+        longitude: 300,
+    };
+
+    let mut split_workers = (vec![], vec![]);
+    for w in workers {
+        if w.coord.distance(REGION_A) > w.coord.distance(REGION_B) {
+            split_workers.1.push(w);
+        } else {
+            split_workers.0.push(w);
+        }
+    }
+
+    let mut split_jobs = (vec![], vec![]);
+    for j in tasks {
+        if j.0.pickup.distance(REGION_A) > j.0.pickup.distance(REGION_B) {
+            split_jobs.1.push(j);
+        } else {
+            split_jobs.0.push(j);
+        }
+    }
+
+    let (mut rw, mut rj, mut p) =
+        solve_pathfinding(split_workers.0, split_jobs.0).unwrap_or_default();
+    let (rw2, rj2, p2) = solve_pathfinding(split_workers.1, split_jobs.1).unwrap_or_default();
+
+    rw.extend(rw2);
+    rj.extend(rj2);
+    p.extend(p2);
+
+    Some((rw, rj, p))
+}
+
+fn solve_pathfinding(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, Jobs, Vec<Pair>)> {
+    if workers.is_empty() || tasks.is_empty() {
+        return None;
+    }
+
+    // 横に長いのは OK なので横に椅子(worker)をおく
+    // 椅子のほうが多い分にはassignment問題として適切
+    // タスクの方が多い場合、キューの最初からを優先して配置する
+
+    // 椅子の方が多い場合全てのタスクにマッチング可能
+
+    // 大抵の場合タスクの方が多い
+    // タスクの全体最適を取りたいが、長時間マッチングされない場合が存在する
+    // とんでもなくマッチングされなかったライドを必ず拾う仕組みがいる？
+
+    let mut transposed = false;
+
+    // tracing::info!("### workers ###");
+    // for (i, w) in workers.iter().enumerate() {
+    //     tracing::info!("{i}: {:?}", w.chair);
+    // }
+    // tracing::info!("### tasks ###");
+    // for (i, t) in tasks.iter().enumerate() {
+    //     tracing::info!("{i}: {:?}", t.0.id);
+    // }
+
+    // tracing::info!("### weight_matrix ###");
+    // tracing::info!("tasks↓ workers→");
+
+    let mut weights = Matrix::from_fn(tasks.len(), workers.len(), |(y, x)| {
+        let task = &tasks[y];
+        let worker = &workers[x];
+        score(worker, &task.0)
+    });
+
+    // let mut weights = Matrix::from_rows(weights).unwrap();
+    if tasks.len() > workers.len() {
+        weights.transpose();
+        transposed = true;
+    }
+    let (sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
+    tracing::info!("sum = {sum}");
+
+    let mut worker_used = vec![false; workers.len()];
+    let mut task_used = vec![false; tasks.len()];
+    let mut res = vec![];
+    for i in 0..pairs.len() {
+        let (task_i, worker_i) = {
+            if transposed {
+                (pairs[i], i)
+            } else {
+                (i, pairs[i])
+            }
+        };
+
+        let task = &tasks[task_i];
+        task_used[task_i] = true;
+        let worker = &workers[worker_i];
+        worker_used[worker_i] = true;
+        res.push(Pair {
+            chair_id: worker.chair,
+            ride_id: task.0.id,
+            status_id: task.1,
+            score: score(worker, &task.0),
+        });
+    }
+
+    let mut redu_workers = vec![];
+    let mut redu_tasks = vec![];
+    for i in (0..workers.len()).rev() {
+        if !worker_used[i] {
+            redu_workers.push(workers.remove(i));
+        }
+    }
+    for i in (0..tasks.len()).rev() {
+        if !task_used[i] {
+            redu_tasks.push(tasks.remove(i));
+        }
+    }
+
+    Some((redu_workers, redu_tasks, res))
+}
+
 impl Repository {
     pub fn do_matching(&self) {
-        let (pairs, waiting, free, (s1, s2)) = {
+        let (pairs, _waiting, _free) = {
             let _lock = self.ride_cache.matching_lock.lock();
 
             let free_chairs = {
@@ -606,12 +874,6 @@ impl Repository {
                 (l.len(), std::mem::take(&mut *l))
             };
             let chair_speed_cache = self.chair_model_cache.speed.read();
-
-            struct AvailableChair {
-                speed: i32,
-                chair: Id<Chair>,
-                coord: Coordinate,
-            }
 
             let mut avail = vec![];
 
@@ -629,59 +891,57 @@ impl Repository {
                 });
             }
 
-            struct Pair {
-                chair_id: Id<Chair>,
-                ride_id: Id<Ride>,
-                status_id: Id<RideStatus>,
-            }
-            let mut pairs = vec![];
-            let mut redu = vec![];
-            let mut stage1 = 0;
+            let (avail, redu2, pairs) = {
+                use std::fmt::Write;
 
-            for (ride, status_id) in waiting_rides {
-                let Some((best_index, best)) = avail
-                    .iter()
-                    .enumerate()
-                    .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
-                    .max_by_key(|(_i, x)| x.coord.distance(ride.pickup))
-                else {
-                    redu.push((ride, status_id));
-                    continue;
-                };
-                let chair = best.chair;
-                avail.remove(best_index);
-                pairs.push(Pair {
-                    chair_id: chair,
-                    ride_id: ride.id,
-                    status_id,
-                });
-                stage1 += 1;
-            }
+                let begin = Instant::now();
+                let mut ret = solve_greedy(avail.clone(), waiting_rides.clone());
+                // tracing::info!("gd:{:#?}", ret.2);
+                let mut ret_score: i32 = ret.2.iter().map(|x| x.score).sum();
+                let l = ret.2.len();
+                let elap = begin.elapsed().as_millis();
+                let mut log = format!("greedy({l:3}): {ret_score:5} in {elap}ms");
 
-            let mut redu2 = vec![];
+                #[cfg(iojeoir)]
+                'or_tools: {
+                    if avail.len() * waiting_rides.len() < 5000 {
+                        let begin = Instant::now();
+                        let Some(or_tools) = solve_or_tools(avail.clone(), waiting_rides.clone())
+                        else {
+                            break 'or_tools;
+                        };
+                        // tracing::info!("ot:{:#?}", or_tools.2);
+                        let or_tools_score: i32 = or_tools.2.iter().map(|x| x.score).sum();
+                        let l = or_tools.2.len();
+                        let elap = begin.elapsed().as_millis();
+                        write!(log, ", or_tools({l:3}): {or_tools_score:5} in {elap}ms").unwrap();
+                        if or_tools_score < ret_score {
+                            ret = or_tools;
+                            ret_score = or_tools_score;
+                        }
+                    }
+                }
 
-            let mut stage2 = 0;
-            for (ride, status_id) in redu {
-                let Some((best_index, best)) = avail
-                    .iter()
-                    .enumerate()
-                    // しょうがないので最も利益を生むライドにアサイン・・・と行きたいところだが
-                    // さっさと初期のライドは終了して、評判で次のライドを爆発的に増やしたいのでサービス
-                    // .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
-                    .min_by_key(|(_i, x)| x.coord.distance(ride.pickup))
-                else {
-                    redu2.push((ride, status_id));
-                    continue;
-                };
-                let chair = best.chair;
-                avail.remove(best_index);
-                pairs.push(Pair {
-                    chair_id: chair,
-                    ride_id: ride.id,
-                    status_id,
-                });
-                stage2 += 1;
-            }
+                'pathfinding: {
+                    let begin = Instant::now();
+                    let Some(pf) = solve_pathfinding_iuejrio(avail, waiting_rides) else {
+                        break 'pathfinding;
+                    };
+                    // tracing::info!("pf:{:#?}", pf.2);
+                    let pf_score: i32 = pf.2.iter().map(|x| x.score).sum();
+                    let l = pf.2.len();
+                    let elap = begin.elapsed().as_millis();
+                    write!(log, ", pathfinding({l:3}): {pf_score:5} in {elap}ms").unwrap();
+                    #[allow(unused)]
+                    if pf_score < ret_score {
+                        ret = pf;
+                        ret_score = pf_score;
+                    }
+                }
+
+                tracing::info!("{log}");
+                ret
+            };
 
             if !redu2.is_empty() {
                 let mut c = self.ride_cache.waiting_rides.lock();
@@ -692,7 +952,7 @@ impl Repository {
                 c.extend(avail.into_iter().map(|x| x.chair));
             }
 
-            (pairs, waiting_rides_len, free_chairs_len, (stage1, stage2))
+            (pairs, waiting_rides_len, free_chairs_len)
         };
 
         let pairs_len = pairs.len();
@@ -701,8 +961,6 @@ impl Repository {
                 .unwrap();
         }
 
-        tracing::info!(
-            "waiting={waiting:3}, free={free:3}, matches={pairs_len:3}, stage1={s1}, stage2={s2}",
-        );
+        // tracing::info!("waiting={waiting:3}, free={free:3}, matches={pairs_len:3}");
     }
 }

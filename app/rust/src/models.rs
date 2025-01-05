@@ -6,7 +6,7 @@ use derivative::Derivative;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use thiserror::Error;
 
-use crate::{ConcurrentHashMap, ConcurrentHashSet, Coordinate};
+use crate::{ConcurrentHashMap, Coordinate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -88,7 +88,10 @@ impl FromStr for RideStatusEnum {
     PartialEq(bound = ""),
     Eq(bound = "")
 )]
-pub struct Id<T>(Symbol, PhantomData<fn() -> T>);
+pub struct Id<T>(
+    Symbol,
+    #[derivative(Debug = "ignore")] PhantomData<fn() -> T>,
+);
 impl<T> From<&Id<T>> for reqwest::header::HeaderValue {
     fn from(val: &Id<T>) -> Self {
         reqwest::header::HeaderValue::from_str(val.resolve()).unwrap()
@@ -142,8 +145,12 @@ static STRING_TABLE: LazyLock<ConcurrentHashMap<&'static str, u64 /* hash of str
 
 use std::borrow::Cow;
 
-#[derive(Debug, Clone, Copy)]
-pub struct Symbol(&'static str, u64 /* hash */);
+#[derive(Derivative, Clone, Copy)]
+#[derivative(Debug)]
+pub struct Symbol(
+    &'static str,
+    #[derivative(Debug = "ignore")] u64, /* hash */
+);
 impl PartialEq<Symbol> for Symbol {
     fn eq(&self, other: &Symbol) -> bool {
         std::ptr::eq(self.0, other.0)

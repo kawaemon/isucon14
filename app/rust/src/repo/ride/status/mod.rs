@@ -99,7 +99,7 @@ impl Repository {
 
         if status == RideStatusEnum::Matching {
             let mut waiting_rides = self.ride_cache.waiting_rides.lock();
-            waiting_rides.push_back((Arc::clone(&ride), status_id));
+            waiting_rides.push((Arc::clone(&ride), status_id));
         }
 
         Ok(())
