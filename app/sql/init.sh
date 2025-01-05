@@ -7,6 +7,7 @@ MYSQL="mysql"
 if [ "${ENV:-}" == "local-dev" ]; then
 	MYSQL="docker exec -i isuride-mysql mysql"
 fi
+MYSQL="sudo docker run --rm --network host --entrypoint=mysql -i mysql"
 
 if test -f /home/isucon/env.sh; then
 	. /home/isucon/env.sh

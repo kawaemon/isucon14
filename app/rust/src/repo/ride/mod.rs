@@ -680,59 +680,10 @@ fn solve_greedy(mut avail: Workers, waiting_rides: Jobs) -> (Workers, Jobs, Vec<
     (avail, redu2, pairs)
 }
 
-fn solve_or_tools(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, Jobs, Vec<Pair>)> {
-    if workers.is_empty() || tasks.is_empty() {
-        return None;
-    }
-
-    let mut scores: Vec<Vec<usize>> = Vec::with_capacity(workers.len());
-    for worker in &workers {
-        let mut local = Vec::with_capacity(tasks.len());
-        for task in &tasks {
-            local.push(score(worker, &task.0) as usize);
-        }
-        scores.push(local);
-    }
-
-    let res: Vec<(usize, usize)> = Python::with_gil(|py| {
-        let entry = py.import("orstub.entry").unwrap();
-        let entry: Py<PyAny> = entry.getattr("entry").unwrap().into();
-        let res = entry.call1(py, (scores,)).unwrap();
-        res.extract::<Option<_>>(py).unwrap()
-    })?;
-
-    let mut pairs = Vec::with_capacity(res.len());
-    let mut workers_used = vec![false; workers.len()];
-    let mut tasks_used = vec![false; tasks.len()];
-
-    for (worker, task) in res {
-        workers_used[worker] = true;
-        tasks_used[task] = true;
-        let worker = &workers[worker];
-        let task = &tasks[task];
-        pairs.push(Pair {
-            chair_id: worker.chair,
-            ride_id: task.0.id,
-            status_id: task.1,
-            score: score(worker, &task.0),
-        });
-    }
-
-    for i in (0..workers.len()).rev() {
-        if workers_used[i] {
-            workers.remove(i);
-        }
-    }
-    for i in (0..tasks.len()).rev() {
-        if tasks_used[i] {
-            tasks.remove(i);
-        }
-    }
-
-    Some((workers, tasks, pairs))
-}
-
-fn solve_pathfinding_iuejrio(workers: Workers, tasks: Jobs) -> Option<(Workers, Jobs, Vec<Pair>)> {
+fn solve_pathfinding_isekai_joucho(
+    workers: Workers,
+    jobs: Jobs,
+) -> Option<(Workers, Jobs, Vec<Pair>)> {
     // region を分けてその中でマッチングを行う
     // region 分けた方が多分 O(n^3)の n が減って計算早くなると思う
 
@@ -755,7 +706,7 @@ fn solve_pathfinding_iuejrio(workers: Workers, tasks: Jobs) -> Option<(Workers, 
     }
 
     let mut split_jobs = (vec![], vec![]);
-    for j in tasks {
+    for j in jobs {
         if j.0.pickup.distance(REGION_A) > j.0.pickup.distance(REGION_B) {
             split_jobs.1.push(j);
         } else {
@@ -763,9 +714,8 @@ fn solve_pathfinding_iuejrio(workers: Workers, tasks: Jobs) -> Option<(Workers, 
         }
     }
 
-    let (mut rw, mut rj, mut p) =
-        solve_pathfinding(split_workers.0, split_jobs.0).unwrap_or_default();
-    let (rw2, rj2, p2) = solve_pathfinding(split_workers.1, split_jobs.1).unwrap_or_default();
+    let (mut rw, mut rj, mut p) = solve_pathfinding_kaf(split_workers.0, split_jobs.0);
+    let (rw2, rj2, p2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1);
 
     rw.extend(rw2);
     rj.extend(rj2);
@@ -774,9 +724,43 @@ fn solve_pathfinding_iuejrio(workers: Workers, tasks: Jobs) -> Option<(Workers, 
     Some((rw, rj, p))
 }
 
-fn solve_pathfinding(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, Jobs, Vec<Pair>)> {
-    if workers.is_empty() || tasks.is_empty() {
-        return None;
+fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pair>) {
+    if workers.is_empty() || jobs.is_empty() {
+        return (workers, jobs, vec![]);
+    }
+
+    // 緊急のやつだけ先にやる
+    let mut urgent_jobs = vec![];
+    let mut ok_jobs = vec![];
+    let now = Utc::now();
+    const URGENT_THRESHOLD: TimeDelta = TimeDelta::seconds(25);
+    for task in jobs {
+        let elapsed = now - task.0.created_at;
+        if elapsed > URGENT_THRESHOLD {
+            urgent_jobs.push(task);
+        } else {
+            ok_jobs.push(task);
+        }
+    }
+
+    let urgents = urgent_jobs.len();
+    let (rw, rj, p) = solve_pathfinding_rim(workers, urgent_jobs);
+
+    if urgents > 0 {
+        tracing::warn!("urgents, found={urgents}, matched={}", p.len());
+    }
+
+    let (rw, mut rj2, mut p2) = solve_pathfinding_rim(rw, ok_jobs);
+
+    rj2.extend(rj);
+    p2.extend(p);
+
+    (rw, rj2, p2)
+}
+
+fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs, Vec<Pair>) {
+    if workers.is_empty() || jobs.is_empty() {
+        return (workers, jobs, vec![]);
     }
 
     // 横に長いのは OK なので横に椅子(worker)をおく
@@ -788,6 +772,7 @@ fn solve_pathfinding(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, 
     // 大抵の場合タスクの方が多い
     // タスクの全体最適を取りたいが、長時間マッチングされない場合が存在する
     // とんでもなくマッチングされなかったライドを必ず拾う仕組みがいる？
+    // ↑ _花譜で解決済み
 
     let mut transposed = false;
 
@@ -795,30 +780,29 @@ fn solve_pathfinding(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, 
     // for (i, w) in workers.iter().enumerate() {
     //     tracing::info!("{i}: {:?}", w.chair);
     // }
-    // tracing::info!("### tasks ###");
-    // for (i, t) in tasks.iter().enumerate() {
+    // tracing::info!("### jobs ###");
+    // for (i, t) in jobs.iter().enumerate() {
     //     tracing::info!("{i}: {:?}", t.0.id);
     // }
 
     // tracing::info!("### weight_matrix ###");
-    // tracing::info!("tasks↓ workers→");
+    // tracing::info!("jobs↓ workers→");
 
-    let mut weights = Matrix::from_fn(tasks.len(), workers.len(), |(y, x)| {
-        let task = &tasks[y];
+    let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
+        let task = &jobs[y];
         let worker = &workers[x];
         score(worker, &task.0)
     });
 
     // let mut weights = Matrix::from_rows(weights).unwrap();
-    if tasks.len() > workers.len() {
+    if jobs.len() > workers.len() {
         weights.transpose();
         transposed = true;
     }
-    let (sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
-    tracing::info!("sum = {sum}");
+    let (_sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
 
     let mut worker_used = vec![false; workers.len()];
-    let mut task_used = vec![false; tasks.len()];
+    let mut task_used = vec![false; jobs.len()];
     let mut res = vec![];
     for i in 0..pairs.len() {
         let (task_i, worker_i) = {
@@ -829,7 +813,7 @@ fn solve_pathfinding(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, 
             }
         };
 
-        let task = &tasks[task_i];
+        let task = &jobs[task_i];
         task_used[task_i] = true;
         let worker = &workers[worker_i];
         worker_used[worker_i] = true;
@@ -842,19 +826,19 @@ fn solve_pathfinding(mut workers: Workers, mut tasks: Jobs) -> Option<(Workers, 
     }
 
     let mut redu_workers = vec![];
-    let mut redu_tasks = vec![];
+    let mut redu_jobs = vec![];
     for i in (0..workers.len()).rev() {
         if !worker_used[i] {
             redu_workers.push(workers.remove(i));
         }
     }
-    for i in (0..tasks.len()).rev() {
+    for i in (0..jobs.len()).rev() {
         if !task_used[i] {
-            redu_tasks.push(tasks.remove(i));
+            redu_jobs.push(jobs.remove(i));
         }
     }
 
-    Some((redu_workers, redu_tasks, res))
+    (redu_workers, redu_jobs, res)
 }
 
 impl Repository {
@@ -924,7 +908,7 @@ impl Repository {
 
                 'pathfinding: {
                     let begin = Instant::now();
-                    let Some(pf) = solve_pathfinding_iuejrio(avail, waiting_rides) else {
+                    let Some(pf) = solve_pathfinding_isekai_joucho(avail, waiting_rides) else {
                         break 'pathfinding;
                     };
                     // tracing::info!("pf:{:#?}", pf.2);
