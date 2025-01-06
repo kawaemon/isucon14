@@ -12,6 +12,7 @@ use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
 use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicI32;
 use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc};
 
@@ -615,19 +616,12 @@ impl std::fmt::Debug for Pair {
     }
 }
 
-crate::conf_env! {
-    static SCORE_TARGET: i32 = {
-        from: "SCORE_TARGET",
-        default: "200",
-    }
-}
+pub static SCORE_TARGET: AtomicI32 = AtomicI32::new(200);
 
 // これを最小化する
 #[inline(always)]
-fn score_for_target(chair: &AvailableChair, ride: &RideEntry) -> i32 {
-    let distance = chair.coord.distance(ride.pickup) * 10 + ride.pickup.distance(ride.destination);
-    let score = distance / chair.speed;
-    score.abs_diff(*SCORE_TARGET) as i32
+fn score_for_target(chair: &AvailableChair, ride: &RideEntry, target: i32) -> i32 {
+    score(chair, ride).abs_diff(target) as i32
 }
 #[inline(always)]
 fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
@@ -798,10 +792,11 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     // tracing::info!("### weight_matrix ###");
     // tracing::info!("jobs↓ workers→");
 
+    let target = SCORE_TARGET.load(std::sync::atomic::Ordering::Relaxed);
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
         let task = &jobs[y];
         let worker = &workers[x];
-        score_for_target(worker, &task.0)
+        score_for_target(worker, &task.0, target)
     });
 
     let mut transposed = false;

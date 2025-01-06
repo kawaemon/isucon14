@@ -136,6 +136,43 @@ async fn post_initialize(c: &mut Controller) -> Result<impl Serialize, Error> {
         COMMIT_CHAN.0.send(()).unwrap();
     });
 
+    isuride::conf_env!(
+        static SCORE_TARGET_SCHEDULE: String = {
+            from: "SCORE_TARGET_SCHEDULE",
+            default: "0:0->25:130",
+        }
+    );
+    #[derive(Debug)]
+    struct Schedule {
+        at: Duration,
+        score: i32,
+    }
+    let schedules = SCORE_TARGET_SCHEDULE
+        .split("->")
+        .map(|x| {
+            let elems = x
+                .split(':')
+                .map(|x| x.parse().unwrap())
+                .collect::<Vec<i32>>();
+            let &[at, score] = elems.as_slice() else {
+                return None;
+            };
+            Some(Schedule {
+                at: Duration::from_secs(at as _),
+                score,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .expect("invalid SCORE_TARGET_SCHEDULE");
+    tracing::info!("{schedules:#?}");
+    for s in schedules {
+        tokio::spawn(async move {
+            tokio::time::sleep(s.at).await;
+            tracing::warn!("SCORE_TARGET={}", s.score);
+            isuride::repo::ride::SCORE_TARGET.store(s.score, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
     #[derive(serde::Serialize)]
     struct Res {
         language: &'static str,
