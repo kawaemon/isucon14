@@ -7,6 +7,7 @@ use crate::HashMap;
 use chrono::TimeDelta;
 use chrono::{DateTime, Utc};
 use pathfinding::matrix::Matrix;
+use rand::Rng;
 use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
@@ -617,6 +618,18 @@ impl std::fmt::Debug for Pair {
 }
 
 pub static SCORE_TARGET: AtomicI32 = AtomicI32::new(200);
+crate::conf_env!(
+    static WAITING_PENALTY_PROB: f64 = {
+        from: "WAITING_PENALTY_PROB",
+        default: "0.5",
+    }
+);
+crate::conf_env!(
+    static WAITING_PENALTY: i32 = {
+        from: "WAITING_PENALTY",
+        default: "100",
+    }
+);
 
 // これを最小化する
 #[inline(always)]
@@ -625,8 +638,16 @@ fn score_for_target(chair: &AvailableChair, ride: &RideEntry, target: i32) -> i3
 }
 #[inline(always)]
 fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
-    let distance = chair.coord.distance(ride.pickup) * 10 + ride.pickup.distance(ride.destination);
-    distance / chair.speed
+    let pickup_distance = chair.coord.distance(ride.pickup);
+
+    let distance = pickup_distance * 10 + ride.pickup.distance(ride.destination);
+    let mut score = distance / chair.speed;
+
+    if pickup_distance >= 10 * chair.speed && rand::thread_rng().gen_bool(*WAITING_PENALTY_PROB) {
+        score += *WAITING_PENALTY;
+    }
+
+    score
 }
 
 type Workers = Vec<AvailableChair>;
@@ -780,17 +801,10 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     // とんでもなくマッチングされなかったライドを必ず拾う仕組みがいる？
     // ↑ _花譜で解決済み
 
-    // tracing::info!("### workers ###");
-    // for (i, w) in workers.iter().enumerate() {
-    //     tracing::info!("{i}: {:?}", w.chair);
-    // }
-    // tracing::info!("### jobs ###");
-    // for (i, t) in jobs.iter().enumerate() {
-    //     tracing::info!("{i}: {:?}", t.0.id);
-    // }
-
-    // tracing::info!("### weight_matrix ###");
-    // tracing::info!("jobs↓ workers→");
+    // if chair.coord.distance(ride.pickup) >= 10 * chair.speed {
+    // ↑ 全てのマッチに対してこれを満たすとパンクしてしまうが、(完走不可)
+    //   かといってガン無視するとライド数が足りなくなる。(70万行かないぐらい)
+    // 確率的にマッチするようにしたい。
 
     let target = SCORE_TARGET.load(std::sync::atomic::Ordering::Relaxed);
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
@@ -903,7 +917,10 @@ impl Repository {
                             0
                         }
                     };
-                    tracing::info!("pairs={pairs}, score={pf_score}, avg={avg}");
+                    let target = SCORE_TARGET.load(std::sync::atomic::Ordering::Relaxed);
+                    tracing::info!(
+                        "pairs={pairs:3}, score={pf_score:6}, avg={avg:5}, target={target:4}"
+                    );
                     // tracing::info!("pf:{:#?}", pf.2);
                     // let l = c.len();
                     // let elap = begin.elapsed().as_millis();
