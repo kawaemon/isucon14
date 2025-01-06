@@ -31,14 +31,6 @@ pub struct PaymentGatewayPostPaymentRequest {
 struct PaymentGatewayGetPaymentsResponseOne {}
 
 const RETRY_LIMIT: usize = 1000;
-static RESTRICTER: LazyLock<Semaphore> = LazyLock::new(|| {
-    let v = std::env::var("CONCURRENCY")
-        .unwrap_or_else(|_| "1000".to_owned())
-        .parse()
-        .unwrap_or_else(|_| panic!("invalid concurrency"));
-    tracing::info!("CONCURRENCY = {v}");
-    Semaphore::new(v)
-});
 
 pub async fn request_payment_gateway_post_payment(
     client: &reqwest::Client,
@@ -50,8 +42,6 @@ pub async fn request_payment_gateway_post_payment(
 
     let pgw_url = payment_gateway_url.resolve();
     let token = token.resolve();
-
-    let _permit = RESTRICTER.acquire().await.unwrap();
 
     let mut retry = 0;
     loop {
