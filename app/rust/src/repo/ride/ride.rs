@@ -112,7 +112,7 @@ impl Repository {
             e.set_chair_id(chair_id, now);
         }
 
-        self.ride_cache.on_chair_status_change(chair_id, true);
+        self.on_chair_went_on_duty(chair_id);
 
         self.ride_cache.ride_deferred.update(RideUpdate {
             id: ride_id,

@@ -426,7 +426,7 @@ pub fn app_get_nearby_chairs(
     };
 
     Ok(AppGetNearbyChairsResponse {
-        chairs: c.state().repo.chair_huifhiubher(coordinate, distance)?,
+        chairs: c.state().repo.chair_nearby(coordinate, distance)?,
         retrieved_at: Utc::now().timestamp(),
     })
 }

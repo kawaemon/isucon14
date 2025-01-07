@@ -363,22 +363,21 @@ pub async fn response(
 
     let is_stream = matches!(body, Either::Right(_));
 
-    let mut res = Response::new(body);
-    *res.status_mut() = code;
-    c.cookie_encode(res.headers_mut());
+    let mut res = Response::builder()
+        .status(code)
+        .header(header::CACHE_CONTROL, "no-cache")
+        .header(
+            header::CONTENT_TYPE,
+            if is_stream {
+                mime::TEXT_EVENT_STREAM.as_ref()
+            } else {
+                mime::APPLICATION_JSON.as_ref()
+            },
+        )
+        .body(body)
+        .unwrap();
 
-    let headers = res.headers_mut();
-    headers.append(header::CACHE_CONTROL, "no-cache".parse().unwrap());
-    headers.append(
-        header::CONTENT_TYPE,
-        if is_stream {
-            mime::TEXT_EVENT_STREAM.as_ref()
-        } else {
-            mime::APPLICATION_JSON.as_ref()
-        }
-        .parse()
-        .unwrap(),
-    );
+    c.cookie_encode(res.headers_mut());
 
     Ok(res)
 }

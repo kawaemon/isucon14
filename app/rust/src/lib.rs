@@ -18,17 +18,17 @@ pub mod speed;
 use std::sync::{atomic::AtomicI64, Arc};
 
 use chrono::{DateTime, Utc};
+use models::SymbolHasherBuilder;
 use repo::Repository;
 
-// Symbol が fat-ptr なせいで Hash 衝突が増えている。
 pub type HashMap<K, V> = hashbrown::HashMap<K, V>;
 pub type HashSet<K> = hashbrown::HashSet<K>;
-pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V>;
-pub type ConcurrentHashSet<K> = dashmap::DashSet<K>;
-// pub type HashMap<K, V> = hashbrown::HashMap<K, V, ahash::RandomState>;
-// pub type HashSet<K> = hashbrown::HashSet<K, ahash::RandomState>;
-// pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
-// pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
+
+pub type ConcurrentHashMap<K, V> = dashmap::DashMap<K, V, ahash::RandomState>;
+pub type ConcurrentHashSet<K> = dashmap::DashSet<K, ahash::RandomState>;
+
+pub type ConcurrentSymbolMap<K, V> = dashmap::DashMap<K, V, SymbolHasherBuilder>;
+pub type ConcurrentSymbolSet<K> = dashmap::DashSet<K, SymbolHasherBuilder>;
 
 #[derive(Debug)]
 pub struct AtomicDateTime(AtomicI64);
@@ -84,27 +84,6 @@ pub enum Error {
     #[error("{0}")]
     Conflict(&'static str),
 }
-// impl axum::response::IntoResponse for Error {
-//     fn into_response(self) -> Response {
-//         let status = match self {
-//             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-//             Self::Unauthorized(_) => StatusCode::UNAUTHORIZED,
-//             Self::NotFound(_) => StatusCode::NOT_FOUND,
-//             Self::Conflict(_) => StatusCode::CONFLICT,
-//             Self::PaymentGateway(_) => StatusCode::BAD_GATEWAY,
-//             _ => StatusCode::INTERNAL_SERVER_ERROR,
-//         };
-//
-//         #[derive(Debug, serde::Serialize)]
-//         struct ErrorBody {
-//             message: String,
-//         }
-//         let message = self.to_string();
-//         tracing::error!("{message}");
-//
-//         (status, axum::Json(ErrorBody { message })).into_response()
-//     }
-// }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Coordinate {

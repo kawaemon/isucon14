@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::dl::DlSyncRwLock;
-use crate::{ConcurrentHashMap, HashMap};
+use crate::{ConcurrentHashMap, ConcurrentSymbolMap, HashMap};
 use std::sync::Arc;
 
 use crate::models::{Coupon, Id, Ride, Symbol, User};
@@ -48,26 +48,26 @@ type SharedCoupon = Arc<CouponEntry>;
 
 #[derive(Debug)]
 pub struct CouponCacheInner {
-    by_code: DlSyncRwLock<ConcurrentHashMap<Symbol, DlSyncRwLock<Vec<SharedCoupon>>>>,
-    by_usedby: DlSyncRwLock<ConcurrentHashMap<Id<Ride>, SharedCoupon>>,
-    user_queue: DlSyncRwLock<ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<SharedCoupon>>>>,
+    by_code: DlSyncRwLock<ConcurrentSymbolMap<Symbol, DlSyncRwLock<Vec<SharedCoupon>>>>,
+    by_usedby: DlSyncRwLock<ConcurrentSymbolMap<Id<Ride>, SharedCoupon>>,
+    user_queue: DlSyncRwLock<ConcurrentSymbolMap<Id<User>, DlSyncRwLock<Vec<SharedCoupon>>>>,
 
     deferred: UpdatableDeferred<DeferrableCoupons>,
 }
 
 struct Init {
-    by_code: ConcurrentHashMap<Symbol, DlSyncRwLock<Vec<SharedCoupon>>>,
-    by_usedby: ConcurrentHashMap<Id<Ride>, SharedCoupon>,
+    by_code: ConcurrentSymbolMap<Symbol, DlSyncRwLock<Vec<SharedCoupon>>>,
+    by_usedby: ConcurrentSymbolMap<Id<Ride>, SharedCoupon>,
 
-    user_queue: ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<SharedCoupon>>>,
+    user_queue: ConcurrentSymbolMap<Id<User>, DlSyncRwLock<Vec<SharedCoupon>>>,
 }
 impl Init {
     fn from_init(init: &mut CacheInit) -> Self {
         init.coupon.sort_unstable_by_key(|x| x.created_at);
 
         let all = ConcurrentHashMap::default();
-        let code = ConcurrentHashMap::default();
-        let usedby = ConcurrentHashMap::default();
+        let code = ConcurrentSymbolMap::default();
+        let usedby = ConcurrentSymbolMap::default();
 
         for coupon in &init.coupon {
             let e = Arc::new(CouponEntry::new(coupon));
@@ -83,7 +83,7 @@ impl Init {
             }
         }
 
-        let user_queue = ConcurrentHashMap::default();
+        let user_queue = ConcurrentSymbolMap::default();
         for coupon in &init.coupon {
             if coupon.used_by.is_some() {
                 continue;

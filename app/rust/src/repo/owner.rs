@@ -1,4 +1,4 @@
-use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentHashMap};
+use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentSymbolMap};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -17,9 +17,9 @@ type SharedOwner = Arc<Owner>;
 
 #[derive(Debug)]
 pub struct OwnerCacheInner {
-    by_id: Arc<DlSyncRwLock<ConcurrentHashMap<Id<Owner>, SharedOwner>>>,
-    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedOwner>>>,
-    by_crt: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedOwner>>>,
+    by_id: Arc<DlSyncRwLock<ConcurrentSymbolMap<Id<Owner>, SharedOwner>>>,
+    by_token: Arc<DlSyncRwLock<ConcurrentSymbolMap<Symbol, SharedOwner>>>,
+    by_crt: Arc<DlSyncRwLock<ConcurrentSymbolMap<Symbol, SharedOwner>>>,
     deferred: SimpleDeferred<OwnerDeferrable>,
 }
 
@@ -36,15 +36,15 @@ impl OwnerCacheInner {
 }
 
 struct OwnerCacheInit {
-    by_id: ConcurrentHashMap<Id<Owner>, SharedOwner>,
-    by_token: ConcurrentHashMap<Symbol, SharedOwner>,
-    by_crt: ConcurrentHashMap<Symbol, SharedOwner>,
+    by_id: ConcurrentSymbolMap<Id<Owner>, SharedOwner>,
+    by_token: ConcurrentSymbolMap<Symbol, SharedOwner>,
+    by_crt: ConcurrentSymbolMap<Symbol, SharedOwner>,
 }
 impl OwnerCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
-        let id = ConcurrentHashMap::default();
-        let t = ConcurrentHashMap::default();
-        let crt = ConcurrentHashMap::default();
+        let id = ConcurrentSymbolMap::default();
+        let t = ConcurrentSymbolMap::default();
+        let crt = ConcurrentSymbolMap::default();
         for owner in &init.owners {
             let owner = Arc::new(owner.clone());
             id.insert(owner.id, Arc::clone(&owner));

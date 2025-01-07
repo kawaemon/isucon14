@@ -1,4 +1,4 @@
-use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentHashMap};
+use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentSymbolMap};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -17,9 +17,9 @@ type SharedUser = Arc<User>;
 
 #[derive(Debug)]
 pub struct UserCacheInner {
-    by_id: Arc<DlSyncRwLock<ConcurrentHashMap<Id<User>, SharedUser>>>,
-    by_token: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedUser>>>,
-    by_inv_code: Arc<DlSyncRwLock<ConcurrentHashMap<Symbol, SharedUser>>>,
+    by_id: Arc<DlSyncRwLock<ConcurrentSymbolMap<Id<User>, SharedUser>>>,
+    by_token: Arc<DlSyncRwLock<ConcurrentSymbolMap<Symbol, SharedUser>>>,
+    by_inv_code: Arc<DlSyncRwLock<ConcurrentSymbolMap<Symbol, SharedUser>>>,
     deferred: SimpleDeferred<UserDeferrable>,
 }
 
@@ -36,15 +36,15 @@ impl UserCacheInner {
 }
 
 pub struct UserCacheInit {
-    by_id: ConcurrentHashMap<Id<User>, SharedUser>,
-    by_token: ConcurrentHashMap<Symbol, SharedUser>,
-    by_inv_code: ConcurrentHashMap<Symbol, SharedUser>,
+    by_id: ConcurrentSymbolMap<Id<User>, SharedUser>,
+    by_token: ConcurrentSymbolMap<Symbol, SharedUser>,
+    by_inv_code: ConcurrentSymbolMap<Symbol, SharedUser>,
 }
 impl UserCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
-        let id = ConcurrentHashMap::default();
-        let t = ConcurrentHashMap::default();
-        let inv = ConcurrentHashMap::default();
+        let id = ConcurrentSymbolMap::default();
+        let t = ConcurrentSymbolMap::default();
+        let inv = ConcurrentSymbolMap::default();
         for user in &init.users {
             let user = Arc::new(user.clone());
             id.insert(user.id, Arc::clone(&user));

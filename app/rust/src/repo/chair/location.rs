@@ -3,31 +3,18 @@ use crate::{
     models::{Ride, RideStatusEnum},
     HashMap,
 };
-use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use sqlx::{MySql, Pool, Transaction};
+use sqlx::{MySql, Transaction};
 
 use crate::{
     models::{Chair, ChairLocation, Id},
     Coordinate,
 };
 
-use super::{
-    cache_init::CacheInit,
-    deferred::{DeferrableSimple, SimpleDeferred},
-    Repository, Result,
-};
+use crate::repo::{cache_init::CacheInit, deferred::DeferrableSimple, Repository, Result};
 
-pub type ChairLocationCache = Arc<ChairLocationCacheInner>;
-
-#[derive(Debug)]
-pub struct ChairLocationCacheInner {
-    pub cache: DlSyncRwLock<HashMap<Id<Chair>, Entry>>,
-    deferred: SimpleDeferred<ChairLocationDeferrable>,
-}
-
-struct ChairLocationDeferrable;
+pub(super) struct ChairLocationDeferrable;
 impl DeferrableSimple for ChairLocationDeferrable {
     const NAME: &str = "chair_locations";
 
@@ -49,26 +36,43 @@ impl DeferrableSimple for ChairLocationDeferrable {
 }
 
 #[derive(Debug)]
-pub struct Entry(DlSyncRwLock<EntryInner>);
-impl Entry {
-    fn new(coord: Coordinate, at: DateTime<Utc>) -> Self {
-        Self(DlSyncRwLock::new(EntryInner::new(coord, at)))
+pub struct LocationCache {
+    inner: DlSyncRwLock<Option<EntryInner>>,
+}
+impl LocationCache {
+    pub fn new() -> Self {
+        Self {
+            inner: DlSyncRwLock::new(None),
+        }
     }
-    fn update(&self, coord: Coordinate, at: DateTime<Utc>) -> Option<(Id<Ride>, RideStatusEnum)> {
-        self.0.write().update(coord, at)
+    pub fn update(
+        &self,
+        coord: Coordinate,
+        at: DateTime<Utc>,
+    ) -> Option<(Id<Ride>, RideStatusEnum)> {
+        let mut cache = self.inner.write();
+        match cache.as_mut() {
+            Some(d) => d.update(coord, at),
+            None => {
+                *cache = Some(EntryInner::new(coord, at));
+                None
+            }
+        }
     }
-    fn set_movement(&self, coord: Coordinate, next: RideStatusEnum, ride: Id<Ride>) {
-        self.0.write().set_movement(coord, next, ride);
+    pub fn set_movement(&self, coord: Coordinate, next: RideStatusEnum, ride: Id<Ride>) {
+        let mut c = self.inner.write();
+        c.as_mut().unwrap().set_movement(coord, next, ride);
     }
-    pub fn latest(&self) -> Coordinate {
-        self.0.read().latest_coord
+    pub fn latest(&self) -> Option<Coordinate> {
+        Some(self.inner.read().as_ref()?.latest_coord)
     }
-    fn get_total(&self) -> (i64, DateTime<Utc>) {
-        let e = self.0.read();
-        (e.total, e.updated_at)
+    pub fn get_total(&self) -> Option<(i64, DateTime<Utc>)> {
+        let e = self.inner.read();
+        let e = e.as_ref()?;
+        Some((e.total, e.updated_at))
     }
-    fn clear_movement(&self) {
-        self.0.write().clear_movement();
+    pub fn clear_movement(&self) {
+        self.inner.write().as_mut().unwrap().clear_movement();
     }
 }
 
@@ -114,19 +118,21 @@ impl EntryInner {
     }
 }
 
-struct ChairLocationCacheInit {
-    cache: HashMap<Id<Chair>, Entry>,
+pub(super) struct ChairLocationCacheInit {
+    pub cache: HashMap<Id<Chair>, LocationCache>,
 }
 impl ChairLocationCacheInit {
-    fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
+    pub(super) fn from_init(init: &mut CacheInit) -> ChairLocationCacheInit {
         init.locations.sort_unstable_by_key(|x| x.created_at);
 
-        let mut res: HashMap<Id<Chair>, Entry> = HashMap::default();
+        let mut res: HashMap<Id<Chair>, LocationCache> = HashMap::default();
         for loc in &init.locations {
             if let Some(c) = res.get_mut(&loc.chair_id) {
                 c.update(loc.coord(), loc.created_at);
             } else {
-                res.insert(loc.chair_id, Entry::new(loc.coord(), loc.created_at));
+                let c = LocationCache::new();
+                c.update(loc.coord(), loc.created_at);
+                res.insert(loc.chair_id, c);
             }
         }
 
@@ -183,42 +189,23 @@ impl ChairLocationCacheInit {
 }
 
 impl Repository {
-    pub(super) fn init_chair_location_cache(
-        pool: &Pool<MySql>,
-        init: &mut CacheInit,
-    ) -> ChairLocationCache {
-        let init = ChairLocationCacheInit::from_init(init);
-
-        Arc::new(ChairLocationCacheInner {
-            cache: DlSyncRwLock::new(init.cache),
-            deferred: SimpleDeferred::new(pool),
-        })
-    }
-
-    pub(super) fn reinit_chair_location_cache(&self, init: &mut CacheInit) {
-        let init = ChairLocationCacheInit::from_init(init);
-        *self.chair_location_cache.cache.write() = init.cache;
-    }
-}
-
-impl Repository {
     pub fn chair_location_get_latest(&self, id: Id<Chair>) -> Result<Option<Coordinate>> {
-        let cache = self.chair_location_cache.cache.read();
+        let cache = self.chair_cache.by_id.read();
         let Some(cache) = cache.get(&id) else {
             return Ok(None);
         };
-        Ok(Some(cache.latest()))
+        Ok(cache.loc.latest())
     }
 
     pub fn chair_total_distance(
         &self,
         chair_id: Id<Chair>,
     ) -> Result<Option<(i64, DateTime<Utc>)>> {
-        let cache = self.chair_location_cache.cache.read();
+        let cache = self.chair_cache.by_id.read();
         let Some(cache) = cache.get(&chair_id) else {
             return Ok(None);
         };
-        Ok(Some(cache.get_total()))
+        Ok(cache.loc.get_total())
     }
 
     pub fn chair_set_movement(
@@ -228,9 +215,9 @@ impl Repository {
         next: RideStatusEnum,
         ride: Id<Ride>,
     ) {
-        let cache = self.chair_location_cache.cache.read();
+        let cache = self.chair_cache.by_id.read();
         let cache = cache.get(&chair_id).unwrap();
-        cache.set_movement(coord, next, ride);
+        cache.loc.set_movement(coord, next, ride);
     }
 
     pub fn chair_location_update(
@@ -248,27 +235,19 @@ impl Repository {
             created_at,
         };
 
-        self.chair_location_cache.deferred.insert(c);
+        self.chair_cache.location_deferred.insert(c);
 
-        {
-            let (hit, update) = 'upd: {
-                if let Some(c) = self.chair_location_cache.cache.read().get(&chair_id) {
-                    break 'upd (true, c.update(coord, created_at));
-                }
-                (false, None)
-            };
-
-            if let Some((ride, status)) = update {
-                self.ride_status_update(ride, status).unwrap();
+        let update = {
+            if let Some(c) = self.chair_cache.by_id.read().get(&chair_id) {
+                c.loc.update(coord, created_at)
+            } else {
+                None
             }
+        };
 
-            if hit {
-                return Ok(created_at);
-            }
+        if let Some((ride, status)) = update {
+            self.ride_status_update(ride, status).unwrap();
         }
-
-        let mut cache = self.chair_location_cache.cache.write();
-        cache.insert(chair_id, Entry::new(coord, created_at));
 
         Ok(created_at)
     }

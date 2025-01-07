@@ -4,9 +4,10 @@ use chrono::{DateTime, Utc};
 use dashmap::SharedValue;
 use derivative::Derivative;
 use sqlx::{mysql::MySqlValueRef, Database, MySql};
+use std::borrow::Cow;
 use thiserror::Error;
 
-use crate::{ConcurrentHashMap, Coordinate};
+use crate::{ConcurrentHashSet, Coordinate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -140,17 +141,57 @@ impl<T> Id<T> {
     }
 }
 
-static STRING_TABLE: LazyLock<ConcurrentHashMap<&'static str, u64 /* hash of str */>> =
-    LazyLock::new(Default::default);
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SymbolHasherBuilder;
+impl std::hash::BuildHasher for SymbolHasherBuilder {
+    type Hasher = SymbolHasher;
+    fn build_hasher(&self) -> Self::Hasher {
+        SymbolHasher::new()
+    }
+}
 
-use std::borrow::Cow;
+#[derive(Debug)]
+pub struct SymbolHasher(Option<u64>);
+impl SymbolHasher {
+    fn new() -> Self {
+        Self(None)
+    }
+    fn unimp(&self) -> ! {
+        unimplemented!("expected single u64 hash only");
+    }
+}
+#[rustfmt::skip]
+impl std::hash::Hasher for SymbolHasher {
+    fn write_u64(&mut self, i: u64) {
+        if self.0.is_some() {
+            self.unimp();
+        }
+        self.0 = Some(i);
+    }
+    fn finish(&self) -> u64 {
+        let Some(&i) = self.0.as_ref() else {
+            self.unimp();
+        };
+        i
+    }
+    fn write(&mut self, _bytes: &[u8]) { self.unimp(); }
+    fn write_u8(&mut self, _i: u8) { self.unimp(); }
+    fn write_u16(&mut self, _i: u16) { self.unimp(); }
+    fn write_u32(&mut self, _i: u32) { self.unimp(); }
+    // write_u64
+    fn write_u128(&mut self, _i: u128) { self.unimp(); }
+    fn write_usize(&mut self, _i: usize) { self.unimp(); }
+    fn write_i8(&mut self, _i: i8) { self.unimp(); }
+    fn write_i16(&mut self, _i: i16) { self.unimp(); }
+    fn write_i32(&mut self, _i: i32) { self.unimp(); }
+    fn write_i64(&mut self, _i: i64) { self.unimp(); }
+    fn write_i128(&mut self, _i: i128) { self.unimp(); }
+    fn write_isize(&mut self, _i: isize) { self.unimp(); }
+}
 
 #[derive(Derivative, Clone, Copy)]
 #[derivative(Debug)]
-pub struct Symbol(
-    &'static str,
-    #[derivative(Debug = "ignore")] u64, /* hash */
-);
+pub struct Symbol(&'static str);
 impl PartialEq<Symbol> for Symbol {
     fn eq(&self, other: &Symbol) -> bool {
         std::ptr::eq(self.0, other.0)
@@ -159,16 +200,27 @@ impl PartialEq<Symbol> for Symbol {
 impl Eq for Symbol {}
 impl Hash for Symbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.1.hash(state);
+        // ptr を hash 値として使いたいわけだけど、 align の問題で
+        // ケツが常にキリのいい数字なので mod 取ったときにいい感じの分布にならず
+        // bucket が被りまくって、結果として hash 競合しまくって ptr::eq が呼ばれまくっている
+        // と予想して、スクランブルしていい感じにする。
+        // https://faithandbrave.hateblo.jp/entry/20121022/1350887537
+        let offset = 0x9e3779b9u64;
+        let addr = self.0.as_ptr() as usize as u64;
+        let addr = addr.wrapping_mul(offset).rotate_left(21);
+        state.write_u64(addr);
     }
 }
 impl Symbol {
     fn new_from_inner(s: Cow<'_, str>) -> Self {
-        if let Some(st) = STRING_TABLE.get(s.as_ref()) {
-            return Symbol(st.key(), *st.value());
-        }
+        static STRING_TABLE: LazyLock<ConcurrentHashSet<&'static str>> =
+            LazyLock::new(Default::default);
 
-        let table: &ConcurrentHashMap<_, _> = &*STRING_TABLE;
+        let table = &*STRING_TABLE;
+
+        if let Some(st) = table.get(s.as_ref()) {
+            return Symbol(st.key());
+        }
 
         let hash = table.hash_usize(&s);
         let shard_key = table.determine_shard(hash);
@@ -183,17 +235,13 @@ impl Symbol {
                 // TODO: use arena
                 let stored: &'static str = String::leak(s.into_owned());
                 unsafe {
-                    shard.insert_in_slot(
-                        hash as u64,
-                        slot,
-                        (stored, SharedValue::new(hash as u64)),
-                    );
+                    shard.insert_in_slot(hash as u64, slot, (stored, SharedValue::new(())));
                 }
                 stored
             }
         };
 
-        Self(s, hash as u64)
+        Self(s)
     }
 
     pub fn new_from_ref(s: &str) -> Self {

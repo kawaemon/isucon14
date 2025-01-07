@@ -54,7 +54,7 @@ impl Controller {
     }
     pub async fn body<T: DeserializeOwned>(&mut self) -> Result<T, Error> {
         let b = self.body.take().expect("body was already taken");
-        let b = b.collect().await?.to_bytes(); // TODO: lets see here
+        let b = b.collect().await?.to_bytes();
         let b = unsafe { sonic_rs::from_slice_unchecked(&b)? };
         Ok(b)
     }
@@ -136,11 +136,7 @@ impl Body for SseBody {
         let this = self.project();
         match this.event_stream.get_pin_mut().poll_next(cx) {
             Poll::Pending => Poll::Pending,
-            Poll::Ready(Some(Ok(event))) => {
-                // let s = String::from_utf8(event.buf.to_vec()).unwrap();
-                // println!("sse poll send: {s}");
-                Poll::Ready(Some(Ok(Frame::data(event.buf))))
-            }
+            Poll::Ready(Some(Ok(event))) => Poll::Ready(Some(Ok(Frame::data(event.buf)))),
             Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
             Poll::Ready(None) => Poll::Ready(None),
         }
@@ -175,10 +171,8 @@ impl Event {
         buf.extend_from_slice(b"data: ");
         sonic_rs::to_writer(&mut buf, &data).unwrap();
         debug_assert!(!buf.contains(&b'\n'));
-        buf.push(b'\n');
 
-        // finalize
-        buf.push(b'\n');
+        buf.extend_from_slice(b"\n\n");
 
         Self {
             buf: Bytes::from(buf),

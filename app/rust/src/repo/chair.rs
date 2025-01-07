@@ -1,3 +1,5 @@
+pub mod location;
+
 use crate::dl::DlSyncRwLock;
 use crate::models::Symbol;
 use crate::{AtomicDateTime, HashMap};
@@ -5,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
+use location::{ChairLocationCacheInit, ChairLocationDeferrable, LocationCache};
 use sqlx::{MySql, Pool, QueryBuilder};
 
 use crate::{
@@ -12,6 +15,7 @@ use crate::{
     models::{Chair, Id, Owner},
 };
 
+use super::deferred::SimpleDeferred;
 use super::{
     cache_init::CacheInit,
     deferred::{DeferrableMayUpdated, UpdatableDeferred},
@@ -43,6 +47,7 @@ pub struct ChairEntry {
     pub is_active: AtomicBool,
     pub updated_at: AtomicDateTime,
 
+    pub loc: LocationCache,
     pub stat: DlSyncRwLock<ChairStat>,
 }
 impl ChairEntry {
@@ -56,6 +61,7 @@ impl ChairEntry {
             is_active: AtomicBool::new(c.is_active),
             created_at: c.created_at,
             updated_at: AtomicDateTime::new(c.updated_at),
+            loc: LocationCache::new(),
             stat: DlSyncRwLock::new(ChairStat::new()),
         }
     }
@@ -105,9 +111,7 @@ impl ChairStat {
     fn update(&mut self, eval: i32, sales: i32, at: DateTime<Utc>) {
         self.total_evaluation += eval;
         self.total_rides += 1;
-        // 累積和を使えないことはないがライド数が大したことなさそうなのでこのままでいいや
-        // let last = self.sales.last_entry().map(|x| *x.get()).unwrap_or(0);
-        // self.sales.insert(at, last + sales);
+        // 累積和を使えるがライド数が大したことなさそうなのでこのままでいいや
         self.sales.insert(at, sales);
     }
     fn get_sales(&self, since: DateTime<Utc>, mut until: DateTime<Utc>) -> i32 {
@@ -123,6 +127,7 @@ pub struct ChairCacheInner {
     by_owner: DlSyncRwLock<HashMap<Id<Owner>, Vec<SharedChair>>>,
 
     deferred: UpdatableDeferred<ChairDeferrable>,
+    location_deferred: SimpleDeferred<ChairLocationDeferrable>,
 }
 
 pub struct ChairSalesStat {
@@ -187,11 +192,17 @@ struct ChairCacheInit {
 }
 impl ChairCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
+        let mut location = ChairLocationCacheInit::from_init(init);
+
         let mut bid = HashMap::default();
         let mut ac = HashMap::default();
         let mut owner = HashMap::default();
         for chair in &init.chairs {
-            let c = Arc::new(ChairEntry::new(chair.clone()));
+            let mut e = ChairEntry::new(chair.clone());
+            if let Some(d) = location.cache.remove(&e.id) {
+                e.loc = d;
+            }
+            let c = Arc::new(e);
             bid.insert(chair.id, Arc::clone(&c));
             ac.insert(chair.access_token, Arc::clone(&c));
             owner
@@ -228,6 +239,7 @@ impl Repository {
             by_access_token: DlSyncRwLock::new(init.by_access_token),
             by_owner: DlSyncRwLock::new(init.by_owner),
             deferred: UpdatableDeferred::new(pool),
+            location_deferred: SimpleDeferred::new(pool),
         })
     }
     pub(super) fn reinit_chair_cache(&self, init: &mut CacheInit) {
@@ -238,6 +250,7 @@ impl Repository {
             by_access_token,
             by_owner,
             deferred: _,
+            location_deferred: _,
         } = &*self.chair_cache;
         let mut id = by_id.write();
         let mut ac = by_access_token.write();
@@ -336,7 +349,7 @@ impl Repository {
         }
 
         if active {
-            self.ride_cache.on_chair_status_change(id, false);
+            self.on_chair_became_free(id);
             self.push_free_chair(id);
         }
 

@@ -1,6 +1,6 @@
 use sqlx::{MySql, Pool, QueryBuilder, Transaction};
 
-use crate::ConcurrentHashMap;
+use crate::ConcurrentSymbolMap;
 use crate::{dl::DlSyncRwLock, models::Symbol};
 use std::sync::Arc;
 
@@ -16,14 +16,14 @@ pub type PtCache = Arc<PtCacheInner>;
 
 #[derive(Debug)]
 pub struct PtCacheInner {
-    cache: DlSyncRwLock<ConcurrentHashMap<Id<User>, Symbol>>,
+    cache: DlSyncRwLock<ConcurrentSymbolMap<Id<User>, Symbol>>,
     deferred: SimpleDeferred<PaymentTokenDeferrable>,
 }
 
-pub type PtCacheInit = ConcurrentHashMap<Id<User>, Symbol>;
+pub type PtCacheInit = ConcurrentSymbolMap<Id<User>, Symbol>;
 
 fn init(init: &mut CacheInit) -> PtCacheInit {
-    let res = ConcurrentHashMap::default();
+    let res = ConcurrentSymbolMap::default();
     for t in &init.pt {
         res.insert(t.user_id, t.token);
     }

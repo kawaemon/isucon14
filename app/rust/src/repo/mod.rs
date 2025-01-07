@@ -2,7 +2,6 @@ pub mod cache_init;
 pub mod chair;
 pub mod coupon;
 pub mod deferred;
-pub mod location;
 pub mod model;
 pub mod owner;
 pub mod payment_token;
@@ -13,7 +12,6 @@ pub mod user;
 use cache_init::CacheInit;
 use chair::ChairCache;
 use coupon::CouponCache;
-use location::ChairLocationCache;
 use model::ChairModelCache;
 use owner::OwnerCache;
 use payment_token::PtCache;
@@ -35,7 +33,6 @@ pub struct Repository {
     owner_cache: OwnerCache,
     chair_cache: ChairCache,
     chair_model_cache: ChairModelCache,
-    chair_location_cache: ChairLocationCache,
     pub ride_cache: RideCache,
     pgw_cache: PgwCache,
     pt_cache: PtCache,
@@ -45,22 +42,23 @@ pub struct Repository {
 impl Repository {
     pub async fn new(pool: &Pool<MySql>) -> Self {
         let mut init = CacheInit::load(pool).await;
-
         let chair_cache = Self::init_chair_cache(pool, &mut init);
+
         let r = Self {
             pool: pool.clone(),
 
             user_cache: Self::init_user_cache(&mut init, pool),
             owner_cache: Self::init_owner_cache(&mut init, pool),
-            ride_cache: Self::init_ride_cache(&mut init, pool),
+            ride_cache: Self::init_ride_cache(&mut init, pool, &chair_cache),
             chair_model_cache: Self::init_chair_model_cache(pool).await,
             chair_cache,
-            chair_location_cache: Self::init_chair_location_cache(pool, &mut init),
             pgw_cache: Self::init_pgw_cache(pool).await,
             pt_cache: Self::init_pt_cache(&mut init, pool),
             coupon_cache: Self::init_coupon_cache(pool, &mut init),
         };
+
         tracing::info!("cache initialized");
+
         r
     }
 
@@ -70,8 +68,7 @@ impl Repository {
         self.reinit_user_cache(&mut init);
         self.reinit_owner_cache(&mut init);
         self.reinit_chair_cache(&mut init);
-        self.reinit_ride_cache(&mut init);
-        self.reinit_chair_location_cache(&mut init);
+        self.reinit_ride_cache(&mut init, &self.chair_cache);
         self.reinit_chair_model_cache().await;
         self.reinit_pgw_cache(&self.pool).await;
         self.reinit_pt_cache(&mut init);

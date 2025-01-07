@@ -2,7 +2,7 @@ use crate::app_handlers::AppGetNearbyChairsResponseChair;
 use crate::dl::DlSyncMutex;
 use crate::dl::DlSyncRwLock;
 use crate::ConcurrentHashMap;
-use crate::ConcurrentHashSet;
+use crate::ConcurrentSymbolMap;
 use crate::HashMap;
 use chrono::TimeDelta;
 use chrono::{DateTime, Utc};
@@ -14,7 +14,6 @@ use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI32;
-use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
@@ -22,6 +21,8 @@ use crate::{
     Coordinate,
 };
 
+use super::chair::ChairCache;
+use super::chair::ChairEntry;
 use super::deferred::UpdatableDeferred;
 use super::{cache_init::CacheInit, Repository, Result};
 
@@ -33,17 +34,17 @@ pub type RideCache = Arc<RideCacheInner>;
 
 #[derive(Debug)]
 pub struct RideCacheInner {
-    ride_cache: DlSyncRwLock<ConcurrentHashMap<Id<Ride>, Arc<RideEntry>>>,
-    user_rides: DlSyncRwLock<ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<Arc<RideEntry>>>>>,
+    ride_cache: DlSyncRwLock<ConcurrentSymbolMap<Id<Ride>, Arc<RideEntry>>>,
+    user_rides: DlSyncRwLock<ConcurrentSymbolMap<Id<User>, DlSyncRwLock<Vec<Arc<RideEntry>>>>>,
 
     waiting_rides: DlSyncMutex<Vec<(Arc<RideEntry>, Id<RideStatus>)>>,
-    free_chairs_lv1: DlSyncRwLock<ConcurrentHashSet<Id<Chair>>>,
+    free_chairs_lv1: DlSyncRwLock<ConcurrentHashMap<Id<Chair>, Arc<ChairEntry>>>,
     free_chairs_lv2: DlSyncMutex<Vec<Id<Chair>>>,
 
-    user_has_ride: DlSyncRwLock<ConcurrentHashMap<Id<User>, AtomicBool>>,
+    user_has_ride: DlSyncRwLock<ConcurrentSymbolMap<Id<User>, AtomicBool>>,
 
-    user_notification: DlSyncRwLock<ConcurrentHashMap<Id<User>, NotificationQueue>>,
-    chair_notification: DlSyncRwLock<ConcurrentHashMap<Id<Chair>, NotificationQueue>>,
+    user_notification: DlSyncRwLock<ConcurrentSymbolMap<Id<User>, NotificationQueue>>,
+    chair_notification: DlSyncRwLock<ConcurrentSymbolMap<Id<Chair>, NotificationQueue>>,
 
     ride_deferred: UpdatableDeferred<RideDeferred>,
     ride_status_deferred: UpdatableDeferred<RideStatusDeferrable>,
@@ -52,24 +53,24 @@ pub struct RideCacheInner {
 }
 
 struct RideCacheInit {
-    ride_cache: ConcurrentHashMap<Id<Ride>, Arc<RideEntry>>,
-    user_rides: ConcurrentHashMap<Id<User>, DlSyncRwLock<Vec<Arc<RideEntry>>>>,
+    ride_cache: ConcurrentSymbolMap<Id<Ride>, Arc<RideEntry>>,
+    user_rides: ConcurrentSymbolMap<Id<User>, DlSyncRwLock<Vec<Arc<RideEntry>>>>,
 
     waiting_rides: Vec<(Arc<RideEntry>, Id<RideStatus>)>,
-    free_chairs_lv1: ConcurrentHashSet<Id<Chair>>,
+    free_chairs_lv1: ConcurrentHashMap<Id<Chair>, Arc<ChairEntry>>,
     free_chairs_lv2: Vec<Id<Chair>>,
 
-    user_has_ride: ConcurrentHashMap<Id<User>, AtomicBool>,
+    user_has_ride: ConcurrentSymbolMap<Id<User>, AtomicBool>,
 
-    user_notification: ConcurrentHashMap<Id<User>, NotificationQueue>,
-    chair_notification: ConcurrentHashMap<Id<Chair>, NotificationQueue>,
+    user_notification: ConcurrentSymbolMap<Id<User>, NotificationQueue>,
+    chair_notification: ConcurrentSymbolMap<Id<Chair>, NotificationQueue>,
 }
 impl RideCacheInit {
-    fn from_init(init: &mut CacheInit) -> Self {
+    fn from_init(init: &mut CacheInit, chair_cache: &ChairCache) -> Self {
         init.rides.sort_unstable_by_key(|x| x.created_at);
         init.ride_statuses.sort_unstable_by_key(|x| x.created_at);
 
-        let statuses = ConcurrentHashMap::default();
+        let statuses = ConcurrentSymbolMap::default();
         for status in &init.ride_statuses {
             statuses
                 .entry(status.ride_id)
@@ -80,7 +81,7 @@ impl RideCacheInit {
         //
         // status cache
         //
-        let latest_ride_stat = ConcurrentHashMap::default();
+        let latest_ride_stat = ConcurrentSymbolMap::default();
         for stat in &init.ride_statuses {
             latest_ride_stat.insert(stat.ride_id, stat.status);
         }
@@ -88,7 +89,7 @@ impl RideCacheInit {
         //
         // user_notification
         //
-        let user_notification = ConcurrentHashMap::default();
+        let user_notification = ConcurrentSymbolMap::default();
         for user in &init.users {
             user_notification.insert(user.id, NotificationQueue::new());
         }
@@ -109,7 +110,7 @@ impl RideCacheInit {
         //
         // chair_notification
         //
-        let chair_notification = ConcurrentHashMap::default();
+        let chair_notification = ConcurrentSymbolMap::default();
         for chair in &init.chairs {
             chair_notification.insert(chair.id, NotificationQueue::new());
         }
@@ -135,7 +136,7 @@ impl RideCacheInit {
         //
         // rides
         //
-        let rides = ConcurrentHashMap::default();
+        let rides = ConcurrentSymbolMap::default();
         for ride in &init.rides {
             rides.insert(
                 ride.id,
@@ -157,7 +158,7 @@ impl RideCacheInit {
         // chair_movement_cache
         //
         let mut chair_movement_cache = HashMap::default();
-        let user_has_ride = ConcurrentHashMap::default();
+        let user_has_ride = ConcurrentSymbolMap::default();
         for ride in &init.rides {
             let chair_id = ride.chair_id.as_ref();
             let ride = rides.get(&ride.id).unwrap();
@@ -209,7 +210,7 @@ impl RideCacheInit {
         //
         // free_chairs
         //
-        let free_chairs_lv1 = ConcurrentHashSet::default();
+        let free_chairs_lv1 = ConcurrentHashMap::default();
         let mut free_chairs_lv2 = Vec::default();
         for chair in &init.chairs {
             let n = chair_notification.get(&chair.id).unwrap();
@@ -228,7 +229,9 @@ impl RideCacheInit {
                 unreachable!()
             }
             if lv1 {
-                free_chairs_lv1.insert(chair.id);
+                let chair_cache = chair_cache.by_id.read();
+                let chair_entry = chair_cache.get(&chair.id).unwrap();
+                free_chairs_lv1.insert(chair.id, Arc::clone(chair_entry));
             }
 
             // active かつ最後の通知が Completed でそれが送信済みであればいい
@@ -245,7 +248,7 @@ impl RideCacheInit {
         //
         // user_rides
         //
-        let user_rides = ConcurrentHashMap::default();
+        let user_rides = ConcurrentSymbolMap::default();
         for user in &init.users {
             user_rides.insert(user.id, DlSyncRwLock::new(Vec::new()));
         }
@@ -269,8 +272,12 @@ impl RideCacheInit {
 }
 
 impl Repository {
-    pub(super) fn init_ride_cache(init: &mut CacheInit, pool: &Pool<MySql>) -> RideCache {
-        let init = RideCacheInit::from_init(init);
+    pub(super) fn init_ride_cache(
+        init: &mut CacheInit,
+        pool: &Pool<MySql>,
+        chair_cache: &ChairCache,
+    ) -> RideCache {
+        let init = RideCacheInit::from_init(init, chair_cache);
         Arc::new(RideCacheInner {
             user_notification: DlSyncRwLock::new(init.user_notification),
             chair_notification: DlSyncRwLock::new(init.chair_notification),
@@ -285,8 +292,8 @@ impl Repository {
             user_has_ride: DlSyncRwLock::new(init.user_has_ride),
         })
     }
-    pub(super) fn reinit_ride_cache(&self, init: &mut CacheInit) {
-        let init = RideCacheInit::from_init(init);
+    pub(super) fn reinit_ride_cache(&self, init: &mut CacheInit, chair_cache: &ChairCache) {
+        let init = RideCacheInit::from_init(init, chair_cache);
 
         let RideCacheInner {
             ride_cache,
@@ -321,23 +328,19 @@ impl Repository {
 }
 
 impl Repository {
-    pub fn chair_huifhiubher(
+    pub fn chair_nearby(
         &self,
         coord: Coordinate,
-        dist: i32,
+        distance: i32,
     ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
         let free_chair_cache = self.ride_cache.free_chairs_lv1.read();
-        let loc_cache = self.chair_location_cache.cache.read();
-        let chair_cache = self.chair_cache.by_id.read();
 
         let mut res = vec![];
         for chair in free_chair_cache.iter() {
-            let Some(chair_coord) = loc_cache.get(&*chair) else {
+            let Some(chair_coord) = chair.loc.latest() else {
                 continue;
             };
-            let chair_coord = chair_coord.latest();
-            if chair_coord.distance(coord) <= dist {
-                let chair = chair_cache.get(&*chair).unwrap();
+            if chair_coord.distance(coord) <= distance {
                 res.push(AppGetNearbyChairsResponseChair {
                     id: chair.id,
                     name: chair.name,
@@ -369,6 +372,17 @@ impl Repository {
             });
         }
     }
+
+    pub fn on_chair_became_free(&self, chair: Id<Chair>) {
+        let chair_cache = self.chair_cache.by_id.read();
+        let chair_entry = chair_cache.get(&chair).unwrap();
+        let cache = self.ride_cache.free_chairs_lv1.read();
+        cache.insert(chair, chair_entry.clone());
+    }
+    pub fn on_chair_went_on_duty(&self, id: Id<Chair>) {
+        let cache = self.ride_cache.free_chairs_lv1.read();
+        cache.remove(&id);
+    }
 }
 
 impl RideCacheInner {
@@ -382,14 +396,6 @@ impl RideCacheInner {
         self.chair_notification
             .read()
             .insert(id, NotificationQueue::new());
-    }
-    pub fn on_chair_status_change(&self, id: Id<Chair>, on_duty: bool) {
-        let cache = self.free_chairs_lv1.read();
-        if on_duty {
-            cache.remove(&id);
-        } else {
-            cache.insert(id);
-        }
     }
 }
 
@@ -621,15 +627,21 @@ pub static SCORE_TARGET: AtomicI32 = AtomicI32::new(200);
 crate::conf_env!(
     static WAITING_PENALTY_PROB: f64 = {
         from: "WAITING_PENALTY_PROB",
-        default: "0.5",
+        // default: "0.5",
+        default: "1",
     }
 );
 crate::conf_env!(
     static WAITING_PENALTY: i32 = {
         from: "WAITING_PENALTY",
-        default: "100",
+        default: "1000",
     }
 );
+
+#[inline(always)]
+fn score_2_ok(chair: &AvailableChair, ride: &RideEntry) -> bool {
+    chair.coord.distance(ride.pickup) < 10 * chair.speed
+}
 
 // これを最小化する
 #[inline(always)]
@@ -643,7 +655,7 @@ fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
     let distance = pickup_distance * 10 + ride.pickup.distance(ride.destination);
     let mut score = distance / chair.speed;
 
-    if pickup_distance >= 10 * chair.speed && rand::thread_rng().gen_bool(*WAITING_PENALTY_PROB) {
+    if !score_2_ok(chair, ride) && rand::thread_rng().gen_bool(*WAITING_PENALTY_PROB) {
         score += *WAITING_PENALTY;
     }
 
@@ -652,56 +664,6 @@ fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
 
 type Workers = Vec<AvailableChair>;
 type Jobs = Vec<(Arc<RideEntry>, Id<RideStatus>)>;
-fn solve_greedy(mut avail: Workers, waiting_rides: Jobs) -> (Workers, Jobs, Vec<Pair>) {
-    let mut pairs = vec![];
-    let mut redu = vec![];
-
-    for (ride, status_id) in waiting_rides {
-        let Some((best_index, best, score)) = avail
-            .iter()
-            .enumerate()
-            .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
-            .map(|(i, x)| (i, x, score(x, &ride)))
-            .min_by_key(|(_, _, d)| *d)
-        else {
-            redu.push((ride, status_id));
-            continue;
-        };
-        let chair = best.chair;
-        avail.remove(best_index);
-        pairs.push(Pair {
-            chair_id: chair,
-            ride_id: ride.id,
-            status_id,
-            score,
-        });
-    }
-
-    let mut redu2 = vec![];
-
-    for (ride, status_id) in redu {
-        let Some((best_index, best, score)) = avail
-            .iter()
-            .enumerate()
-            // .filter(|(_i, x)| x.coord.distance(ride.pickup) < 10 * x.speed)
-            .map(|(i, x)| (i, x, score(x, &ride)))
-            .min_by_key(|(_, _, d)| *d)
-        else {
-            redu2.push((ride, status_id));
-            continue;
-        };
-        let chair = best.chair;
-        avail.remove(best_index);
-        pairs.push(Pair {
-            chair_id: chair,
-            ride_id: ride.id,
-            status_id,
-            score,
-        });
-    }
-
-    (avail, redu2, pairs)
-}
 
 fn solve_pathfinding_isekai_joucho(
     workers: Workers,
@@ -756,11 +718,15 @@ fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pa
     let mut urgent_jobs = vec![];
     let mut ok_jobs = vec![];
     let now = Utc::now();
-    crate::conf_env!(static URGENT_THRESHOLD_SEC: i64 = {
-        from: "URGENT_THRESHOLD_SEC",
-        default: "24",
+
+    // const ONE_TICK_DURATION: Duration = Duration::from_millis(30);
+    // const SCORE1_TICK_COUNT: usize = 100
+
+    crate::conf_env!(static URGENT_THRESHOLD_MS: i64 = {
+        from: "URGENT_THRESHOLD_MS",
+        default: "25000",
     });
-    let urgent_threshold = TimeDelta::seconds(*URGENT_THRESHOLD_SEC);
+    let urgent_threshold = TimeDelta::milliseconds(*URGENT_THRESHOLD_MS);
     for task in jobs {
         let elapsed = now - task.0.created_at;
         if elapsed > urgent_threshold {
@@ -770,12 +736,7 @@ fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pa
         }
     }
 
-    let urgents = urgent_jobs.len();
     let (rw, rj, p, score) = solve_pathfinding_rim(workers, urgent_jobs);
-
-    if urgents > 0 && p.len() != urgents {
-        tracing::warn!("urgents, found={urgents}, matched={}", p.len());
-    }
 
     let (rw, mut rj2, mut p2, score2) = solve_pathfinding_rim(rw, ok_jobs);
 
@@ -818,7 +779,7 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         weights.transpose();
         transposed = true;
     }
-    let (_sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
+    let (reported_sum, pairs) = pathfinding::kuhn_munkres::kuhn_munkres_min(&weights);
 
     let mut worker_used = vec![false; workers.len()];
     let mut task_used = vec![false; jobs.len()];
@@ -840,7 +801,7 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
             chair_id: worker.chair,
             ride_id: task.0.id,
             status_id: task.1,
-            score: score(worker, &task.0),
+            score: weights[(i, pairs[i])],
         });
     }
 
@@ -858,6 +819,7 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     }
 
     let sum = res.iter().map(|x| x.score).sum();
+    assert_eq!(sum, reported_sum, "wrong score calculcation");
     (redu_workers, redu_jobs, res, sum)
 }
 

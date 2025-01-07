@@ -132,7 +132,7 @@ fn chair_get_notification_inner(
             let repo = state.repo.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(Duration::from_millis(*CHAIR_MATCHING_DELAY_MS)).await;
-                repo.ride_cache.on_chair_status_change(chair_id, false);
+                repo.on_chair_became_free(chair_id);
                 repo.push_free_chair(chair_id);
             });
         }
