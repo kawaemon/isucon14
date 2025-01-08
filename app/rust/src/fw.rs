@@ -18,6 +18,17 @@ use crate::models::{Owner, Symbol, User};
 use crate::repo::chair::EffortlessChair;
 use crate::{AppState, Error};
 
+pub trait SerializeJson {
+    fn size_hint(&self) -> usize;
+    fn ser(&self, buf: &mut String);
+}
+impl SerializeJson for () {
+    fn size_hint(&self) -> usize {
+        0
+    }
+    fn ser(&self, _buf: &mut String) {}
+}
+
 pub struct Controller {
     /// can be read once
     body: Option<Incoming>,

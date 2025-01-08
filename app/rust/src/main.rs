@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 
-use isuride::fw::{Controller, SseBody};
+use isuride::fw::{Controller, SerializeJson, SseBody};
 use isuride::models::Id;
 
 #[tokio::main]

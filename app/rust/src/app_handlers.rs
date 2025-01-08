@@ -1,4 +1,4 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use chrono::Utc;
 use cookie::Cookie;
@@ -6,27 +6,31 @@ use hyper::StatusCode;
 use serde::Serialize;
 use tokio_stream::StreamExt;
 
-use crate::fw::{BoxStream, Controller, Event};
-use crate::models::{Chair, Coupon, Id, Owner, Ride, RideStatusEnum, Symbol, User};
+use crate::fw::{BoxStream, Controller, Event, SerializeJson};
+use crate::models::{
+    Chair, Coupon, Id, InvitationCode, Owner, Ride, RideStatusEnum, Symbol, User, COUPON_CP_NEW2024,
+};
 use crate::repo::ride::NotificationBody;
 use crate::repo::Repository;
 use crate::{AppState, Coordinate, Error};
 
-pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+pub async fn app_post_users(
+    c: &mut Controller,
+) -> Result<(StatusCode, impl serde::Serialize), Error> {
     #[derive(Debug, serde::Deserialize)]
     struct Req {
         username: Symbol,
         firstname: Symbol,
         lastname: Symbol,
         date_of_birth: Symbol,
-        invitation_code: Option<Symbol>,
+        invitation_code: Option<InvitationCode>,
     }
     let req: Req = c.body().await?;
     let state = &c.state();
 
     let user_id = Id::new();
     let access_token = Symbol::new_from(crate::secure_random_str(8));
-    let invitation_code = Symbol::new_from(crate::secure_random_str(8));
+    let invitation_code = InvitationCode::new();
 
     state.repo.user_add(
         user_id,
@@ -39,13 +43,12 @@ pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl Seri
     )?;
 
     // 初回登録キャンペーンのクーポンを付与
-    state.repo.coupon_add(user_id, *CP_NEW2024, 3000)?;
+    state.repo.coupon_add(user_id, *COUPON_CP_NEW2024, 3000)?;
 
     // 招待コードを使った登録
-    if let Some(req_invitation_code) = req.invitation_code {
-        let r_str = req_invitation_code.resolve();
-        if !r_str.is_empty() {
-            let inv_prefixed_code = Symbol::new_from(format!("INV_{r_str}"));
+    if let Some(req_inv_code) = req.invitation_code {
+        if !req_inv_code.is_empty() {
+            let inv_prefixed_code = req_inv_code.gen_for_invited();
             // 招待する側の招待数をチェック
             let coupons = state.repo.coupon_get_count_by_code(inv_prefixed_code)?;
             if coupons >= 3 {
@@ -53,20 +56,16 @@ pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl Seri
             }
 
             // ユーザーチェック
-            let Some(inviter): Option<User> =
-                state.repo.user_get_by_inv_code(req_invitation_code)?
-            else {
+            let Some(inviter): Option<User> = state.repo.user_get_by_inv_code(req_inv_code)? else {
                 return Err(Error::BadRequest("この招待コードは使用できません。"));
             };
 
             // 招待クーポン付与
             state.repo.coupon_add(user_id, inv_prefixed_code, 1500)?;
             // 招待した人にもRewardを付与
-            state.repo.coupon_add(
-                inviter.id,
-                Symbol::new_from(format!("RWD_{}", Id::<Coupon>::new().resolve())),
-                1000,
-            )?;
+            state
+                .repo
+                .coupon_add(inviter.id, req_inv_code.gen_for_reward(), 1000)?;
         }
     }
 
@@ -75,7 +74,15 @@ pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl Seri
     #[derive(Debug, serde::Serialize)]
     struct Res {
         id: Id<User>,
-        invitation_code: Symbol,
+        invitation_code: InvitationCode,
+    }
+    impl SerializeJson for Res {
+        fn size_hint(&self) -> usize {
+            todo!()
+        }
+        fn ser(&self, buf: &mut String) {
+            todo!()
+        }
     }
     Ok((
         StatusCode::CREATED,
@@ -174,8 +181,6 @@ struct AppPostRidesResponse {
     fare: i32,
 }
 
-static CP_NEW2024: LazyLock<Symbol> = LazyLock::new(|| Symbol::new_from_ref("CP_NEW2024"));
-
 pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
     #[derive(Debug, serde::Deserialize)]
     struct Req {
@@ -204,7 +209,7 @@ pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl Seri
 
     let coupon_candidate = unused_coupons
         .iter()
-        .find(|x| x.code == *CP_NEW2024)
+        .find(|x| x.code == *COUPON_CP_NEW2024)
         .or(unused_coupons.first());
     if let Some(coupon) = coupon_candidate {
         state.repo.coupon_set_used(user.id, coupon.code, ride_id)?;
@@ -446,7 +451,7 @@ fn calculate_discounted_fare(
         } else {
             // 初回利用クーポンを最優先で使う
             let unused_coupons = repo.coupon_get_unused_order_by_created_at(user_id)?;
-            if let Some(coupon) = unused_coupons.iter().find(|x| x.code == *CP_NEW2024) {
+            if let Some(coupon) = unused_coupons.iter().find(|x| x.code == *COUPON_CP_NEW2024) {
                 coupon.discount
             } else {
                 // 無いなら他のクーポンを付与された順番に使う

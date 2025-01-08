@@ -7,7 +7,7 @@ use sqlx::{mysql::MySqlValueRef, Database, MySql};
 use std::borrow::Cow;
 use thiserror::Error;
 
-use crate::{ConcurrentHashSet, Coordinate};
+use crate::{fw::SerializeJson, ConcurrentHashSet, Coordinate};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -93,6 +93,14 @@ pub struct Id<T>(
     Symbol,
     #[derivative(Debug = "ignore")] PhantomData<fn() -> T>,
 );
+impl<T> SerializeJson for Id<T> {
+    fn size_hint(&self) -> usize {
+        ulid::ULID_LEN
+    }
+    fn ser(&self, buf: &mut String) {
+        buf.push_str(self.0.resolve());
+    }
+}
 impl<T> From<&Id<T>> for reqwest::header::HeaderValue {
     fn from(val: &Id<T>) -> Self {
         reqwest::header::HeaderValue::from_str(val.resolve()).unwrap()
@@ -290,6 +298,87 @@ impl<'r> sqlx::Decode<'r, MySql> for Symbol {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct InvitationCode(Symbol);
+impl sqlx::Type<sqlx::MySql> for InvitationCode {
+    fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
+        String::type_info()
+    }
+    fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
+        String::compatible(ty)
+    }
+}
+impl<'r> sqlx::Encode<'r, MySql> for InvitationCode {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        self.0.resolve().encode_by_ref(buf)
+    }
+}
+impl<'r> sqlx::Decode<'r, MySql> for InvitationCode {
+    fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        Ok(Self(Symbol::decode(value)?))
+    }
+}
+impl InvitationCode {
+    pub fn new() -> Self {
+        InvitationCode(Symbol::new_from(crate::secure_random_str(8)))
+    }
+    pub fn gen_for_invited(&self) -> CouponCode {
+        CouponCode(Symbol::new_from(format!("I{}", self.0.resolve())))
+    }
+    pub fn gen_for_reward(&self) -> CouponCode {
+        CouponCode(Symbol::new_from(format!("R{}", ulid::Ulid::new())))
+    }
+    pub fn is_empty(&self) -> bool {
+        let is_empty = self.0.resolve().is_empty();
+        assert!(!is_empty);
+        is_empty
+    }
+    pub fn as_symbol(&self) -> Symbol {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct CouponCode(Symbol);
+
+pub static COUPON_CP_NEW2024: LazyLock<CouponCode> =
+    LazyLock::new(|| CouponCode(Symbol::new_from_ref("CP_NEW2024")));
+
+impl sqlx::Type<sqlx::MySql> for CouponCode {
+    fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
+        String::type_info()
+    }
+    fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
+        String::compatible(ty)
+    }
+}
+impl<'r> sqlx::Encode<'r, MySql> for CouponCode {
+    fn encode_by_ref(
+        &self,
+        buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
+    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+        self.0.resolve().encode_by_ref(buf)
+    }
+}
+impl<'r> sqlx::Decode<'r, MySql> for CouponCode {
+    fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+        Ok(Self(Symbol::decode(value)?))
+    }
+}
+impl CouponCode {
+    pub fn is_empty(&self) -> bool {
+        let is_empty = self.0.resolve().is_empty();
+        assert!(!is_empty);
+        is_empty
+    }
+    pub fn as_symbol(&self) -> Symbol {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Chair {
     pub id: Id<Chair>,
@@ -327,7 +416,7 @@ pub struct User {
     pub lastname: Symbol,
     pub date_of_birth: Symbol,
     pub access_token: Symbol,
-    pub invitation_code: Symbol,
+    pub invitation_code: InvitationCode,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -396,7 +485,7 @@ pub struct Owner {
 #[derive(Debug, sqlx::FromRow)]
 pub struct Coupon {
     pub user_id: Id<User>,
-    pub code: Symbol,
+    pub code: CouponCode,
     pub discount: i32,
     pub created_at: DateTime<Utc>,
     pub used_by: Option<Id<Ride>>,

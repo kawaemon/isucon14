@@ -1,4 +1,8 @@
-use crate::{dl::DlSyncRwLock, models::Symbol, ConcurrentSymbolMap};
+use crate::{
+    dl::DlSyncRwLock,
+    models::{InvitationCode, Symbol},
+    ConcurrentSymbolMap,
+};
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -19,7 +23,7 @@ type SharedUser = Arc<User>;
 pub struct UserCacheInner {
     by_id: Arc<DlSyncRwLock<ConcurrentSymbolMap<Id<User>, SharedUser>>>,
     by_token: Arc<DlSyncRwLock<ConcurrentSymbolMap<Symbol, SharedUser>>>,
-    by_inv_code: Arc<DlSyncRwLock<ConcurrentSymbolMap<Symbol, SharedUser>>>,
+    by_inv_code: Arc<DlSyncRwLock<ConcurrentSymbolMap<InvitationCode, SharedUser>>>,
     deferred: SimpleDeferred<UserDeferrable>,
 }
 
@@ -38,7 +42,7 @@ impl UserCacheInner {
 pub struct UserCacheInit {
     by_id: ConcurrentSymbolMap<Id<User>, SharedUser>,
     by_token: ConcurrentSymbolMap<Symbol, SharedUser>,
-    by_inv_code: ConcurrentSymbolMap<Symbol, SharedUser>,
+    by_inv_code: ConcurrentSymbolMap<InvitationCode, SharedUser>,
 }
 impl UserCacheInit {
     fn from_init(init: &mut CacheInit) -> Self {
@@ -104,7 +108,7 @@ impl Repository {
         };
         Ok(Some(User::clone(&*entry)))
     }
-    pub fn user_get_by_inv_code(&self, code: Symbol) -> Result<Option<User>> {
+    pub fn user_get_by_inv_code(&self, code: InvitationCode) -> Result<Option<User>> {
         let cache = self.user_cache.by_inv_code.read();
         let Some(entry) = cache.get(&code) else {
             return Ok(None);
@@ -121,7 +125,7 @@ impl Repository {
         last: Symbol,
         dob: Symbol,
         token: Symbol,
-        inv_code: Symbol,
+        inv_code: InvitationCode,
     ) -> Result<()> {
         let now = Utc::now();
 
@@ -132,7 +136,7 @@ impl Repository {
             lastname: last.to_owned(),
             date_of_birth: dob.to_owned(),
             access_token: token.to_owned(),
-            invitation_code: inv_code.to_owned(),
+            invitation_code: inv_code,
             created_at: now,
             updated_at: now,
         };
@@ -161,7 +165,7 @@ impl DeferrableSimple for UserDeferrable {
                 .push_bind(i.lastname)
                 .push_bind(i.date_of_birth)
                 .push_bind(i.access_token)
-                .push_bind(i.invitation_code)
+                .push_bind(i.invitation_code.as_symbol())
                 .push_bind(i.created_at)
                 .push_bind(i.updated_at);
         });
