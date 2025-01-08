@@ -669,6 +669,16 @@ fn score_2_ok(chair: &AvailableChair, ride: &RideEntry) -> bool {
 }
 
 // これを最小化する
+crate::conf_env! {
+    static SCORE_TARGET: i32 = {
+        from: "SCORE_TARGET",
+        default: "125",
+    }
+}
+#[inline(always)]
+fn score_target(chair: &AvailableChair, ride: &RideEntry, target: i32) -> i32 {
+    score(chair, ride).abs_diff(target) as i32
+}
 #[inline(always)]
 fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
     let pickup_distance = chair.coord.distance(ride.pickup);
@@ -820,10 +830,11 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     //   かといってガン無視するとライド数が足りなくなる。(70万行かないぐらい)
     // 確率的にマッチするようにしたい。
 
+    let target = *SCORE_TARGET;
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
         let task = &jobs[y];
         let worker = &workers[x];
-        score(worker, &task.0)
+        score_target(worker, &task.0, target)
     });
 
     let mut transposed = false;
