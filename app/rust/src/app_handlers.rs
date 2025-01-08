@@ -1,10 +1,8 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::Utc;
 use cookie::Cookie;
 use hyper::StatusCode;
-use rand::Rng;
 use serde::Serialize;
 use tokio_stream::StreamExt;
 
@@ -15,13 +13,6 @@ use crate::models::{
 use crate::repo::ride::NotificationBody;
 use crate::repo::Repository;
 use crate::{AppState, Coordinate, Error};
-
-crate::conf_env! {
-    static CREATE_USER_DELAY_PROB: f64 = {
-        from: "CREATE_USER_DELAY_PROB",
-        default: "0.1",
-    }
-}
 
 pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl SerializeJson), Error> {
     #[derive(Debug, serde::Deserialize)]
@@ -34,10 +25,6 @@ pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl Seri
     }
     let req: Req = c.body().await?;
     let state = &c.state();
-
-    if rand::thread_rng().gen_bool(*CREATE_USER_DELAY_PROB) {
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
 
     let user_id = Id::new();
     let access_token = Symbol::new_from(crate::secure_random_str(8));
