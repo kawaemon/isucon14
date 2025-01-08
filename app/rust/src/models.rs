@@ -35,7 +35,7 @@ impl<'r> sqlx::Encode<'r, MySql> for RideStatusEnum {
 }
 impl<'r> sqlx::Decode<'r, MySql> for RideStatusEnum {
     fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        let s = <String as sqlx::Decode<MySql>>::decode(value)?;
+        let s = <&str as sqlx::Decode<MySql>>::decode(value)?;
         let r = s.parse()?;
         Ok(r)
     }
@@ -45,12 +45,13 @@ impl sqlx::Type<sqlx::MySql> for RideStatusEnum {
         String::type_info()
     }
     fn compatible(_ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
-        true // w
+        true // enum の比較めんどくさい！ここでミスっても大したことない！ FromStr で Err 落ちするから大丈夫！多分！
     }
 }
-impl std::fmt::Display for RideStatusEnum {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
+impl RideStatusEnum {
+    #[inline(always)]
+    fn as_str(&self) -> &str {
+        match self {
             RideStatusEnum::Matching => "MATCHING",
             RideStatusEnum::Enroute => "ENROUTE",
             RideStatusEnum::Pickup => "PICKUP",
@@ -58,8 +59,22 @@ impl std::fmt::Display for RideStatusEnum {
             RideStatusEnum::Arrived => "ARRIVED",
             RideStatusEnum::Completed => "COMPLETED",
             RideStatusEnum::Canceled => "CANCELED",
-        };
-        write!(f, "{s}")
+        }
+    }
+}
+impl SerializeJson for RideStatusEnum {
+    fn size_est(&self) -> usize {
+        "COMPLETED".len() + 2
+    }
+    fn ser(&self, buf: &mut String) {
+        buf.push('"');
+        buf.push_str(self.as_str());
+        buf.push('"');
+    }
+}
+impl std::fmt::Display for RideStatusEnum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
     }
 }
 impl FromStr for RideStatusEnum {
@@ -93,12 +108,15 @@ pub struct Id<T>(
     Symbol,
     #[derivative(Debug = "ignore")] PhantomData<fn() -> T>,
 );
+sqlx_forward_symbol!(impl<T> for Id<T>);
 impl<T> SerializeJson for Id<T> {
-    fn size_hint(&self) -> usize {
-        ulid::ULID_LEN
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        const { ulid::ULID_LEN + 2 }
     }
+    #[inline(always)]
     fn ser(&self, buf: &mut String) {
-        buf.push_str(self.0.resolve());
+        self.0.ser(buf);
     }
 }
 impl<T> From<&Id<T>> for reqwest::header::HeaderValue {
@@ -116,33 +134,15 @@ impl<'de, T> serde::Deserialize<'de> for Id<T> {
         Ok(Self::new_from(Symbol::deserialize(deserializer)?))
     }
 }
-impl<'r, T> sqlx::Encode<'r, MySql> for Id<T> {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        self.resolve().encode_by_ref(buf)
-    }
-}
-impl<'r, T> sqlx::Decode<'r, MySql> for Id<T> {
-    fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        Ok(Id::new_from(Symbol::decode(value)?))
-    }
-}
-impl<T> sqlx::Type<sqlx::MySql> for Id<T> {
-    fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
-        String::type_info()
-    }
-    fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
-        String::compatible(ty)
-    }
-}
 impl<T> Id<T> {
     pub fn new() -> Self {
         Self::new_from(Symbol::new_from(ulid::Ulid::new().to_string()))
     }
+    fn from_symbol(s: Symbol) -> Self {
+        Self(s, PhantomData)
+    }
     pub fn new_from(s: Symbol) -> Self {
-        Id(s, PhantomData)
+        Self(s, PhantomData)
     }
     pub fn resolve(&self) -> &'static str {
         self.0.resolve()
@@ -200,6 +200,18 @@ impl std::hash::Hasher for SymbolHasher {
 #[derive(Derivative, Clone, Copy)]
 #[derivative(Debug)]
 pub struct Symbol(&'static str);
+impl SerializeJson for Symbol {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        self.0.len() + 2
+    }
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        buf.push('"');
+        buf.push_str(self.resolve());
+        buf.push('"');
+    }
+}
 impl PartialEq<Symbol> for Symbol {
     fn eq(&self, other: &Symbol) -> bool {
         std::ptr::eq(self.0, other.0)
@@ -300,30 +312,23 @@ impl<'r> sqlx::Decode<'r, MySql> for Symbol {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct InvitationCode(Symbol);
-impl sqlx::Type<sqlx::MySql> for InvitationCode {
-    fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
-        String::type_info()
+sqlx_forward_symbol!(impl for InvitationCode);
+impl SerializeJson for InvitationCode {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        const { 16 + 2 }
     }
-    fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
-        String::compatible(ty)
-    }
-}
-impl<'r> sqlx::Encode<'r, MySql> for InvitationCode {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        self.0.resolve().encode_by_ref(buf)
-    }
-}
-impl<'r> sqlx::Decode<'r, MySql> for InvitationCode {
-    fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        Ok(Self(Symbol::decode(value)?))
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        self.0.ser(buf);
     }
 }
 impl InvitationCode {
     pub fn new() -> Self {
         InvitationCode(Symbol::new_from(crate::secure_random_str(8)))
+    }
+    fn from_symbol(s: Symbol) -> Self {
+        Self(s)
     }
     pub fn gen_for_invited(&self) -> CouponCode {
         CouponCode(Symbol::new_from(format!("I{}", self.0.resolve())))
@@ -341,34 +346,26 @@ impl InvitationCode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct CouponCode(Symbol);
-
 pub static COUPON_CP_NEW2024: LazyLock<CouponCode> =
     LazyLock::new(|| CouponCode(Symbol::new_from_ref("CP_NEW2024")));
 
-impl sqlx::Type<sqlx::MySql> for CouponCode {
-    fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
-        String::type_info()
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct CouponCode(Symbol);
+sqlx_forward_symbol!(impl for CouponCode);
+impl SerializeJson for CouponCode {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        const { 16 + 2 + 1 }
     }
-    fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
-        String::compatible(ty)
-    }
-}
-impl<'r> sqlx::Encode<'r, MySql> for CouponCode {
-    fn encode_by_ref(
-        &self,
-        buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
-    ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
-        self.0.resolve().encode_by_ref(buf)
-    }
-}
-impl<'r> sqlx::Decode<'r, MySql> for CouponCode {
-    fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
-        Ok(Self(Symbol::decode(value)?))
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        self.0.ser(buf);
     }
 }
 impl CouponCode {
+    fn from_symbol(s: Symbol) -> Self {
+        Self(s)
+    }
     pub fn is_empty(&self) -> bool {
         let is_empty = self.0.resolve().is_empty();
         assert!(!is_empty);
@@ -378,6 +375,33 @@ impl CouponCode {
         self.0
     }
 }
+
+macro_rules! sqlx_forward_symbol {
+    (impl$(<$generic:ident>)? for $ty:ty) => {
+        impl$(<$generic>)? sqlx::Type<sqlx::MySql> for $ty {
+            fn type_info() -> <sqlx::MySql as Database>::TypeInfo {
+                String::type_info()
+            }
+            fn compatible(ty: &<sqlx::MySql as Database>::TypeInfo) -> bool {
+                String::compatible(ty)
+            }
+        }
+        impl<'r, $($generic)?> sqlx::Encode<'r, MySql> for $ty {
+            fn encode_by_ref(
+                &self,
+                buf: &mut <MySql as Database>::ArgumentBuffer<'r>,
+            ) -> Result<sqlx::encode::IsNull, sqlx::error::BoxDynError> {
+                self.0.resolve().encode_by_ref(buf)
+            }
+        }
+        impl<'r, $($generic)?> sqlx::Decode<'r, MySql> for $ty {
+            fn decode(value: MySqlValueRef<'r>) -> Result<Self, sqlx::error::BoxDynError> {
+                Ok(Self::from_symbol(Symbol::decode(value)?))
+            }
+        }
+    };
+}
+use sqlx_forward_symbol;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Chair {

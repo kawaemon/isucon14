@@ -14,9 +14,7 @@ use crate::repo::ride::NotificationBody;
 use crate::repo::Repository;
 use crate::{AppState, Coordinate, Error};
 
-pub async fn app_post_users(
-    c: &mut Controller,
-) -> Result<(StatusCode, impl serde::Serialize), Error> {
+pub async fn app_post_users(c: &mut Controller) -> Result<(StatusCode, impl SerializeJson), Error> {
     #[derive(Debug, serde::Deserialize)]
     struct Req {
         username: Symbol,
@@ -71,18 +69,10 @@ pub async fn app_post_users(
 
     c.cookie_add(Cookie::build(("app_session", access_token.resolve())).path("/"));
 
-    #[derive(Debug, serde::Serialize)]
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
     struct Res {
         id: Id<User>,
         invitation_code: InvitationCode,
-    }
-    impl SerializeJson for Res {
-        fn size_hint(&self) -> usize {
-            todo!()
-        }
-        fn ser(&self, buf: &mut String) {
-            todo!()
-        }
     }
     Ok((
         StatusCode::CREATED,
@@ -104,32 +94,7 @@ pub async fn app_post_payment_methods(c: &mut Controller) -> Result<StatusCode, 
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, serde::Serialize)]
-struct GetAppRidesResponse {
-    rides: Vec<GetAppRidesResponseItem>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct GetAppRidesResponseItem {
-    id: Id<Ride>,
-    pickup_coordinate: Coordinate,
-    destination_coordinate: Coordinate,
-    chair: GetAppRidesResponseItemChair,
-    fare: i32,
-    evaluation: i32,
-    requested_at: i64,
-    completed_at: i64,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct GetAppRidesResponseItemChair {
-    id: Id<Chair>,
-    owner: Symbol,
-    name: Symbol,
-    model: Symbol,
-}
-
-pub fn app_get_rides(c: &mut Controller) -> Result<impl Serialize, Error> {
+pub fn app_get_rides(c: &mut Controller) -> Result<impl SerializeJson, Error> {
     let user = c.auth_app()?;
     let state = &c.state();
 
@@ -155,11 +120,11 @@ pub fn app_get_rides(c: &mut Controller) -> Result<impl Serialize, Error> {
             .unwrap();
         let owner: Owner = state.repo.owner_get_by_id(chair.owner_id)?.unwrap();
 
-        items.push(GetAppRidesResponseItem {
+        items.push(ResRide {
             pickup_coordinate: ride.pickup_coord(),
             destination_coordinate: ride.destination_coord(),
             id: ride.id,
-            chair: GetAppRidesResponseItemChair {
+            chair: ResRideChair {
                 id: chair.id,
                 owner: owner.name,
                 name: chair.name,
@@ -172,16 +137,33 @@ pub fn app_get_rides(c: &mut Controller) -> Result<impl Serialize, Error> {
         });
     }
 
-    Ok(GetAppRidesResponse { rides: items })
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct Res {
+        rides: Vec<ResRide>,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct ResRide {
+        id: Id<Ride>,
+        pickup_coordinate: Coordinate,
+        destination_coordinate: Coordinate,
+        chair: ResRideChair,
+        fare: i32,
+        evaluation: i32,
+        requested_at: i64,
+        completed_at: i64,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct ResRideChair {
+        id: Id<Chair>,
+        owner: Symbol,
+        name: Symbol,
+        model: Symbol,
+    }
+
+    Ok(Res { rides: items })
 }
 
-#[derive(Debug, serde::Serialize)]
-struct AppPostRidesResponse {
-    ride_id: Id<Ride>,
-    fare: i32,
-}
-
-pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl SerializeJson), Error> {
     #[derive(Debug, serde::Deserialize)]
     struct Req {
         pickup_coordinate: Coordinate,
@@ -222,10 +204,18 @@ pub async fn app_post_rides(c: &mut Controller) -> Result<(StatusCode, impl Seri
 
     let fare = crate::INITIAL_FARE + discounted_metered_fare;
 
-    Ok((StatusCode::ACCEPTED, AppPostRidesResponse { ride_id, fare }))
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct Res {
+        ride_id: Id<Ride>,
+        fare: i32,
+    }
+
+    Ok((StatusCode::ACCEPTED, Res { ride_id, fare }))
 }
 
-pub async fn app_post_rides_estimated_fare(c: &mut Controller) -> Result<impl Serialize, Error> {
+pub async fn app_post_rides_estimated_fare(
+    c: &mut Controller,
+) -> Result<impl SerializeJson, Error> {
     #[derive(serde::Deserialize)]
     struct Req {
         pickup_coordinate: Coordinate,
@@ -243,7 +233,7 @@ pub async fn app_post_rides_estimated_fare(c: &mut Controller) -> Result<impl Se
         req.destination_coordinate,
     )?;
 
-    #[derive(Serialize)]
+    #[derive(Serialize, macros::SerializeJson)]
     struct Res {
         fare: i32,
         discount: i32,
@@ -258,7 +248,7 @@ pub async fn app_post_rides_estimated_fare(c: &mut Controller) -> Result<impl Se
 pub async fn app_post_ride_evaluation(
     c: &mut Controller,
     ride_id: Id<Ride>,
-) -> Result<impl Serialize, Error> {
+) -> Result<impl SerializeJson, Error> {
     #[derive(serde::Deserialize)]
     struct Req {
         evaluation: i32,
@@ -309,7 +299,7 @@ pub async fn app_post_ride_evaluation(
         .repo
         .ride_status_update(ride_id, RideStatusEnum::Completed)?;
 
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, macros::SerializeJson)]
     struct Res {
         fare: i32,
         completed_at: i64,
@@ -318,33 +308,6 @@ pub async fn app_post_ride_evaluation(
         fare,
         completed_at: updated_at.timestamp_millis(),
     })
-}
-
-#[derive(Debug, serde::Serialize)]
-struct AppGetNotificationResponseData {
-    ride_id: Id<Ride>,
-    pickup_coordinate: Coordinate,
-    destination_coordinate: Coordinate,
-    fare: i32,
-    status: RideStatusEnum,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    chair: Option<AppGetNotificationResponseChair>,
-    created_at: i64,
-    updated_at: i64,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct AppGetNotificationResponseChair {
-    id: Id<Chair>,
-    name: Symbol,
-    model: Symbol,
-    stats: ChairStats,
-}
-
-#[derive(Debug, serde::Serialize)]
-pub struct ChairStats {
-    pub total_rides_count: i32,
-    pub total_evaluation_avg: f64,
 }
 
 pub fn app_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
@@ -361,11 +324,17 @@ pub fn app_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
     Ok(Box::new(stream))
 }
 
+#[derive(Debug, serde::Serialize, macros::SerializeJson)]
+pub struct ChairStats {
+    pub total_rides_count: i32,
+    pub total_evaluation_avg: f64,
+}
+
 fn app_get_notification_inner(
     state: &AppState,
     user_id: Id<User>,
     body: Option<NotificationBody>,
-) -> Result<Option<AppGetNotificationResponseData>, Error> {
+) -> Result<Option<impl SerializeJson>, Error> {
     let Some(body) = body else { return Ok(None) };
     let ride = state.repo.ride_get(body.ride_id)?.unwrap();
     let status = body.status;
@@ -378,7 +347,28 @@ fn app_get_notification_inner(
         ride.destination_coord(),
     )?;
 
-    let mut data = AppGetNotificationResponseData {
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct Res {
+        ride_id: Id<Ride>,
+        pickup_coordinate: Coordinate,
+        destination_coordinate: Coordinate,
+        fare: i32,
+        status: RideStatusEnum,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serjson(skip_if_none)]
+        chair: Option<ResChair>,
+        created_at: i64,
+        updated_at: i64,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct ResChair {
+        id: Id<Chair>,
+        name: Symbol,
+        model: Symbol,
+        stats: ChairStats,
+    }
+
+    let mut data = Res {
         pickup_coordinate: ride.pickup_coord(),
         destination_coordinate: ride.destination_coord(),
         ride_id: ride.id,
@@ -393,7 +383,7 @@ fn app_get_notification_inner(
         let chair = state.repo.chair_get_by_id_effortless(chair_id)?.unwrap();
         let stats = state.repo.chair_get_stats(chair.id)?;
 
-        data.chair = Some(AppGetNotificationResponseChair {
+        data.chair = Some(ResChair {
             id: chair.id,
             name: chair.name,
             model: chair.model,
@@ -404,13 +394,13 @@ fn app_get_notification_inner(
     Ok(Some(data))
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, macros::SerializeJson)]
 struct AppGetNearbyChairsResponse {
     chairs: Vec<AppGetNearbyChairsResponseChair>,
     retrieved_at: i64,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, macros::SerializeJson)]
 pub struct AppGetNearbyChairsResponseChair {
     pub id: Id<Chair>,
     pub name: Symbol,
@@ -423,7 +413,7 @@ pub fn app_get_nearby_chairs(
     distance: Option<i32>,
     latitude: i32,
     longitude: i32,
-) -> Result<impl Serialize, Error> {
+) -> Result<impl SerializeJson, Error> {
     let distance = distance.unwrap_or(50);
     let coordinate = Coordinate {
         latitude,

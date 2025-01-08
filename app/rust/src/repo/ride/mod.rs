@@ -335,7 +335,7 @@ impl Repository {
     ) -> Result<Vec<AppGetNearbyChairsResponseChair>> {
         let free_chair_cache = self.ride_cache.free_chairs_lv1.read();
 
-        let mut res = vec![];
+        let mut res = Vec::with_capacity(free_chair_cache.len());
         for chair in free_chair_cache.iter() {
             let Some(chair_coord) = chair.loc.latest() else {
                 continue;

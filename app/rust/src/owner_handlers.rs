@@ -1,15 +1,16 @@
-use crate::fw::Controller;
+use crate::fw::{Controller, SerializeJson};
 use crate::HashMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use cookie::Cookie;
 use hyper::StatusCode;
-use serde::Serialize;
 
 use crate::models::{Chair, Id, Owner, Symbol};
 use crate::Error;
 
-pub async fn owner_post_owners(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+pub async fn owner_post_owners(
+    c: &mut Controller,
+) -> Result<(StatusCode, impl SerializeJson), Error> {
     #[derive(serde::Deserialize)]
     struct Req {
         name: Symbol,
@@ -27,7 +28,7 @@ pub async fn owner_post_owners(c: &mut Controller) -> Result<(StatusCode, impl S
 
     c.cookie_add(Cookie::build(("owner_session", access_token.resolve())).path("/"));
 
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, macros::SerializeJson)]
     struct Res {
         id: Id<Owner>,
         chair_register_token: Symbol,
@@ -41,31 +42,11 @@ pub async fn owner_post_owners(c: &mut Controller) -> Result<(StatusCode, impl S
     ))
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct ChairSales {
-    pub id: Id<Chair>,
-    pub name: Symbol,
-    pub sales: i32,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct ModelSales {
-    model: Symbol,
-    sales: i32,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct OwnerGetSalesResponse {
-    total_sales: i32,
-    chairs: Vec<ChairSales>,
-    models: Vec<ModelSales>,
-}
-
 pub fn owner_get_sales(
     c: &mut Controller,
     since: Option<i64>,
     until: Option<i64>,
-) -> Result<impl Serialize, Error> {
+) -> Result<impl SerializeJson, Error> {
     let owner = c.auth_owner()?;
     let since = if let Some(since) = since {
         DateTime::from_timestamp_millis(since).unwrap()
@@ -84,7 +65,25 @@ pub fn owner_get_sales(
         )
     };
 
-    let mut res = OwnerGetSalesResponse {
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct Res {
+        total_sales: i32,
+        chairs: Vec<ChairSales>,
+        models: Vec<ModelSales>,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    pub struct ChairSales {
+        pub id: Id<Chair>,
+        pub name: Symbol,
+        pub sales: i32,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct ModelSales {
+        model: Symbol,
+        sales: i32,
+    }
+
+    let mut res = Res {
         total_sales: 0,
         chairs: Vec::new(),
         models: Vec::new(),
@@ -113,68 +112,27 @@ pub fn owner_get_sales(
     Ok(res)
 }
 
-/// MySQL で COUNT()、SUM() 等を使って DECIMAL 型の値になったものを i64 に変換するための構造体。
-#[derive(Debug)]
-pub struct MysqlDecimal(pub i64);
-impl sqlx::Decode<'_, sqlx::MySql> for MysqlDecimal {
-    fn decode(
-        value: sqlx::mysql::MySqlValueRef,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        use sqlx::{Type as _, ValueRef as _};
-
-        let type_info = value.type_info();
-        if i64::compatible(&type_info) {
-            i64::decode(value).map(Self)
-        } else if u64::compatible(&type_info) {
-            let n = u64::decode(value)?.try_into()?;
-            Ok(Self(n))
-        } else if sqlx::types::Decimal::compatible(&type_info) {
-            use num_traits::ToPrimitive as _;
-            let n = sqlx::types::Decimal::decode(value)?
-                .to_i64()
-                .expect("failed to convert DECIMAL type to i64");
-            Ok(Self(n))
-        } else {
-            panic!("MysqlDecimal is used with unknown type: {type_info:?}");
-        }
-    }
-}
-impl sqlx::Type<sqlx::MySql> for MysqlDecimal {
-    fn type_info() -> sqlx::mysql::MySqlTypeInfo {
-        i64::type_info()
-    }
-
-    fn compatible(ty: &sqlx::mysql::MySqlTypeInfo) -> bool {
-        i64::compatible(ty) || u64::compatible(ty) || sqlx::types::Decimal::compatible(ty)
-    }
-}
-impl From<MysqlDecimal> for i64 {
-    fn from(value: MysqlDecimal) -> Self {
-        value.0
-    }
-}
-
-#[derive(Debug, serde::Serialize)]
-struct OwnerGetChairResponse {
-    chairs: Vec<OwnerGetChairResponseChair>,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct OwnerGetChairResponseChair {
-    id: Id<Chair>,
-    name: Symbol,
-    model: Symbol,
-    active: bool,
-    registered_at: i64,
-    total_distance: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    total_distance_updated_at: Option<i64>,
-}
-
-pub fn owner_get_chairs(c: &mut Controller) -> Result<impl Serialize, Error> {
+pub fn owner_get_chairs(c: &mut Controller) -> Result<impl SerializeJson, Error> {
     let owner = c.auth_owner()?;
     let state = c.state();
     let chairs = state.repo.chair_get_by_owner(owner.id)?;
+
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct Res {
+        chairs: Vec<ResChair>,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct ResChair {
+        id: Id<Chair>,
+        name: Symbol,
+        model: Symbol,
+        active: bool,
+        registered_at: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serjson(skip_if_none)]
+        total_distance_updated_at: Option<i64>,
+        total_distance: i64,
+    }
 
     let mut res = vec![];
     for chair in chairs {
@@ -184,7 +142,7 @@ pub fn owner_get_chairs(c: &mut Controller) -> Result<impl Serialize, Error> {
             .map(|x| (x.0, Some(x.1.timestamp_millis())))
             .unwrap_or((0, None));
 
-        res.push(OwnerGetChairResponseChair {
+        res.push(ResChair {
             id: chair.id,
             name: chair.name,
             model: chair.model,
@@ -195,5 +153,5 @@ pub fn owner_get_chairs(c: &mut Controller) -> Result<impl Serialize, Error> {
         })
     }
 
-    Ok(OwnerGetChairResponse { chairs: res })
+    Ok(Res { chairs: res })
 }

@@ -3,7 +3,6 @@ use std::task::Poll;
 
 use bytes::Bytes;
 use cookie::Cookie;
-use futures::Stream;
 use http_body_util::BodyExt;
 use hyper::body::Body;
 use hyper::body::Frame;
@@ -11,22 +10,143 @@ use hyper::body::Incoming;
 use hyper::HeaderMap;
 use hyper::Request;
 use serde::de::DeserializeOwned;
-use serde::Serialize;
 use sync_wrapper::SyncWrapper;
+use tokio_stream::Stream;
 
 use crate::models::{Owner, Symbol, User};
 use crate::repo::chair::EffortlessChair;
 use crate::{AppState, Error};
 
 pub trait SerializeJson {
-    fn size_hint(&self) -> usize;
+    fn size_est(&self) -> usize;
     fn ser(&self, buf: &mut String);
 }
 impl SerializeJson for () {
-    fn size_hint(&self) -> usize {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
         0
     }
+    #[inline(always)]
     fn ser(&self, _buf: &mut String) {}
+}
+impl SerializeJson for String {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        self.len() + 2
+    }
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        buf.push('"');
+        buf.push_str(self);
+        buf.push('"');
+    }
+}
+impl<T: SerializeJson> SerializeJson for Vec<T> {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        if self.is_empty() {
+            return 2;
+        }
+        2 + self.iter().map(|x| x.size_est()).sum::<usize>()
+    }
+    fn ser(&self, buf: &mut String) {
+        if self.is_empty() {
+            buf.push_str("[]");
+            return;
+        }
+
+        buf.push('[');
+        let stop = self.len() - 1;
+        for i in 0..self.len() {
+            self[i].ser(buf);
+            if i < stop {
+                buf.push(',');
+            }
+        }
+        buf.push(']');
+    }
+}
+impl SerializeJson for i32 {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        8
+    }
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        let mut buffer = itoa::Buffer::new();
+        let s = buffer.format(*self);
+        buf.push_str(s);
+    }
+}
+impl SerializeJson for i64 {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        16
+    }
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        let mut buffer = itoa::Buffer::new();
+        let s = buffer.format(*self);
+        buf.push_str(s);
+    }
+}
+impl SerializeJson for f64 {
+    fn size_est(&self) -> usize {
+        16
+    }
+    fn ser(&self, buf: &mut String) {
+        if self.is_nan() || self.is_infinite() {
+            tracing::warn!("Nan|Infinite({self}) cannot be serialized");
+            buf.push_str("null");
+        } else {
+            let mut buffer = ryu::Buffer::new();
+            let s = buffer.format_finite(*self);
+            buf.push_str(s);
+        }
+    }
+}
+impl SerializeJson for bool {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        5 // 1 byte ぐらいいいだろ
+    }
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        buf.push_str(if *self { "true" } else { "false" });
+    }
+}
+impl<T: SerializeJson> SerializeJson for Option<T> {
+    #[inline(always)]
+    fn size_est(&self) -> usize {
+        match self.as_ref() {
+            Some(t) => t.size_est(),
+            None => 4,
+        }
+    }
+    #[inline(always)]
+    fn ser(&self, buf: &mut String) {
+        match self.as_ref() {
+            Some(t) => t.ser(buf),
+            None => buf.push_str("null"),
+        }
+    }
+}
+
+#[inline(never)] // for profiling
+pub fn format_json<S: SerializeJson>(target: &S) -> String {
+    let est = target.size_est();
+    let mut buf = String::with_capacity(est);
+
+    let before_cap = buf.capacity();
+    target.ser(&mut buf);
+    let after_cap = buf.capacity();
+
+    #[cfg(debug_assertions)]
+    if before_cap != after_cap {
+        eprintln!("{buf}");
+        assert_eq!(before_cap, after_cap, "reallocation happened");
+    }
+    buf
 }
 
 pub struct Controller {
@@ -159,31 +279,25 @@ pub struct Event {
 }
 
 impl Event {
-    pub fn new_raw(s: &str) -> Self {
-        let mut buf = vec![];
+    pub fn new(data: impl SerializeJson) -> Self {
+        let est = data.size_est() + "data: \n\n".len();
+        let mut buf = String::with_capacity(est);
+        let before_cap = buf.capacity();
 
-        // json_data
-        buf.extend_from_slice(b"data: ");
-        buf.extend_from_slice(s.as_bytes());
-        buf.push(b'\n');
+        buf.push_str("data: ");
 
-        // finalize
-        buf.push(b'\n');
+        data.ser(&mut buf);
+        debug_assert!(!buf.contains('\n'));
 
-        Self {
-            buf: Bytes::from(buf),
+        buf.push_str("\n\n");
+
+        let after_cap = buf.capacity();
+
+        #[cfg(debug_assertions)]
+        if before_cap != after_cap {
+            eprintln!("{buf}");
+            assert_eq!(before_cap, after_cap, "reallocation happened");
         }
-    }
-
-    pub fn new(data: impl Serialize) -> Self {
-        let mut buf = vec![];
-
-        // json_data
-        buf.extend_from_slice(b"data: ");
-        sonic_rs::to_writer(&mut buf, &data).unwrap();
-        debug_assert!(!buf.contains(&b'\n'));
-
-        buf.extend_from_slice(b"\n\n");
 
         Self {
             buf: Bytes::from(buf),

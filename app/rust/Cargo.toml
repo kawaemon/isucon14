@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "macros"]
+
 [package]
 name = "isuride"
 version = "0.1.0"
@@ -13,25 +16,21 @@ speed = []
 parking_lot = ["tokio/parking_lot"]
 
 [dependencies]
+macros = { path = "./macros" }
 ahash = "0.8"
 anyhow = { version = "1", features = ["backtrace"] }
 backtrace = { version = "0.3", optional = true }
 bytes = "1.9.0"
-cfg-if = "1"
 chrono = "0.4"
 cookie = { version = "0.18.1", features = ["percent-encode"] }
 dashmap = { version = "6", features = ["inline", "raw-api"] }
 derivative = "2"
-futures = "0.3"
 hashbrown = { version = "0.15.2", features = ["inline-more", "serde"] }
 hex = "0.4"
 http-body-util = "0.1.2"
 hyper = { version = "1.5.2", features = ["full"] }
-hyper-rustls = { version = "0.27.5", features = ["http2", "ring"] }
 hyper-util = { version = "0.1.10", features = ["full"] }
-memchr = "2.7.4"
 mime = "0.3.17"
-num-traits = "0.2"
 parking_lot = "0.12"
 pathfinding = "4.13.0"
 pin-project = "1.1.7"
@@ -42,8 +41,6 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
     "json",
 ] }
-rustls = { version = "0.23.20", features = ["hashbrown", "ring"] }
-rustls-pemfile = "2.2.0"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 sonic-rs = "0.3.17"
@@ -69,11 +66,12 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
-tokio-rustls = { version = "0.26.1", features = ["ring"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ulid = "1"
+ryu = "1.0.18"
+itoa = "1.0.14"
 
 [profile.release]
 debug = true

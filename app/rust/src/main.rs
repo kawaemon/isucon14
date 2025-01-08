@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpListener;
 
-use isuride::fw::{Controller, SerializeJson, SseBody};
+use isuride::fw::{format_json, Controller, SerializeJson, SseBody};
 use isuride::models::Id;
 
 #[tokio::main]
@@ -197,12 +197,17 @@ pub async fn response(
     req: Request<Incoming>,
 ) -> Result<Response<HyperRes>, Error> {
     #[inline(always)]
-    fn json<B: serde::Serialize>(body: impl Into<Option<B>>) -> HyperRes {
-        Either::Left(Full::new(body.into().map_or_else(Bytes::new, |x| {
-            Bytes::from(sonic_rs::to_string(&x).unwrap())
-        })))
+    fn empty() -> HyperRes {
+        Either::Left(Full::new(Bytes::new()))
     }
-    let empty = || json::<()>(None);
+    #[inline(always)]
+    fn json_serde(body: impl serde::Serialize) -> HyperRes {
+        Either::Left(Full::new(Bytes::from(sonic_rs::to_string(&body).unwrap())))
+    }
+    #[inline(always)]
+    fn json_fw(body: impl SerializeJson) -> HyperRes {
+        Either::Left(Full::new(Bytes::from(format_json(&body))))
+    }
 
     let method = req.method().clone();
     let uri = req.uri().to_owned();
@@ -217,7 +222,7 @@ pub async fn response(
             match (method, app_path) {
                 (Method::POST, "/users") => {
                     let (code, res) = app_post_users(&mut c).await?;
-                    (code, json(res))
+                    (code, json_fw(res))
                 }
                 (Method::POST, "/payment-methods") => {
                     let code = app_post_payment_methods(&mut c).await?;
@@ -225,15 +230,15 @@ pub async fn response(
                 }
                 (Method::GET, "/rides") => {
                     let res = app_get_rides(&mut c)?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 (Method::POST, "/rides") => {
                     let (code, res) = app_post_rides(&mut c).await?;
-                    (code, json(res))
+                    (code, json_fw(res))
                 }
                 (Method::POST, "/rides/estimated-fare") => {
                     let res = app_post_rides_estimated_fare(&mut c).await?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 // POST /api/app/rides/:ride_id/evaluation
                 (Method::POST, s)
@@ -247,7 +252,7 @@ pub async fn response(
                     let param = param.unwrap();
                     let param = Id::new_from(Symbol::new_from_ref(param));
                     let res = app_post_ride_evaluation(&mut c, param).await?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 (Method::GET, "/notification") => {
                     let stream = app_get_notification(&mut c)?;
@@ -267,7 +272,7 @@ pub async fn response(
                         return Err(Error::BadRequest("bad querystring"));
                     };
                     let res = app_get_nearby_chairs(&mut c, dist, lat, long)?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 _ => {
                     return Ok(Response::builder()
@@ -282,7 +287,7 @@ pub async fn response(
             match (method, chair_path) {
                 (Method::POST, "/chairs") => {
                     let (code, res) = chair_post_chairs(&mut c).await?;
-                    (code, json(res))
+                    (code, json_fw(res))
                 }
                 (Method::POST, "/activity") => {
                     let code = chair_post_activity(&mut c).await?;
@@ -290,7 +295,7 @@ pub async fn response(
                 }
                 (Method::POST, "/coordinate") => {
                     let res = chair_post_coordinate(&mut c).await?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 (Method::GET, "/notification") => {
                     let stream = chair_get_notification(&mut c)?;
@@ -321,7 +326,7 @@ pub async fn response(
             match (method, owner_path) {
                 (Method::POST, "/owners") => {
                     let (code, res) = owner_post_owners(&mut c).await?;
-                    (code, json(res))
+                    (code, json_fw(res))
                 }
                 (Method::GET, "/sales") => {
                     let Some((since, until)) = ('query: {
@@ -337,11 +342,11 @@ pub async fn response(
                         return Err(Error::BadRequest("bad querystring"));
                     };
                     let res = owner_get_sales(&mut c, since, until)?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 (Method::GET, "/chairs") => {
                     let res = owner_get_chairs(&mut c)?;
-                    (StatusCode::OK, json(res))
+                    (StatusCode::OK, json_fw(res))
                 }
                 _ => {
                     return Ok(Response::builder()
@@ -352,7 +357,7 @@ pub async fn response(
             }
         } else if path == "/api/initialize" {
             let res = post_initialize(&mut c).await?;
-            (StatusCode::OK, json(res))
+            (StatusCode::OK, json_serde(res))
         } else {
             return Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)

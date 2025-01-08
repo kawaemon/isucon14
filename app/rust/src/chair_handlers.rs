@@ -2,15 +2,16 @@ use std::time::Duration;
 
 use cookie::Cookie;
 use hyper::StatusCode;
-use serde::Serialize;
 use tokio_stream::StreamExt;
 
-use crate::fw::{BoxStream, Controller, Event};
+use crate::fw::{BoxStream, Controller, Event, SerializeJson};
 use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, Symbol, User};
 use crate::repo::ride::NotificationBody;
 use crate::{AppState, Coordinate, Error};
 
-pub async fn chair_post_chairs(c: &mut Controller) -> Result<(StatusCode, impl Serialize), Error> {
+pub async fn chair_post_chairs(
+    c: &mut Controller,
+) -> Result<(StatusCode, impl SerializeJson), Error> {
     #[derive(serde::Deserialize)]
     struct Req {
         name: Symbol,
@@ -37,7 +38,7 @@ pub async fn chair_post_chairs(c: &mut Controller) -> Result<(StatusCode, impl S
 
     c.cookie_add(Cookie::build(("chair_session", access_token.resolve())).path("/"));
 
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, macros::SerializeJson)]
     struct Res {
         id: Id<Chair>,
         owner_id: Id<Owner>,
@@ -64,33 +65,18 @@ pub async fn chair_post_activity(c: &mut Controller) -> Result<StatusCode, Error
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub async fn chair_post_coordinate(c: &mut Controller) -> Result<impl Serialize, Error> {
+pub async fn chair_post_coordinate(c: &mut Controller) -> Result<impl SerializeJson, Error> {
     let req: Coordinate = c.body().await?;
     let chair = c.auth_chair()?;
     let created_at = c.state().repo.chair_location_update(chair.id, req)?;
 
-    #[derive(serde::Serialize)]
+    #[derive(serde::Serialize, macros::SerializeJson)]
     struct Res {
         recorded_at: i64,
     }
     Ok(Res {
         recorded_at: created_at.timestamp_millis(),
     })
-}
-
-#[derive(Debug, serde::Serialize)]
-struct SimpleUser {
-    id: Id<User>,
-    name: String,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct ChairGetNotificationResponseData {
-    ride_id: Id<Ride>,
-    user: SimpleUser,
-    pickup_coordinate: Coordinate,
-    destination_coordinate: Coordinate,
-    status: RideStatusEnum,
 }
 
 pub fn chair_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
@@ -120,7 +106,7 @@ fn chair_get_notification_inner(
     state: &AppState,
     chair_id: Id<Chair>,
     body: Option<NotificationBody>,
-) -> Result<Option<ChairGetNotificationResponseData>, Error> {
+) -> Result<Option<impl SerializeJson>, Error> {
     let Some(body) = body else {
         return Ok(None);
     };
@@ -138,7 +124,21 @@ fn chair_get_notification_inner(
         }
     }
 
-    Ok(Some(ChairGetNotificationResponseData {
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct SimpleUser {
+        id: Id<User>,
+        name: String,
+    }
+    #[derive(Debug, serde::Serialize, macros::SerializeJson)]
+    struct Res {
+        ride_id: Id<Ride>,
+        user: SimpleUser,
+        pickup_coordinate: Coordinate,
+        destination_coordinate: Coordinate,
+        status: RideStatusEnum,
+    }
+
+    Ok(Some(Res {
         user: SimpleUser {
             id: user.id,
             name: format!("{} {}", user.firstname.resolve(), user.lastname.resolve()),

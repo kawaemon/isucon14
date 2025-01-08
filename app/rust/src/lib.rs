@@ -1,5 +1,6 @@
 #![allow(clippy::new_without_default)]
 #![allow(clippy::type_complexity)]
+#![allow(clippy::needless_range_loop)]
 #![warn(clippy::future_not_send)]
 #![warn(clippy::unused_async)]
 
@@ -85,7 +86,9 @@ pub enum Error {
     Conflict(&'static str),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Copy, serde::Serialize, serde::Deserialize, macros::SerializeJson,
+)]
 pub struct Coordinate {
     pub latitude: i32,
     pub longitude: i32,
