@@ -20,32 +20,12 @@ ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
 ISUCON_DB_NAME=${ISUCON_DB_NAME:-isuride}
 
 # MySQLを初期化
-echo 'drop database if exists isuride; create database isuride;' | $MYSQL -u"$ISUCON_DB_USER" \
+{
+	cat 1-schema.sql 2-master-data.sql;
+	gzip -dkc 3-initial-data.sql.gz;
+ 	cat 4-index.sql;
+} | $MYSQL -u"$ISUCON_DB_USER" \
 	-p"$ISUCON_DB_PASSWORD" \
 	--host "$ISUCON_DB_HOST" \
 	--port "$ISUCON_DB_PORT" \
-	"$ISUCON_DB_NAME"
-
-$MYSQL -u"$ISUCON_DB_USER" \
-	-p"$ISUCON_DB_PASSWORD" \
-	--host "$ISUCON_DB_HOST" \
-	--port "$ISUCON_DB_PORT" \
-	"$ISUCON_DB_NAME" <1-schema.sql
-
-$MYSQL -u"$ISUCON_DB_USER" \
-	-p"$ISUCON_DB_PASSWORD" \
-	--host "$ISUCON_DB_HOST" \
-	--port "$ISUCON_DB_PORT" \
-	"$ISUCON_DB_NAME" <2-master-data.sql
-
-gzip -dkc 3-initial-data.sql.gz | $MYSQL -u"$ISUCON_DB_USER" \
-	-p"$ISUCON_DB_PASSWORD" \
-	--host "$ISUCON_DB_HOST" \
-	--port "$ISUCON_DB_PORT" \
-	"$ISUCON_DB_NAME"
-
-$MYSQL -u"$ISUCON_DB_USER" \
-	-p"$ISUCON_DB_PASSWORD" \
-	--host "$ISUCON_DB_HOST" \
-	--port "$ISUCON_DB_PORT" \
-	"$ISUCON_DB_NAME" <4-index.sql
+	"$ISUCON_DB_NAME" 

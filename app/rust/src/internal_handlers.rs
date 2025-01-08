@@ -15,3 +15,8 @@ pub fn spawn_matching_thread(state: AppState) {
         }
     });
 }
+
+// interval=50,  tick=600, req=491
+// interval=75,  tick=600, req=2455
+// interval=100, tick=600, req=2558
+// interval=150, tick=600, req=2444

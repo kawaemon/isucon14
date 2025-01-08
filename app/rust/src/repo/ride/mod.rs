@@ -6,14 +6,15 @@ use crate::ConcurrentSymbolMap;
 use crate::HashMap;
 use chrono::TimeDelta;
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use pathfinding::matrix::Matrix;
-use rand::Rng;
 use ride::RideDeferred;
 use sqlx::MySql;
 use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicI32;
+use std::sync::LazyLock;
+use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
@@ -623,20 +624,44 @@ impl std::fmt::Debug for Pair {
     }
 }
 
-pub static SCORE_TARGET: AtomicI32 = AtomicI32::new(200);
-crate::conf_env!(
-    static WAITING_PENALTY_PROB: f64 = {
-        from: "WAITING_PENALTY_PROB",
-        // default: "0.5",
-        default: "1",
+struct MatchingLimiter {
+    history: VecDeque<(Instant, usize)>,
+}
+impl MatchingLimiter {
+    fn new() -> Self {
+        Self {
+            history: VecDeque::new(),
+        }
     }
-);
-crate::conf_env!(
-    static WAITING_PENALTY: i32 = {
-        from: "WAITING_PENALTY",
-        default: "1000",
+    fn push(&mut self, count: usize) {
+        self.history.push_back((Instant::now(), count));
     }
-);
+    fn remain(&mut self) -> usize {
+        crate::conf_env! {
+            static MATCH_LIMIT_PER_SEC: usize = {
+                from: "MATCHING_LIMIT_PER_SEC",
+                default: "500",
+            }
+        }
+        let limit = *MATCH_LIMIT_PER_SEC;
+
+        let now = Instant::now();
+        while let Some(oldest) = self.history.front() {
+            if (now - oldest.0).as_secs() == 0 {
+                break;
+            }
+            self.history.pop_front();
+        }
+
+        let count: usize = self.history.iter().map(|(_at, count)| *count).sum();
+        limit.saturating_sub(count)
+    }
+}
+
+// #[inline(always)]
+// fn score_1_ok(ride: &RideEntry, now: DateTime<Utc>) -> bool {
+//     (now - ride.created_at).num_seconds() < 3
+// }
 
 #[inline(always)]
 fn score_2_ok(chair: &AvailableChair, ride: &RideEntry) -> bool {
@@ -645,18 +670,14 @@ fn score_2_ok(chair: &AvailableChair, ride: &RideEntry) -> bool {
 
 // これを最小化する
 #[inline(always)]
-fn score_for_target(chair: &AvailableChair, ride: &RideEntry, target: i32) -> i32 {
-    score(chair, ride).abs_diff(target) as i32
-}
-#[inline(always)]
 fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
     let pickup_distance = chair.coord.distance(ride.pickup);
 
     let distance = pickup_distance * 10 + ride.pickup.distance(ride.destination);
     let mut score = distance / chair.speed;
 
-    if !score_2_ok(chair, ride) && rand::thread_rng().gen_bool(*WAITING_PENALTY_PROB) {
-        score += *WAITING_PENALTY;
+    if !score_2_ok(chair, ride) {
+        score += 1000;
     }
 
     score
@@ -699,8 +720,8 @@ fn solve_pathfinding_isekai_joucho(
         }
     }
 
-    let (mut rw, mut rj, mut p, score) = solve_pathfinding_kaf(split_workers.0, split_jobs.0);
-    let (rw2, rj2, p2, score2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1);
+    let (mut rw, mut rj, mut p, score) = solve_pathfinding_kaf(split_workers.0, split_jobs.0, true);
+    let (rw2, rj2, p2, score2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1, false);
 
     rw.extend(rw2);
     rj.extend(rj2);
@@ -709,7 +730,11 @@ fn solve_pathfinding_isekai_joucho(
     (rw, rj, p, score + score2)
 }
 
-fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pair>, i32) {
+fn solve_pathfinding_kaf(
+    workers: Workers,
+    jobs: Jobs,
+    use_half: bool,
+) -> (Workers, Jobs, Vec<Pair>, i32) {
     if workers.is_empty() || jobs.is_empty() {
         return (workers, jobs, vec![], 0);
     }
@@ -717,6 +742,7 @@ fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pa
     // 緊急のやつだけ先にやる
     let mut urgent_jobs = vec![];
     let mut ok_jobs = vec![];
+    let mut out_of_limit = vec![];
     let now = Utc::now();
 
     // const ONE_TICK_DURATION: Duration = Duration::from_millis(30);
@@ -724,24 +750,51 @@ fn solve_pathfinding_kaf(workers: Workers, jobs: Jobs) -> (Workers, Jobs, Vec<Pa
 
     crate::conf_env!(static URGENT_THRESHOLD_MS: i64 = {
         from: "URGENT_THRESHOLD_MS",
-        default: "25000",
+        default: "20000",
     });
     let urgent_threshold = TimeDelta::milliseconds(*URGENT_THRESHOLD_MS);
+
+    static LIMITER: LazyLock<Mutex<MatchingLimiter>> =
+        LazyLock::new(|| Mutex::new(MatchingLimiter::new()));
+
+    let remain = {
+        let r = LIMITER.lock().remain();
+        if use_half {
+            r / 2
+        } else {
+            r
+        }
+    };
+
+    let workers_len = workers.len();
+
     for task in jobs {
         let elapsed = now - task.0.created_at;
         if elapsed > urgent_threshold {
             urgent_jobs.push(task);
-        } else {
+        } else if remain >= ok_jobs.len() {
             ok_jobs.push(task);
+        } else {
+            out_of_limit.push(task);
         }
     }
+
+    let urgent_len = urgent_jobs.len();
+    let ok_len = ok_jobs.len();
 
     let (rw, rj, p, score) = solve_pathfinding_rim(workers, urgent_jobs);
 
     let (rw, mut rj2, mut p2, score2) = solve_pathfinding_rim(rw, ok_jobs);
 
     rj2.extend(rj);
+    rj2.extend(out_of_limit);
     p2.extend(p);
+
+    tracing::info!(
+        "a={use_half:5} limiter_remain={remain:4}, urg:ok={urgent_len:4}:{ok_len:5}, w={workers_len} pairs={}",
+        p2.len()
+    );
+    LIMITER.lock().push(p2.len());
 
     (rw, rj2, p2, score + score2)
 }
@@ -767,11 +820,10 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     //   かといってガン無視するとライド数が足りなくなる。(70万行かないぐらい)
     // 確率的にマッチするようにしたい。
 
-    let target = SCORE_TARGET.load(std::sync::atomic::Ordering::Relaxed);
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
         let task = &jobs[y];
         let worker = &workers[x];
-        score_for_target(worker, &task.0, target)
+        score(worker, &task.0)
     });
 
     let mut transposed = false;
@@ -858,45 +910,13 @@ impl Repository {
             }
 
             let (avail, redu2, pairs) = {
-                // use std::fmt::Write;
-
-                // let begin = Instant::now();
-                // let mut gd = solve_greedy(avail.clone(), waiting_rides.clone());
-                // // tracing::info!("gd:{:#?}", ret.2);
-                // let ret_score: i32 = gd.2.iter().map(|x| x.score).sum();
-                // let l = gd.2.len();
-                // let elap = begin.elapsed().as_millis();
-                // let mut log = format!("greedy({l:3}): {ret_score:5} in {elap}ms");
-
                 {
-                    // let begin = Instant::now();
                     let (a, b, c, pf_score) = solve_pathfinding_isekai_joucho(avail, waiting_rides);
                     let pairs = c.len();
-                    let avg = {
-                        if pairs > 0 {
-                            pf_score as usize / pairs
-                        } else {
-                            0
-                        }
-                    };
-                    let target = SCORE_TARGET.load(std::sync::atomic::Ordering::Relaxed);
-                    tracing::info!(
-                        "pairs={pairs:3}, score={pf_score:6}, avg={avg:5}, target={target:4}"
-                    );
-                    // tracing::info!("pf:{:#?}", pf.2);
-                    // let l = c.len();
-                    // let elap = begin.elapsed().as_millis();
-                    // write!(log, ", pathfinding({l:3}): {pf_score:5} in {elap}ms").unwrap();
-                    // if pf_score < ret_score {
-                    //     let win = ((ret_score as f64) / (pf_score as f64) * 100.0) as usize - 100;
-                    //     write!(log, " {win:}% win!").unwrap();
-                    //     gd = (a, b, c);
-                    // }
+                    let avg = pf_score.checked_div(pairs as i32).unwrap_or(0);
+                    tracing::info!("pairs={pairs:3}, avg={avg:5}");
                     (a, b, c)
                 }
-
-                // tracing::info!("{log}");
-                // gd
             };
 
             if !redu2.is_empty() {
@@ -917,6 +937,6 @@ impl Repository {
                 .unwrap();
         }
 
-        tracing::info!("waiting={waiting:3}, free={free:3}, matches={pairs_len:3}");
+        tracing::info!("waiting={waiting:6}, free={free:3}, matches={pairs_len:3}");
     }
 }

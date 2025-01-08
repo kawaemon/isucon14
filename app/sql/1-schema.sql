@@ -1,6 +1,8 @@
 SET CHARACTER_SET_CLIENT = utf8mb4;
 SET CHARACTER_SET_CONNECTION = utf8mb4;
 
+drop database if exists isuride;
+create database isuride;
 USE isuride;
 
 DROP TABLE IF EXISTS settings;
