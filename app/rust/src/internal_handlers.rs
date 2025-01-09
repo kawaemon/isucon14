@@ -10,8 +10,9 @@ crate::conf_env!(static MATCHING_INTERVAL_MS: u64 = {
 pub fn spawn_matching_thread(state: AppState) {
     tokio::spawn(async move {
         loop {
-            state.repo.do_matching();
-            tokio::time::sleep(Duration::from_millis(*MATCHING_INTERVAL_MS)).await;
+            let suggested = state.repo.do_matching();
+            let sleep = suggested.unwrap_or_else(|| Duration::from_millis(*MATCHING_INTERVAL_MS));
+            tokio::time::sleep(sleep).await;
         }
     });
 }

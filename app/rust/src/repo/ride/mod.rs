@@ -14,6 +14,7 @@ use sqlx::Pool;
 use status::deferred::RideStatusDeferrable;
 use std::sync::atomic::AtomicBool;
 use std::sync::LazyLock;
+use std::time::Duration;
 use std::time::Instant;
 use std::{collections::VecDeque, sync::Arc};
 
@@ -354,24 +355,10 @@ impl Repository {
     }
 }
 
-crate::conf_env!(static MATCHING_CHAIR_THRESHOLD: usize = {
-    from: "MATCHING_CHAIR_THRESHOLD",
-    default: "100",
-});
-
 impl Repository {
     pub fn push_free_chair(&self, id: Id<Chair>) {
-        let len = {
-            let mut cache = self.ride_cache.free_chairs_lv2.lock();
-            cache.push(id);
-            cache.len()
-        };
-        if len == *MATCHING_CHAIR_THRESHOLD {
-            let me = self.clone();
-            tokio::spawn(async move {
-                me.do_matching();
-            });
-        }
+        let mut cache = self.ride_cache.free_chairs_lv2.lock();
+        cache.push(id);
     }
 
     pub fn on_chair_became_free(&self, chair: Id<Chair>) {
@@ -634,9 +621,19 @@ impl MatchingLimiter {
         }
     }
     fn push(&mut self, count: usize) {
-        self.history.push_back((Instant::now(), count));
+        self.history
+            .push_back((Instant::now() + Self::ONESEC, count));
     }
+    const ONESEC: Duration = Duration::from_secs(1);
     fn remain(&mut self) -> usize {
+        let now = Instant::now();
+        while let Some(&(expires, _)) = self.history.front() {
+            if expires > now {
+                break;
+            }
+            self.history.pop_front();
+        }
+
         crate::conf_env! {
             static MATCH_LIMIT_PER_SEC: usize = {
                 from: "MATCHING_LIMIT_PER_SEC",
@@ -644,24 +641,23 @@ impl MatchingLimiter {
             }
         }
         let limit = *MATCH_LIMIT_PER_SEC;
-
-        let now = Instant::now();
-        while let Some(oldest) = self.history.front() {
-            if (now - oldest.0).as_secs() == 0 {
-                break;
-            }
-            self.history.pop_front();
-        }
-
-        let count: usize = self.history.iter().map(|(_at, count)| *count).sum();
+        let count: usize = self.history.iter().map(|&(_at, count)| count).sum();
         limit.saturating_sub(count)
+    }
+    fn until_next_release(&self) -> Option<Duration> {
+        let &(expires, _) = self.history.front()?;
+        let diff = expires - Instant::now();
+        if diff.is_zero() {
+            return Some(Duration::from_millis(5));
+        }
+        Some(diff)
     }
 }
 
-// #[inline(always)]
-// fn score_1_ok(ride: &RideEntry, now: DateTime<Utc>) -> bool {
-//     (now - ride.created_at).num_seconds() < 3
-// }
+#[inline(always)]
+fn score_1_ok(ride: &RideEntry, now: DateTime<Utc>) -> bool {
+    (now - ride.created_at).num_milliseconds() < 2500
+}
 
 #[inline(always)]
 fn score_2_ok(chair: &AvailableChair, ride: &RideEntry) -> bool {
@@ -676,11 +672,11 @@ crate::conf_env! {
     }
 }
 #[inline(always)]
-fn score_target(chair: &AvailableChair, ride: &RideEntry, target: i32) -> i32 {
-    score(chair, ride).abs_diff(target) as i32
+fn score_target(chair: &AvailableChair, ride: &RideEntry, now: DateTime<Utc>, target: i32) -> i32 {
+    score(chair, ride, now).abs_diff(target) as i32
 }
 #[inline(always)]
-fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
+fn score(chair: &AvailableChair, ride: &RideEntry, now: DateTime<Utc>) -> i32 {
     let pickup_distance = chair.coord.distance(ride.pickup);
 
     let distance = pickup_distance * 10 + ride.pickup.distance(ride.destination);
@@ -688,6 +684,9 @@ fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
 
     if !score_2_ok(chair, ride) {
         score += 1000;
+    }
+    if !score_1_ok(ride, now) {
+        score += 100;
     }
 
     score
@@ -699,7 +698,7 @@ type Jobs = Vec<(Arc<RideEntry>, Id<RideStatus>)>;
 fn solve_pathfinding_isekai_joucho(
     workers: Workers,
     jobs: Jobs,
-) -> (Workers, Jobs, Vec<Pair>, i32) {
+) -> (Workers, Jobs, Vec<Pair>, i32, bool) {
     // region を分けてその中でマッチングを行う
     // region 分けた方が多分 O(n^3)の n が減って計算早くなると思う
 
@@ -730,29 +729,35 @@ fn solve_pathfinding_isekai_joucho(
         }
     }
 
-    let (mut rw, mut rj, mut p, score) = solve_pathfinding_kaf(split_workers.0, split_jobs.0, true);
-    let (rw2, rj2, p2, score2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1, false);
+    let (mut rw, mut rj, mut p, score, lim) =
+        solve_pathfinding_kaf(split_workers.0, split_jobs.0, true);
+    let (rw2, rj2, p2, score2, lim2) = solve_pathfinding_kaf(split_workers.1, split_jobs.1, false);
 
     rw.extend(rw2);
     rj.extend(rj2);
     p.extend(p2);
 
-    (rw, rj, p, score + score2)
+    (rw, rj, p, score + score2, lim || lim2)
 }
+
+static LIMITER: LazyLock<Mutex<MatchingLimiter>> =
+    LazyLock::new(|| Mutex::new(MatchingLimiter::new()));
 
 fn solve_pathfinding_kaf(
     workers: Workers,
     jobs: Jobs,
     use_half: bool,
-) -> (Workers, Jobs, Vec<Pair>, i32) {
+) -> (Workers, Jobs, Vec<Pair>, i32, bool) {
     if workers.is_empty() || jobs.is_empty() {
-        return (workers, jobs, vec![], 0);
+        return (workers, jobs, vec![], 0, false);
     }
+
+    let jobs_len = jobs.len();
+    let workers_len = workers.len();
 
     // 緊急のやつだけ先にやる
     let mut urgent_jobs = vec![];
     let mut ok_jobs = vec![];
-    let mut out_of_limit = vec![];
     let now = Utc::now();
 
     // const ONE_TICK_DURATION: Duration = Duration::from_millis(30);
@@ -764,8 +769,22 @@ fn solve_pathfinding_kaf(
     });
     let urgent_threshold = TimeDelta::milliseconds(*URGENT_THRESHOLD_MS);
 
-    static LIMITER: LazyLock<Mutex<MatchingLimiter>> =
-        LazyLock::new(|| Mutex::new(MatchingLimiter::new()));
+    for task in jobs {
+        let elapsed = now - task.0.created_at;
+        if elapsed > urgent_threshold {
+            urgent_jobs.push(task);
+        } else {
+            ok_jobs.push(task);
+        }
+    }
+
+    let urgent_len = urgent_jobs.len();
+    let ok_len = ok_jobs.len();
+
+    // 逃すとゲームオーバーなので urgent は何がなんでもマッチングする
+    let (mut remain_workers, rj, p, score) = solve_pathfinding_rim(workers, urgent_jobs);
+
+    ok_jobs.extend(rj);
 
     let remain = {
         let r = LIMITER.lock().remain();
@@ -776,37 +795,47 @@ fn solve_pathfinding_kaf(
         }
     };
 
-    let workers_len = workers.len();
+    // urgent でないものは limiter の制限を受ける
+    // work と job の少ない方のどちらかが全数マッチングされるから、
+    // 小さい方を limiter の値まで絞る。
+    let matches = remain_workers.len().min(ok_jobs.len());
 
-    for task in jobs {
-        let elapsed = now - task.0.created_at;
-        if elapsed > urgent_threshold {
-            urgent_jobs.push(task);
-        } else if remain >= ok_jobs.len() {
-            ok_jobs.push(task);
-        } else {
-            out_of_limit.push(task);
-        }
+    let mut rw3 = vec![];
+    let mut rj3 = vec![];
+
+    let mut hit_limiter = true;
+    let limiter_log;
+    if matches <= remain {
+        limiter_log = "nohit";
+        hit_limiter = false;
+    } else if ok_jobs.len() > remain_workers.len() {
+        // job の方が多いので worker を limiter に合わせる。
+        // これが圧倒的に多いはず
+        limiter_log = "-worker";
+        rw3.extend(remain_workers.drain(remain..));
+    } else if ok_jobs.len() <= remain_workers.len() {
+        // worker の方が多いので jobs を limiter に合わせる
+        // なかなかないはず。。
+        limiter_log = "-job";
+        rj3.extend(ok_jobs.drain(remain..));
+    } else {
+        unreachable!()
     }
 
-    let urgent_len = urgent_jobs.len();
-    let ok_len = ok_jobs.len();
+    let (mut rw2, mut rj2, mut p2, score2) = solve_pathfinding_rim(remain_workers, ok_jobs);
 
-    let (rw, rj, p, score) = solve_pathfinding_rim(workers, urgent_jobs);
-
-    let (rw, mut rj2, mut p2, score2) = solve_pathfinding_rim(rw, ok_jobs);
-
-    rj2.extend(rj);
-    rj2.extend(out_of_limit);
+    rj2.extend(rj3);
+    rw2.extend(rw3);
     p2.extend(p);
 
+    let pairs_len = p2.len();
+
     tracing::info!(
-        "a={use_half:5} limiter_remain={remain:4}, urg:ok={urgent_len:4}:{ok_len:5}, w={workers_len} pairs={}",
-        p2.len()
+        "a={use_half:5}: jobs={jobs_len:5}, workers={workers_len:4}, limiter_remain={remain:4}({limiter_log:7>}), ok:urg={ok_len:5}:{urgent_len:3}, pairs={pairs_len}",
     );
     LIMITER.lock().push(p2.len());
 
-    (rw, rj2, p2, score + score2)
+    (rw2, rj2, p2, score + score2, hit_limiter)
 }
 
 fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs, Vec<Pair>, i32) {
@@ -825,16 +854,13 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     // とんでもなくマッチングされなかったライドを必ず拾う仕組みがいる？
     // ↑ _花譜で解決済み
 
-    // if chair.coord.distance(ride.pickup) >= 10 * chair.speed {
-    // ↑ 全てのマッチに対してこれを満たすとパンクしてしまうが、(完走不可)
-    //   かといってガン無視するとライド数が足りなくなる。(70万行かないぐらい)
-    // 確率的にマッチするようにしたい。
+    let now = Utc::now();
 
     let target = *SCORE_TARGET;
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
         let task = &jobs[y];
         let worker = &workers[x];
-        score_target(worker, &task.0, target)
+        score_target(worker, &task.0, now, target)
     });
 
     let mut transposed = false;
@@ -847,6 +873,8 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     let mut worker_used = vec![false; workers.len()];
     let mut task_used = vec![false; jobs.len()];
     let mut res = vec![];
+    let mut target_sum = 0;
+    let mut sum = 0;
     for i in 0..pairs.len() {
         let (task_i, worker_i) = {
             if transposed {
@@ -860,11 +888,14 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         task_used[task_i] = true;
         let worker = &workers[worker_i];
         worker_used[worker_i] = true;
+        let score = score(worker, &task.0, now);
+        target_sum += score.abs_diff(target) as i32;
+        sum += score;
         res.push(Pair {
             chair_id: worker.chair,
             ride_id: task.0.id,
             status_id: task.1,
-            score: weights[(i, pairs[i])],
+            score,
         });
     }
 
@@ -881,14 +912,13 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
         }
     }
 
-    let sum = res.iter().map(|x| x.score).sum();
-    assert_eq!(sum, reported_sum, "wrong score calculcation");
+    assert_eq!(target_sum, reported_sum, "wrong score calculcation");
     (redu_workers, redu_jobs, res, sum)
 }
 
 impl Repository {
-    pub fn do_matching(&self) {
-        let (pairs, waiting, free) = {
+    pub fn do_matching(&self) -> Option<Duration> {
+        let (pairs, waiting, free, retry) = {
             let _lock = self.ride_cache.matching_lock.lock();
 
             let free_chairs = {
@@ -920,14 +950,14 @@ impl Repository {
                 });
             }
 
-            let (avail, redu2, pairs) = {
-                {
-                    let (a, b, c, pf_score) = solve_pathfinding_isekai_joucho(avail, waiting_rides);
-                    let pairs = c.len();
-                    let avg = pf_score.checked_div(pairs as i32).unwrap_or(0);
-                    tracing::info!("pairs={pairs:3}, avg={avg:5}");
-                    (a, b, c)
-                }
+            let (avail, redu2, pairs, retry) = {
+                let (a, b, c, pf_score, retry) =
+                    solve_pathfinding_isekai_joucho(avail, waiting_rides);
+                let pairs = c.len();
+                let avg = pf_score.checked_div(pairs as i32).unwrap_or(0);
+                let target = *SCORE_TARGET;
+                tracing::info!("pairs={pairs:3}, avg={avg:5}, target={target:5}");
+                (a, b, c, retry)
             };
 
             if !redu2.is_empty() {
@@ -939,7 +969,7 @@ impl Repository {
                 c.extend(avail.into_iter().map(|x| x.chair));
             }
 
-            (pairs, waiting_rides_len, free_chairs_len)
+            (pairs, waiting_rides_len, free_chairs_len, retry)
         };
 
         let pairs_len = pairs.len();
@@ -948,6 +978,13 @@ impl Repository {
                 .unwrap();
         }
 
-        tracing::info!("waiting={waiting:6}, free={free:3}, matches={pairs_len:3}");
+        tracing::info!("waiting={waiting:6}, free={free:3}, matches={pairs_len:3}, retry={retry}");
+        tracing::info!("");
+
+        if retry {
+            LIMITER.lock().until_next_release()
+        } else {
+            None
+        }
     }
 }
