@@ -65,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
 
     let repo = Arc::new(Repository::new(&pool).await);
     let client = reqwest::Client::builder()
-        .tcp_keepalive(Duration::from_secs(10))
+        .tcp_keepalive(Duration::from_secs(120))
         .build()
         .unwrap();
 
@@ -85,9 +85,12 @@ async fn main() -> anyhow::Result<()> {
         .expect("failed to parse PORT");
 
     let listener = TcpListener::bind(&SocketAddr::from(([0, 0, 0, 0], port))).await?;
+
     loop {
         let app_state = Arc::clone(&app_state);
-        let (stream, _) = listener.accept().await?;
+        let (stream, ip) = listener.accept().await?;
+        let our = stream.local_addr();
+        // println!("incoming {ip:?} -> {our:?}");
         tokio::task::spawn(async move {
             if let Err(_err) = http1::Builder::new()
                 .timer(TokioTimer::new())
@@ -334,6 +337,7 @@ pub async fn response(
     let mut res = Response::builder()
         .status(code)
         .header(header::CACHE_CONTROL, "no-cache")
+        .header(header::CONNECTION, "keep-alive")
         .header(
             header::CONTENT_TYPE,
             if is_stream {

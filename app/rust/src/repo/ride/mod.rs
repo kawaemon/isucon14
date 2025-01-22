@@ -654,16 +654,6 @@ impl MatchingLimiter {
     }
 }
 
-#[inline(always)]
-fn score_1_ok(ride: &RideEntry, now: DateTime<Utc>) -> bool {
-    (now - ride.created_at).num_milliseconds() < 2500
-}
-
-#[inline(always)]
-fn score_2_ok(chair: &AvailableChair, ride: &RideEntry) -> bool {
-    chair.coord.distance(ride.pickup) < 10 * chair.speed
-}
-
 // これを最小化する
 crate::conf_env! {
     static SCORE_TARGET: i32 = {
@@ -672,24 +662,14 @@ crate::conf_env! {
     }
 }
 #[inline(always)]
-fn score_target(chair: &AvailableChair, ride: &RideEntry, now: DateTime<Utc>, target: i32) -> i32 {
-    score(chair, ride, now).abs_diff(target) as i32
+fn score_target(chair: &AvailableChair, ride: &RideEntry, target: i32) -> i32 {
+    score(chair, ride).abs_diff(target) as i32
 }
 #[inline(always)]
-fn score(chair: &AvailableChair, ride: &RideEntry, now: DateTime<Utc>) -> i32 {
+fn score(chair: &AvailableChair, ride: &RideEntry) -> i32 {
     let pickup_distance = chair.coord.distance(ride.pickup);
-
     let distance = pickup_distance * 10 + ride.pickup.distance(ride.destination);
-    let mut score = distance / chair.speed;
-
-    if !score_2_ok(chair, ride) {
-        score += 1000;
-    }
-    if !score_1_ok(ride, now) {
-        score += 100;
-    }
-
-    score
+    distance / chair.speed
 }
 
 type Workers = Vec<AvailableChair>;
@@ -854,13 +834,11 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
     // とんでもなくマッチングされなかったライドを必ず拾う仕組みがいる？
     // ↑ _花譜で解決済み
 
-    let now = Utc::now();
-
     let target = *SCORE_TARGET;
     let mut weights = Matrix::from_fn(jobs.len(), workers.len(), |(y, x)| {
         let task = &jobs[y];
         let worker = &workers[x];
-        score_target(worker, &task.0, now, target)
+        score_target(worker, &task.0, target)
     });
 
     let mut transposed = false;
@@ -886,11 +864,14 @@ fn solve_pathfinding_rim(mut workers: Workers, mut jobs: Jobs) -> (Workers, Jobs
 
         let task = &jobs[task_i];
         task_used[task_i] = true;
+
         let worker = &workers[worker_i];
         worker_used[worker_i] = true;
-        let score = score(worker, &task.0, now);
+
+        let score = score(worker, &task.0);
         target_sum += score.abs_diff(target) as i32;
         sum += score;
+
         res.push(Pair {
             chair_id: worker.chair,
             ride_id: task.0.id,
@@ -981,10 +962,11 @@ impl Repository {
         tracing::info!("waiting={waiting:6}, free={free:3}, matches={pairs_len:3}, retry={retry}");
         tracing::info!("");
 
-        if retry {
-            LIMITER.lock().until_next_release()
-        } else {
-            None
-        }
+        (pairs_len > 100).then_some(Duration::from_millis(60))
+        // if retry {
+        //     LIMITER.lock().until_next_release()
+        // } else {
+        //     None
+        // }
     }
 }
