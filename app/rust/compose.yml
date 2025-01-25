@@ -24,14 +24,40 @@ services:
       - "3306:3306"
 
   nginx:
-    image: nginx:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: isuride-nginx
     network_mode: host
+    init: true
+    stdin_open: true
+    tty: true
     ulimits:
       nofile:
         soft: 655360
         hard: 655360
+    # perf kvm stat record &
+    # pid=$!
+    # sleep 60
+    # sudo kill -INT $pid
+    working_dir: /nginx-perf
+    entrypoint: bash
+    # command: |
+    #   bash -c '
+    #     perf record --call-graph dwarf -o /nginx-perf/profile -F 150 -- nginx -g "daemon off;" &
+    #     pid=$$!
+    #     echo "########### pid = $$pid #############"
+    #     sleep 10
+    #     echo "########### killing $$pid #############"
+    #     kill -INT $$pid
+    #   '
+
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/tls/:/tls:ro
+      - ./nginx/perf/:/nginx-perf
       - ../public/:/public
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined

@@ -7,6 +7,8 @@ update-grub
 /etc/sysctl.d/99-sysctl.conf
 net.core.somaxconn=2048
 net.ipv4.tcp_max_syn_backlog=10000
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.ip_local_port_range="10000 65535"
 
 net.core.busy_poll=1
 net.core.default_qdisc=noqueue
