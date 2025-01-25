@@ -1,5 +1,8 @@
 use std::pin::Pin;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 use std::task::Poll;
+use std::time::Duration;
 
 use bytes::Bytes;
 use cookie::Cookie;
@@ -241,6 +244,54 @@ impl Controller {
 // almost copy-pasted from axum
 
 pub type BoxStream = Box<dyn Send + Unpin + Stream<Item = Result<Event, Error>>>;
+
+#[derive(Debug, Default)]
+struct SseStatsInner {
+    total: AtomicUsize,
+    discon: AtomicUsize,
+    newcon: AtomicUsize,
+}
+
+#[derive(Debug, Default)]
+pub struct SseStats(Arc<SseStatsInner>);
+impl SseStats {
+    pub fn spawn_printer(&self, title: &'static str) {
+        let c = Arc::clone(&self.0);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let get = |x: &AtomicUsize| x.swap(0, std::sync::atomic::Ordering::Relaxed);
+                let total = c.total.load(std::sync::atomic::Ordering::Relaxed);
+                let discon = get(&c.discon);
+                let newcon = get(&c.newcon);
+                tracing::info!("{title}: total={total:<6}, +{newcon:<5}, -{discon:<5}");
+            }
+        });
+    }
+
+    pub fn on_connect(&self) -> SseProbe {
+        self.0
+            .total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .newcon
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SseProbe(Arc::clone(&self.0))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct SseProbe(Arc<SseStatsInner>);
+impl Drop for SseProbe {
+    fn drop(&mut self) {
+        self.0
+            .total
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        self.0
+            .discon
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 #[pin_project::pin_project]
 pub struct SseBody {

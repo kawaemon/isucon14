@@ -810,7 +810,7 @@ fn solve_pathfinding_kaf(
 
     let pairs_len = p2.len();
 
-    tracing::info!(
+    tracing::debug!(
         "a={use_half:5}: jobs={jobs_len:5}, workers={workers_len:4}, limiter_remain={remain:4}({limiter_log:7>}), ok:urg={ok_len:5}:{urgent_len:3}, pairs={pairs_len}",
     );
     LIMITER.lock().push(p2.len());
@@ -937,7 +937,7 @@ impl Repository {
                 let pairs = c.len();
                 let avg = pf_score.checked_div(pairs as i32).unwrap_or(0);
                 let target = *SCORE_TARGET;
-                tracing::info!("pairs={pairs:3}, avg={avg:5}, target={target:5}");
+                tracing::debug!("pairs={pairs:3}, avg={avg:5}, target={target:5}");
                 (a, b, c, retry)
             };
 
@@ -959,8 +959,8 @@ impl Repository {
                 .unwrap();
         }
 
-        tracing::info!("waiting={waiting:6}, free={free:3}, matches={pairs_len:3}, retry={retry}");
-        tracing::info!("");
+        tracing::debug!("waiting={waiting:6}, free={free:3}, matches={pairs_len:3}, retry={retry}");
+        tracing::debug!("");
 
         (pairs_len > 100).then_some(Duration::from_millis(60))
         // if retry {

@@ -1,10 +1,11 @@
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use cookie::Cookie;
 use hyper::StatusCode;
 use tokio_stream::StreamExt;
 
-use crate::fw::{BoxStream, Controller, Event, SerializeJson};
+use crate::fw::{BoxStream, Controller, Event, SerializeJson, SseStats};
 use crate::models::{Chair, Id, Owner, Ride, RideStatusEnum, Symbol, User};
 use crate::repo::ride::NotificationBody;
 use crate::{AppState, Coordinate, Error};
@@ -79,6 +80,12 @@ pub async fn chair_post_coordinate(c: &mut Controller) -> Result<impl SerializeJ
     })
 }
 
+static CHAIR_SSE_STATS: LazyLock<SseStats> = LazyLock::new(|| {
+    let d = SseStats::default();
+    d.spawn_printer("chair");
+    d
+});
+
 pub fn chair_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
     let chair = c.auth_chair()?;
     let state = c.state().clone();
@@ -88,8 +95,11 @@ pub fn chair_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
         .chair_get_next_notification_sse(chair.id)
         .unwrap();
 
+    let probe = CHAIR_SSE_STATS.on_connect();
+
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).map(move |body| {
+            let _probe = &probe;
             let s = chair_get_notification_inner(&state, chair.id, body.unwrap())?;
             Ok(Event::new(s))
         });

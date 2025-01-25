@@ -41,16 +41,7 @@ const RETRY_LIMIT: usize = 1000;
 
 type Sender = SendRequest<Full<Bytes>>;
 
-static CONNECTIONS: LazyLock<Mutex<VecDeque<Sender>>> = LazyLock::new(|| {
-    std::thread::spawn(|| loop {
-        std::thread::sleep(Duration::from_secs(1));
-        {
-            let l = CONNECTIONS.lock().len();
-            tracing::info!("pgw connections: {l}")
-        }
-    });
-    Default::default()
-});
+static CONNECTIONS: LazyLock<Mutex<VecDeque<Sender>>> = LazyLock::new(Default::default);
 
 async fn get_con(url: &Url) -> Result<Sender, Error> {
     let pool = { CONNECTIONS.lock().pop_front() };
@@ -68,7 +59,6 @@ async fn get_con(url: &Url) -> Result<Sender, Error> {
             let (sender, conn) = hyper::client::conn::http1::handshake(st).await?;
             tokio::spawn(async move {
                 let e = conn.await;
-                tracing::warn!("pgw connection ended: {e:?}");
             });
 
             sender
@@ -118,8 +108,6 @@ pub async fn request_payment_gateway_post_payment(
             let r = con.ready().await;
             if r.is_ok() {
                 CONNECTIONS.lock().push_back(con);
-            } else {
-                tracing::warn!("pgw con reuse failed: {r:?}")
             }
         });
 

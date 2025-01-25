@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use chrono::Utc;
 use cookie::Cookie;
@@ -6,7 +6,7 @@ use hyper::StatusCode;
 use serde::Serialize;
 use tokio_stream::StreamExt;
 
-use crate::fw::{BoxStream, Controller, Event, SerializeJson};
+use crate::fw::{BoxStream, Controller, Event, SerializeJson, SseStats};
 use crate::models::{
     Chair, Coupon, Id, InvitationCode, Owner, Ride, RideStatusEnum, Symbol, User, COUPON_CP_NEW2024,
 };
@@ -310,13 +310,21 @@ pub async fn app_post_ride_evaluation(
     })
 }
 
+static APP_SSE_STATS: LazyLock<SseStats> = LazyLock::new(|| {
+    let d = SseStats::default();
+    d.spawn_printer("user ");
+    d
+});
+
 pub fn app_get_notification(c: &mut Controller) -> Result<BoxStream, Error> {
     let user = c.auth_app()?;
     let state = c.state().clone();
     let ts = state.repo.user_get_next_notification_sse(user.id).unwrap();
+    let probe = APP_SSE_STATS.on_connect();
 
     let stream =
         tokio_stream::wrappers::BroadcastStream::new(ts.notification_rx).map(move |body| {
+            let _probe = &probe;
             let s = app_get_notification_inner(&state, user.id, body.unwrap())?;
             Ok(Event::new(s))
         });
